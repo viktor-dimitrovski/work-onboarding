@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 20% 97%;
+  --foreground: 215 24% 12%;
+  --card: 0 0% 100%;
+  --card-foreground: 215 24% 12%;
+  --border: 214 22% 88%;
+  --input: 214 22% 88%;
+  --muted: 214 22% 94%;
+  --muted-foreground: 215 13% 40%;
+  --primary: 207 88% 36%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 199 85% 94%;
+  --secondary-foreground: 207 88% 24%;
+  --destructive: 0 72% 48%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 154 64% 37%;
+  --warning: 36 95% 45%;
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  font-family: var(--font-ibm-plex-sans), ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    sans-serif;
+  background-image:
+    radial-gradient(circle at 90% -20%, rgba(41, 121, 255, 0.16), transparent 35%),
+    radial-gradient(circle at 0% 100%, rgba(0, 173, 181, 0.12), transparent 30%);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-space-grotesk), ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    sans-serif;
+  letter-spacing: -0.02em;
+}
