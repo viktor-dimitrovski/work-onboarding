@@ -45,6 +45,7 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   hasRole: (role: string) => boolean;
+  setSession: (payload: { user: AuthUser; accessToken: string; refreshToken: string }) => void;
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -133,6 +134,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setRefreshToken(tokenResponse.refresh_token);
   }, []);
 
+  const setSession = useCallback(
+    (payload: { user: AuthUser; accessToken: string; refreshToken: string }) => {
+      setUser(payload.user);
+      setAccessToken(payload.accessToken);
+      setRefreshToken(payload.refreshToken);
+    },
+    [],
+  );
+
   const refreshSession = useCallback(async () => {
     if (!refreshToken) {
       return;
@@ -185,8 +195,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       login,
       logout,
       hasRole,
+      setSession,
     }),
-    [accessToken, isLoading, refreshToken, user],
+    [accessToken, isLoading, refreshToken, user, setSession],
   );
 
   useEffect(() => {

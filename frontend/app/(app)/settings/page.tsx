@@ -11,19 +11,21 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useTrackPurposeLabels } from '@/lib/track-purpose';
 import { useAuth } from '@/lib/auth-context';
+import { useTenant } from '@/lib/tenant-context';
 import { Plus, Trash2 } from 'lucide-react';
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { hasRole, isLoading } = useAuth();
+  const { isLoading } = useAuth();
+  const { hasModule, hasPermission, isLoading: tenantLoading } = useTenant();
   const { items, addPurpose, removePurpose, updateLabel, resetItems } = useTrackPurposeLabels();
   const [newLabel, setNewLabel] = useState('');
 
   useEffect(() => {
-    if (!isLoading && !(hasRole('admin') || hasRole('super_admin'))) {
+    if (!isLoading && !tenantLoading && !(hasModule('settings') && hasPermission('settings:manage'))) {
       router.replace('/dashboard');
     }
-  }, [hasRole, isLoading, router]);
+  }, [hasModule, hasPermission, isLoading, router, tenantLoading]);
 
   return (
     <div className='space-y-6'>

@@ -8,12 +8,14 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -33,20 +35,33 @@ class OnboardingAssignment(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, 
             name='onboarding_assignment_status_values',
         ),
         CheckConstraint('target_date >= start_date', name='onboarding_assignment_target_date_values'),
+        ForeignKeyConstraint(
+            ['tenant_id', 'template_id'],
+            ['track_templates.tenant_id', 'track_templates.id'],
+            ondelete='RESTRICT',
+        ),
+        ForeignKeyConstraint(
+            ['tenant_id', 'track_version_id'],
+            ['track_versions.tenant_id', 'track_versions.id'],
+            ondelete='RESTRICT',
+        ),
     )
 
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        server_default=text("current_setting('app.tenant_id')::uuid"),
+    )
     employee_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey('users.id', ondelete='RESTRICT'), nullable=False
     )
     mentor_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey('users.id', ondelete='SET NULL'), nullable=True
     )
-    template_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('track_templates.id', ondelete='RESTRICT'), nullable=False
-    )
-    track_version_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('track_versions.id', ondelete='RESTRICT'), nullable=False
-    )
+    template_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    track_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     target_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -79,11 +94,21 @@ class AssignmentPhase(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base)
             "status in ('not_started', 'in_progress', 'completed')",
             name='assignment_phase_status_values',
         ),
+        ForeignKeyConstraint(
+            ['tenant_id', 'assignment_id'],
+            ['onboarding_assignments.tenant_id', 'onboarding_assignments.id'],
+            ondelete='CASCADE',
+        ),
     )
 
-    assignment_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('onboarding_assignments.id', ondelete='CASCADE'), nullable=False
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        server_default=text("current_setting('app.tenant_id')::uuid"),
     )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     source_phase_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -93,7 +118,10 @@ class AssignmentPhase(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base)
 
     assignment: Mapped['OnboardingAssignment'] = relationship(back_populates='phases')
     tasks: Mapped[list['AssignmentTask']] = relationship(
-        back_populates='phase', cascade='all, delete-orphan', order_by='AssignmentTask.order_index'
+        back_populates='phase',
+        cascade='all, delete-orphan',
+        order_by='AssignmentTask.order_index',
+        overlaps='tasks',
     )
 
 
@@ -105,14 +133,27 @@ class AssignmentTask(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
             "status in ('not_started', 'in_progress', 'blocked', 'pending_review', 'revision_requested', 'completed', 'overdue')",
             name='assignment_task_status_values',
         ),
+        ForeignKeyConstraint(
+            ['tenant_id', 'assignment_id'],
+            ['onboarding_assignments.tenant_id', 'onboarding_assignments.id'],
+            ondelete='CASCADE',
+        ),
+        ForeignKeyConstraint(
+            ['tenant_id', 'assignment_phase_id'],
+            ['assignment_phases.tenant_id', 'assignment_phases.id'],
+            ondelete='CASCADE',
+        ),
     )
 
-    assignment_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('onboarding_assignments.id', ondelete='CASCADE'), nullable=False
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        server_default=text("current_setting('app.tenant_id')::uuid"),
     )
-    assignment_phase_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('assignment_phases.id', ondelete='CASCADE'), nullable=False
-    )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    assignment_phase_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     source_task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -129,8 +170,11 @@ class AssignmentTask(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     progress_percent: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     is_next_recommended: Mapped[bool] = mapped_column(nullable=False, default=False, index=True)
 
-    assignment: Mapped['OnboardingAssignment'] = relationship(back_populates='tasks')
-    phase: Mapped['AssignmentPhase'] = relationship(back_populates='tasks')
+    assignment: Mapped['OnboardingAssignment'] = relationship(back_populates='tasks', overlaps='tasks')
+    phase: Mapped['AssignmentPhase'] = relationship(
+        back_populates='tasks',
+        overlaps='assignment,tasks',
+    )
     submissions: Mapped[list['TaskSubmission']] = relationship(
         back_populates='assignment_task', cascade='all, delete-orphan', order_by='TaskSubmission.submitted_at'
     )
@@ -149,11 +193,21 @@ class TaskSubmission(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "status in ('submitted', 'reviewed', 'revision_requested')",
             name='task_submission_status_values',
         ),
+        ForeignKeyConstraint(
+            ['tenant_id', 'assignment_task_id'],
+            ['assignment_tasks.tenant_id', 'assignment_tasks.id'],
+            ondelete='CASCADE',
+        ),
     )
 
-    assignment_task_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('assignment_tasks.id', ondelete='CASCADE'), nullable=False
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        server_default=text("current_setting('app.tenant_id')::uuid"),
     )
+    assignment_task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     employee_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey('users.id', ondelete='RESTRICT'), nullable=False
     )
@@ -174,11 +228,21 @@ class MentorReview(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "decision in ('approve', 'reject', 'revision_requested')",
             name='mentor_review_decision_values',
         ),
+        ForeignKeyConstraint(
+            ['tenant_id', 'assignment_task_id'],
+            ['assignment_tasks.tenant_id', 'assignment_tasks.id'],
+            ondelete='CASCADE',
+        ),
     )
 
-    assignment_task_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('assignment_tasks.id', ondelete='CASCADE'), nullable=False
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        server_default=text("current_setting('app.tenant_id')::uuid"),
     )
+    assignment_task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     submission_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey('task_submissions.id', ondelete='SET NULL'), nullable=True
     )
@@ -194,10 +258,22 @@ class MentorReview(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 class QuizAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = 'quiz_attempts'
-
-    assignment_task_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('assignment_tasks.id', ondelete='CASCADE'), nullable=False
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['tenant_id', 'assignment_task_id'],
+            ['assignment_tasks.tenant_id', 'assignment_tasks.id'],
+            ondelete='CASCADE',
+        ),
     )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        server_default=text("current_setting('app.tenant_id')::uuid"),
+    )
+    assignment_task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     employee_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey('users.id', ondelete='RESTRICT'), nullable=False
     )

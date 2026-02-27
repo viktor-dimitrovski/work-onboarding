@@ -12,6 +12,7 @@ import { Progress } from '@/components/ui/progress';
 import { api } from '@/lib/api';
 import { formatPercent } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
+import { useTenant } from '@/lib/tenant-context';
 import type { Assignment } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -21,10 +22,11 @@ interface AssignmentListResponse {
 }
 
 export default function AssignmentsPage() {
-  const { accessToken, hasRole } = useAuth();
+  const { accessToken } = useAuth();
+  const { hasModule, hasPermission } = useTenant();
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [loading, setLoading] = useState(true);
-  const canCreateAssignment = hasRole('admin') || hasRole('super_admin') || hasRole('mentor');
+  const canCreateAssignment = hasModule('assignments') && hasPermission('assignments:write');
 
   useEffect(() => {
     const run = async () => {

@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from tests.conftest import auth_header, login
+from tests.conftest import login, tenant_headers
 
 
 def test_track_creation(client: TestClient) -> None:
@@ -8,7 +8,7 @@ def test_track_creation(client: TestClient) -> None:
 
     response = client.post(
         '/api/v1/tracks',
-        headers=auth_header(admin['access_token']),
+        headers=tenant_headers(admin['access_token']),
         json={
             'title': 'QA Engineer Onboarding',
             'description': 'Track for QA onboarding.',

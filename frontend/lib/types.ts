@@ -21,6 +21,31 @@ export interface PaginatedMeta {
   total: number;
 }
 
+export type TenantRole =
+  | 'member'
+  | 'manager'
+  | 'mentor'
+  | 'tenant_admin'
+  | 'parent'
+  | 'student'
+  | 'teacher';
+
+export interface TenantSummary {
+  id: string;
+  name: string;
+  slug: string;
+  tenant_type: string;
+  is_active: boolean;
+}
+
+export interface TenantContext {
+  tenant: TenantSummary;
+  role?: string | null;
+  role_label?: string | null;
+  permissions: string[];
+  modules: string[];
+}
+
 export interface TaskResource {
   id: string;
   resource_type: string;
@@ -143,11 +168,32 @@ export interface AssessmentQuestionOption {
   order_index: number;
 }
 
+export interface AssessmentCategory {
+  id: string;
+  name: string;
+  slug: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AssessmentClassificationJob {
+  id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  total: number;
+  processed: number;
+  error_summary?: string | null;
+  report_json?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface AssessmentQuestion {
   id: string;
   prompt: string;
   question_type: string;
   difficulty?: string | null;
+  category_id?: string | null;
+  category?: AssessmentCategory | null;
   tags: string[];
   status: string;
   explanation?: string | null;
@@ -240,6 +286,7 @@ export interface UserRow {
   full_name: string;
   is_active: boolean;
   roles: RoleName[];
+  tenant_role?: string | null;
 }
 
 export interface AdminDashboardReport {

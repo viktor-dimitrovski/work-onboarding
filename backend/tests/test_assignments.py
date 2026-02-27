@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from tests.conftest import auth_header, login
+from tests.conftest import login, tenant_headers
 
 
 def test_assignment_creation(client: TestClient) -> None:
@@ -8,7 +8,7 @@ def test_assignment_creation(client: TestClient) -> None:
 
     track_response = client.post(
         '/api/v1/tracks',
-        headers=auth_header(admin['access_token']),
+        headers=tenant_headers(admin['access_token']),
         json={
             'title': 'Backend Engineer Onboarding',
             'description': 'Track for backend onboarding',
@@ -42,18 +42,18 @@ def test_assignment_creation(client: TestClient) -> None:
 
     publish_response = client.post(
         f'/api/v1/tracks/{template_id}/publish/{version_id}',
-        headers=auth_header(admin['access_token']),
+        headers=tenant_headers(admin['access_token']),
     )
     assert publish_response.status_code == 200, publish_response.text
 
-    users_response = client.get('/api/v1/users', headers=auth_header(admin['access_token']))
+    users_response = client.get('/api/v1/users', headers=tenant_headers(admin['access_token']))
     employees = [user for user in users_response.json()['items'] if 'employee' in user['roles']]
     mentors = [user for user in users_response.json()['items'] if 'mentor' in user['roles']]
     assert employees and mentors
 
     assignment_response = client.post(
         '/api/v1/assignments',
-        headers=auth_header(admin['access_token']),
+        headers=tenant_headers(admin['access_token']),
         json={
             'employee_id': employees[0]['id'],
             'mentor_id': mentors[0]['id'],

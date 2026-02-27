@@ -17,11 +17,15 @@ os.environ.setdefault('APP_ENV', 'test')
 os.environ.setdefault('CORS_ORIGINS', 'http://localhost:3001')
 os.environ.setdefault('FIRST_ADMIN_EMAIL', 'seed-super-admin@example.com')
 os.environ.setdefault('FIRST_ADMIN_PASSWORD', 'SeedPass123!')
+os.environ.setdefault('BASE_DOMAINS', 'app.com')
+os.environ.setdefault('DEFAULT_TENANT_SLUG', 'test-tenant')
+os.environ.setdefault('RESERVED_SUBDOMAINS', 'admin,billing,docs,status,api')
 
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.rbac import Role, User, UserRole
+from app.models.tenant import Tenant, TenantMembership
 from app.core.security import hash_password
 
 
@@ -112,6 +116,34 @@ def _seed_users(db: Session) -> None:
 
     db.flush()
 
+    tenant = Tenant(name='Test Tenant', slug='test-tenant', tenant_type='company', is_active=True)
+    db.add(tenant)
+    db.flush()
+
+    role_lookup = {
+        'super_admin': 'tenant_admin',
+        'admin': 'tenant_admin',
+        'mentor': 'mentor',
+        'employee': 'member',
+    }
+
+    user_rows = db.scalars(select(User)).all()
+    for user in user_rows:
+        global_roles = {role.name for role in db.scalars(select(Role).join(UserRole).where(UserRole.user_id == user.id)).all()}
+        preferred = 'member'
+        for role in ['super_admin', 'admin', 'mentor', 'employee']:
+            if role in global_roles:
+                preferred = role_lookup[role]
+                break
+        db.add(
+            TenantMembership(
+                tenant_id=tenant.id,
+                user_id=user.id,
+                role=preferred,
+                status='active',
+            )
+        )
+
 
 def login(client: TestClient, email: str, password: str = 'SeedPass123!') -> dict:
     response = client.post(
@@ -127,3 +159,10 @@ def login(client: TestClient, email: str, password: str = 'SeedPass123!') -> dic
 
 def auth_header(access_token: str) -> dict[str, str]:
     return {'Authorization': f'Bearer {access_token}'}
+
+
+def tenant_headers(access_token: str, host: str = 'test-tenant.app.com') -> dict[str, str]:
+    return {
+        'Authorization': f'Bearer {access_token}',
+        'host': host,
+    }

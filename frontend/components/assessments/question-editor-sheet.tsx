@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Textarea } from '@/components/ui/textarea';
-import type { AssessmentQuestion, AssessmentQuestionOption } from '@/lib/types';
+import type { AssessmentCategory, AssessmentQuestion, AssessmentQuestionOption } from '@/lib/types';
 
 const DEFAULT_OPTION: AssessmentQuestionOption = {
   id: '',
@@ -18,10 +18,12 @@ interface QuestionEditorSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initial?: AssessmentQuestion | null;
+  categories?: AssessmentCategory[];
   onSave: (payload: {
     prompt: string;
     question_type: string;
     difficulty?: string | null;
+    category_id?: string | null;
     tags: string[];
     status: string;
     explanation?: string | null;
@@ -29,10 +31,11 @@ interface QuestionEditorSheetProps {
   }) => Promise<void>;
 }
 
-export function QuestionEditorSheet({ open, onOpenChange, initial, onSave }: QuestionEditorSheetProps) {
+export function QuestionEditorSheet({ open, onOpenChange, initial, categories = [], onSave }: QuestionEditorSheetProps) {
   const [prompt, setPrompt] = useState('');
   const [questionType, setQuestionType] = useState('mcq_single');
   const [difficulty, setDifficulty] = useState('');
+  const [categoryId, setCategoryId] = useState('');
   const [tags, setTags] = useState('');
   const [status, setStatus] = useState('draft');
   const [explanation, setExplanation] = useState('');
@@ -45,6 +48,7 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, onSave }: Que
       setPrompt(initial.prompt || '');
       setQuestionType(initial.question_type || 'mcq_single');
       setDifficulty(initial.difficulty || '');
+      setCategoryId(initial.category_id || '');
       setTags((initial.tags || []).join(', '));
       setStatus(initial.status || 'draft');
       setExplanation(initial.explanation || '');
@@ -58,6 +62,7 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, onSave }: Que
       setPrompt('');
       setQuestionType('mcq_single');
       setDifficulty('');
+      setCategoryId('');
       setTags('');
       setStatus('draft');
       setExplanation('');
@@ -94,6 +99,7 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, onSave }: Que
         prompt: prompt.trim(),
         question_type: questionType,
         difficulty: difficulty.trim() || null,
+        category_id: categoryId || null,
         tags: tags
           .split(',')
           .map((tag) => tag.trim())
@@ -168,6 +174,21 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, onSave }: Que
               </select>
             </div>
             <div className='space-y-2'>
+              <Label>Category</Label>
+              <select
+                className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+                value={categoryId}
+                onChange={(event) => setCategoryId(event.target.value)}
+              >
+                <option value=''>Unclassified</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className='space-y-2 md:col-span-2'>
               <Label>Tags</Label>
               <Input
                 value={tags}

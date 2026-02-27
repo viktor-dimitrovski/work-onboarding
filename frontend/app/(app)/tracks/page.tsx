@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useTenant } from '@/lib/tenant-context';
 import { useTrackPurposeLabels } from '@/lib/track-purpose';
 import type { TrackTemplate } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -29,7 +30,8 @@ interface TrackListResponse {
 }
 
 export default function TracksPage() {
-  const { accessToken, hasRole } = useAuth();
+  const { accessToken } = useAuth();
+  const { hasModule, hasPermission } = useTenant();
   const { getLabel: getPurposeLabel } = useTrackPurposeLabels();
   const [tracks, setTracks] = useState<TrackTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,7 +40,7 @@ export default function TracksPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const canManageTracks = hasRole('admin') || hasRole('super_admin');
+  const canManageTracks = hasModule('tracks') && hasPermission('tracks:write');
 
   const loadTracks = async () => {
     if (!accessToken) return;

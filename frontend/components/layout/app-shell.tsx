@@ -7,6 +7,7 @@ import { LoadingState } from '@/components/common/loading-state';
 import { SidebarNav } from '@/components/layout/sidebar-nav';
 import { TopHeader } from '@/components/layout/top-header';
 import { useAuth } from '@/lib/auth-context';
+import { TenantProvider } from '@/lib/tenant-context';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -28,12 +29,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className='flex min-h-screen'>
-      <SidebarNav />
-      <div className='flex min-h-screen flex-1 flex-col'>
-        <TopHeader />
-        <main className='flex-1 p-6'>{children}</main>
+    <TenantProvider>
+      <div className='flex min-h-screen'>
+        <SidebarNav />
+        <div className='flex min-h-screen flex-1 flex-col'>
+          <TopHeader />
+          <main className='flex-1 p-6'>{children}</main>
+        </div>
       </div>
-    </div>
+    </TenantProvider>
   );
 }

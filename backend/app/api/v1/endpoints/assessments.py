@@ -1,18 +1,24 @@
 import re
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile, File, Form, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import get_user_role_names, require_roles
+from app.api.deps import get_current_active_user
 from app.db.session import get_db
 from app.models.rbac import User
+from app.multitenancy.deps import TenantContext, require_tenant_membership
+from app.multitenancy.permissions import require_access
+from app.multitenancy.deps import TenantContext, require_tenant_membership
 from app.schemas.assessment import (
     AssessmentAttemptAnswersUpdate,
     AssessmentAttemptStartOut,
     AssessmentAttemptSubmitOut,
     AssessmentAttemptOut,
+    AssessmentCategoryListResponse,
+    AssessmentClassificationJobCreate,
+    AssessmentClassificationJobOut,
     AssessmentDeliveryCreate,
     AssessmentDeliveryListResponse,
     AssessmentDeliveryOut,
@@ -31,8 +37,8 @@ from app.schemas.assessment import (
     AssessmentTestVersionUpdate,
 )
 from app.schemas.common import PaginationMeta
-from app.models.assessment import AssessmentAttempt
-from app.services import assessment_service, audit_service
+from app.models.assessment import AssessmentAttempt, AssessmentClassificationJob
+from app.services import assessment_classification_service, assessment_service, audit_service, usage_service
 from app.services.openai_responses_service import call_openai_responses_json
 from app.services.pdf_extract_service import chunk_pages, extract_pdf_pages_text
 
@@ -110,6 +116,13 @@ def _normalize_tags(raw: str) -> list[str]:
     return out
 
 
+def _split_csv(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    items = [part.strip() for part in value.split(",") if part.strip()]
+    return items or None
+
+
 def _validate_mcq(question: dict) -> tuple[dict | None, str | None]:
     qtype = question.get("question_type")
     options = question.get("options") or []
@@ -167,7 +180,9 @@ def import_questions_from_pdf(
     difficulty: str | None = Form(None),
     max_pages: int | None = Form(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+    ctx: TenantContext = Depends(require_tenant_membership),
 ) -> AssessmentPdfImportResponse:
     if question_count < 1 or question_count > 100:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="question_count must be 1..100")
@@ -275,6 +290,14 @@ def import_questions_from_pdf(
             "max_pages": max_pages,
         },
     )
+    usage_service.record_event(
+        db,
+        tenant_id=ctx.tenant.id,
+        event_key='ai.pdf_import',
+        quantity=float(len(created_ids)),
+        actor_user_id=current_user.id,
+        meta={'filename': file.filename or '', 'question_count_requested': question_count},
+    )
     db.commit()
 
     return AssessmentPdfImportResponse(
@@ -291,17 +314,24 @@ def list_questions(
     query: str | None = Query(default=None, alias='q'),
     tag: str | None = Query(default=None),
     difficulty: str | None = Query(default=None),
+    category: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'hr_viewer')),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentQuestionListResponse:
+    status_filters = _split_csv(status_filter)
+    difficulties = _split_csv(difficulty)
+    tags = _split_csv(tag)
+    categories = _split_csv(category)
     items, total = assessment_service.list_questions(
         db,
         page=page,
         page_size=page_size,
-        status_filter=status_filter,
+        status_filters=status_filters,
         query=query,
-        tag=tag,
-        difficulty=difficulty,
+        tags=tags,
+        difficulties=difficulties,
+        categories=categories,
     )
     return AssessmentQuestionListResponse(
         items=[AssessmentQuestionOut.model_validate(item) for item in items],
@@ -309,11 +339,79 @@ def list_questions(
     )
 
 
+@router.get('/categories', response_model=AssessmentCategoryListResponse)
+def list_categories(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> AssessmentCategoryListResponse:
+    items = assessment_service.list_categories(db)
+    return AssessmentCategoryListResponse(items=[item for item in items])
+
+
+@router.post('/questions/classify', response_model=AssessmentClassificationJobOut, status_code=status.HTTP_202_ACCEPTED)
+def start_classification_job(
+    payload: AssessmentClassificationJobCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentClassificationJobOut:
+    if payload.mode not in ('unclassified_only', 'reclassify_all'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid classification mode')
+
+    existing = db.scalar(
+        select(AssessmentClassificationJob)
+        .where(AssessmentClassificationJob.status.in_(['queued', 'running']))
+        .order_by(AssessmentClassificationJob.created_at.desc())
+    )
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='A classification job is already running')
+
+    job = AssessmentClassificationJob(
+        status='queued',
+        total=0,
+        processed=0,
+        created_by=current_user.id,
+        updated_by=current_user.id,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    background_tasks.add_task(
+        assessment_classification_service.run_classification_job,
+        job_id=job.id,
+        tenant_id=ctx.tenant.id,
+        actor_user_id=current_user.id,
+        mode=payload.mode,
+        dry_run=payload.dry_run,
+        batch_size=payload.batch_size,
+    )
+
+    return AssessmentClassificationJobOut.model_validate(job)
+
+
+@router.get('/questions/classify/jobs/{job_id}', response_model=AssessmentClassificationJobOut)
+def get_classification_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> AssessmentClassificationJobOut:
+    job = db.scalar(select(AssessmentClassificationJob).where(AssessmentClassificationJob.id == job_id))
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Classification job not found')
+    return AssessmentClassificationJobOut.model_validate(job)
+
+
 @router.post('/questions', response_model=AssessmentQuestionOut, status_code=status.HTTP_201_CREATED)
 def create_question(
     payload: AssessmentQuestionCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentQuestionOut:
     question = assessment_service.create_question(
         db, payload=payload.model_dump(), actor_user_id=current_user.id
@@ -334,7 +432,8 @@ def create_question(
 def get_question(
     question_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'hr_viewer')),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentQuestionOut:
     question = assessment_service.get_question(db, question_id)
     return AssessmentQuestionOut.model_validate(question)
@@ -345,7 +444,8 @@ def update_question(
     question_id: UUID,
     payload: AssessmentQuestionUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentQuestionOut:
     question = assessment_service.update_question(
         db, question_id=question_id, payload=payload.model_dump(exclude_unset=True), actor_user_id=current_user.id
@@ -367,7 +467,8 @@ def list_tests(
     page_size: int = Query(default=20, ge=1, le=100),
     status_filter: str | None = Query(default=None, alias='status'),
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'hr_viewer')),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentTestListResponse:
     items, total = assessment_service.list_tests(
         db, page=page, page_size=page_size, status_filter=status_filter
@@ -382,7 +483,8 @@ def list_tests(
 def create_test(
     payload: AssessmentTestCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentTestOut:
     test = assessment_service.create_test(db, payload=payload.model_dump(), actor_user_id=current_user.id)
     audit_service.log_action(
@@ -401,7 +503,8 @@ def create_test(
 def get_test(
     test_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'hr_viewer')),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentTestOut:
     test = assessment_service.get_test(db, test_id)
     return AssessmentTestOut.model_validate(test)
@@ -412,7 +515,8 @@ def update_test(
     test_id: UUID,
     payload: AssessmentTestUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentTestOut:
     test = assessment_service.get_test(db, test_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
@@ -433,7 +537,8 @@ def update_test(
 def create_test_version(
     test_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentTestVersionOut:
     version = assessment_service.create_test_version(db, test_id=test_id, actor_user_id=current_user.id)
     audit_service.log_action(
@@ -453,7 +558,8 @@ def update_test_version(
     version_id: UUID,
     payload: AssessmentTestVersionUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentTestVersionOut:
     version = assessment_service.update_test_version(
         db,
@@ -476,7 +582,8 @@ def update_test_version(
 def publish_test_version(
     version_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentTestVersionOut:
     version = assessment_service.publish_test_version(db, version_id=version_id, actor_user_id=current_user.id)
     audit_service.log_action(
@@ -494,7 +601,8 @@ def publish_test_version(
 def create_delivery(
     payload: AssessmentDeliveryCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentDeliveryOut:
     delivery = assessment_service.create_delivery(
         db, payload=payload.model_dump(exclude_unset=True), actor_user_id=current_user.id
@@ -517,7 +625,8 @@ def list_deliveries(
     participant_user_id: UUID | None = Query(default=None),
     test_version_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'hr_viewer')),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentDeliveryListResponse:
     items, total = assessment_service.list_deliveries(
         db,
@@ -536,11 +645,13 @@ def list_deliveries(
 def get_delivery(
     delivery_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'employee', 'hr_viewer')),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> AssessmentDeliveryOut:
     delivery = assessment_service.get_delivery(db, delivery_id)
-    roles = get_user_role_names(current_user)
-    if 'employee' in roles and delivery.participant_user_id not in (None, current_user.id):
+    roles = set(ctx.roles)
+    if {'member', 'parent'} & roles and delivery.participant_user_id not in (None, current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Forbidden delivery')
     return AssessmentDeliveryOut.model_validate(delivery)
 
@@ -549,7 +660,8 @@ def get_delivery(
 def start_attempt(
     delivery_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('employee', 'super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> AssessmentAttemptStartOut:
     attempt = assessment_service.start_attempt(db, delivery_id=delivery_id, user_id=current_user.id)
     version = assessment_service.get_test_version(db, attempt.delivery.test_version_id)
@@ -565,7 +677,9 @@ def autosave_answers(
     attempt_id: UUID,
     payload: AssessmentAttemptAnswersUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('employee', 'super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> AssessmentAttemptOut:
     attempt = db.scalar(
         select(AssessmentAttempt)
@@ -574,8 +688,8 @@ def autosave_answers(
     )
     if not attempt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Attempt not found')
-    roles = get_user_role_names(current_user)
-    if 'employee' in roles and attempt.user_id != current_user.id:
+    roles = set(ctx.roles)
+    if {'member', 'parent'} & roles and attempt.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Not allowed to edit this attempt')
 
     assessment_service.autosave_answers(
@@ -589,18 +703,28 @@ def autosave_answers(
 def submit_attempt(
     attempt_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('employee', 'super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> AssessmentAttemptSubmitOut:
     attempt = db.scalar(
         select(AssessmentAttempt).where(AssessmentAttempt.id == attempt_id).options(joinedload(AssessmentAttempt.answers))
     )
     if not attempt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Attempt not found')
-    roles = get_user_role_names(current_user)
-    if 'employee' in roles and attempt.user_id != current_user.id:
+    roles = set(ctx.roles)
+    if {'member', 'parent'} & roles and attempt.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Not allowed to submit this attempt')
 
     attempt = assessment_service.submit_attempt(db, attempt_id=attempt_id, actor_user_id=current_user.id)
+    usage_service.record_event(
+        db,
+        tenant_id=ctx.tenant.id,
+        event_key='assessment.attempt_submit',
+        quantity=1.0,
+        actor_user_id=current_user.id,
+        meta={'attempt_id': str(attempt_id)},
+    )
     total_questions = len(attempt.question_order)
     correct_count = len([answer for answer in attempt.answers if answer.is_correct])
     db.commit()
@@ -617,11 +741,13 @@ def list_results(
     user_id: UUID | None = Query(default=None),
     test_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'employee', 'hr_viewer')),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> AssessmentResultListResponse:
-    roles = get_user_role_names(current_user)
+    roles = set(ctx.roles)
     effective_user_id = user_id
-    if 'employee' in roles and not {'super_admin', 'admin', 'mentor', 'hr_viewer'} & roles:
+    if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
         effective_user_id = current_user.id
 
     attempts = assessment_service.list_attempts(

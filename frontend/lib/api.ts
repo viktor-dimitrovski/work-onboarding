@@ -157,6 +157,10 @@ export const api = {
     return request('/auth/me', { token });
   },
 
+  getTenantContext(token: string) {
+    return request('/tenants/context', { token });
+  },
+
   get<T>(path: string, token: string) {
     return request<T>(path, { token });
   },

@@ -13,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { api } from '@/lib/api';
-import { roleOptions } from '@/lib/constants';
+import { tenantRoleOptions } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
 import type { UserRow } from '@/lib/types';
 
@@ -26,7 +26,7 @@ const createUserSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(2),
   password: z.string().min(8),
-  roles: z.array(z.string()).min(1, 'Select at least one role'),
+  tenant_role: z.string().min(1, 'Select a tenant role'),
 });
 
 type CreateUserValues = z.infer<typeof createUserSchema>;
@@ -43,7 +43,7 @@ export default function UsersPage() {
       email: '',
       full_name: '',
       password: '',
-      roles: ['employee'],
+      tenant_role: 'member',
     },
   });
 
@@ -74,7 +74,7 @@ export default function UsersPage() {
         email: '',
         full_name: '',
         password: '',
-        roles: ['employee'],
+        tenant_role: 'member',
       });
       await loadUsers();
     } catch (submitError) {
@@ -91,7 +91,7 @@ export default function UsersPage() {
       <Card>
         <CardHeader>
           <CardTitle>Create user</CardTitle>
-          <CardDescription>Add a user and assign RBAC roles.</CardDescription>
+          <CardDescription>Add a user and assign a tenant role.</CardDescription>
         </CardHeader>
         <CardContent>
           <form className='grid gap-4 md:grid-cols-2' onSubmit={onSubmit}>
@@ -120,34 +120,19 @@ export default function UsersPage() {
             </div>
 
             <div className='space-y-2'>
-              <Label>Roles</Label>
-              <div className='grid grid-cols-2 gap-2 rounded-md border p-3'>
-                {roleOptions.map((role) => {
-                  const selected = form.watch('roles').includes(role);
-                  return (
-                    <label key={role} className='flex items-center gap-2 text-sm'>
-                      <input
-                        type='checkbox'
-                        checked={selected}
-                        onChange={(event) => {
-                          const currentRoles = form.getValues('roles');
-                          if (event.target.checked) {
-                            form.setValue('roles', [...currentRoles, role]);
-                          } else {
-                            form.setValue(
-                              'roles',
-                              currentRoles.filter((value) => value !== role),
-                            );
-                          }
-                        }}
-                      />
-                      {role}
-                    </label>
-                  );
-                })}
-              </div>
-              {form.formState.errors.roles && (
-                <p className='text-xs text-destructive'>{form.formState.errors.roles.message}</p>
+              <Label>Tenant role</Label>
+              <select
+                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                {...form.register('tenant_role')}
+              >
+                {tenantRoleOptions.map((role) => (
+                  <option key={role} value={role}>
+                    {role.replace('_', ' ')}
+                  </option>
+                ))}
+              </select>
+              {form.formState.errors.tenant_role && (
+                <p className='text-xs text-destructive'>{form.formState.errors.tenant_role.message}</p>
               )}
             </div>
 
@@ -178,9 +163,7 @@ export default function UsersPage() {
                     <p className='text-xs text-muted-foreground'>{user.email}</p>
                   </div>
                   <div className='flex flex-wrap gap-1'>
-                    {user.roles.map((role) => (
-                      <StatusChip key={`${user.id}-${role}`} status={role} />
-                    ))}
+                    <StatusChip status={(user.tenant_role || 'member').replace('_', ' ')} />
                   </div>
                 </div>
               ))}

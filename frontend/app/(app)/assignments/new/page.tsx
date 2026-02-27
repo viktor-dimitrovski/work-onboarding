@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useTenant } from '@/lib/tenant-context';
 import type { TrackTemplate, UserRow } from '@/lib/types';
 
 interface TrackListResponse {
@@ -22,7 +23,8 @@ interface UserListResponse {
 }
 
 export default function NewAssignmentPage() {
-  const { accessToken, hasRole, isLoading } = useAuth();
+  const { accessToken, isLoading } = useAuth();
+  const { hasModule, hasPermission, isLoading: tenantLoading } = useTenant();
   const router = useRouter();
 
   const [employees, setEmployees] = useState<UserRow[]>([]);
@@ -40,10 +42,10 @@ export default function NewAssignmentPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isLoading && !(hasRole('admin') || hasRole('super_admin') || hasRole('mentor'))) {
+    if (!isLoading && !tenantLoading && !(hasModule('assignments') && hasPermission('assignments:write'))) {
       router.replace('/assignments');
     }
-  }, [hasRole, isLoading, router]);
+  }, [hasModule, hasPermission, isLoading, router, tenantLoading]);
 
   useEffect(() => {
     const run = async () => {
@@ -54,8 +56,8 @@ export default function NewAssignmentPage() {
         api.get<TrackListResponse>('/tracks?page=1&page_size=100', accessToken),
       ]);
 
-      const employeeRows = usersResponse.items.filter((user) => user.roles.includes('employee'));
-      const mentorRows = usersResponse.items.filter((user) => user.roles.includes('mentor'));
+      const employeeRows = usersResponse.items.filter((user) => user.tenant_role === 'member');
+      const mentorRows = usersResponse.items.filter((user) => user.tenant_role === 'mentor');
 
       const versions = tracksResponse.items
         .filter((track) => track.is_active)

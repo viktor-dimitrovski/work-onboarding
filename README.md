@@ -26,6 +26,10 @@ Production-minded MVP for a modular monolith onboarding platform covering role-b
 └─ README.md
 ```
 
+## Docs
+
+Start at `docs/README.md` for architecture and product documentation.
+
 ## Core Modules Implemented
 
 - Identity and access: users, roles, user-role mapping, JWT auth/refresh/logout, `/auth/me`, password reset stub endpoint.

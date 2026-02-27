@@ -1,9 +1,12 @@
 from datetime import datetime
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_active_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.rbac import User
 from app.schemas.auth import (
@@ -14,7 +17,7 @@ from app.schemas.auth import (
     TokenResponse,
     UserSummary,
 )
-from app.services import audit_service, auth_service
+from app.services import audit_service, auth_service, oauth_service
 from app.utils.rate_limit import SimpleRateLimiter
 
 
@@ -81,6 +84,54 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         refresh_token=refresh_token,
         user=_to_user_summary(user),
     )
+
+
+@router.get('/oauth/{provider}/start')
+def oauth_start(provider: str, request: Request) -> RedirectResponse:
+    redirect_uri = str(request.url_for('oauth_callback', provider=provider))
+    url = oauth_service.build_authorization_url(provider, redirect_uri)
+    return RedirectResponse(url)
+
+
+@router.get('/oauth/{provider}/callback', name='oauth_callback')
+def oauth_callback(
+    provider: str,
+    request: Request,
+    code: str = Query(...),
+    state: str = Query(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    redirect_uri = str(request.url_for('oauth_callback', provider=provider))
+    info = oauth_service.handle_oauth_callback(
+        db,
+        provider=provider,
+        code=code,
+        state=state,
+        redirect_uri=redirect_uri,
+    )
+
+    user = oauth_service.upsert_oauth_user(db, info=info, actor_user_id=None)
+    access_token, refresh_token = auth_service.issue_token_pair(
+        db,
+        user=user,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get('user-agent'),
+    )
+    audit_service.log_action(
+        db,
+        actor_user_id=user.id,
+        action='user_login_oauth',
+        entity_type='auth',
+        status='success',
+        details={'email': user.email, 'provider': provider, 'timestamp': datetime.utcnow().isoformat()},
+        ip_address=request.client.host if request.client else 'unknown',
+    )
+    db.commit()
+    db.refresh(user)
+
+    frontend_callback = settings.FRONTEND_BASE_URL.rstrip('/') + '/oauth/callback'
+    params = urlencode({'access_token': access_token, 'refresh_token': refresh_token, 'provider': provider})
+    return RedirectResponse(f'{frontend_callback}?{params}')
 
 
 @router.post('/refresh', response_model=TokenResponse)

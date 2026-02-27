@@ -14,28 +14,31 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { useAuth } from '@/lib/auth-context';
+import { useTenant } from '@/lib/tenant-context';
 
 const NAV_ITEMS = [
-  { href: '/dashboard', label: 'Dashboard', icon: Gauge, roles: ['super_admin', 'admin', 'mentor', 'employee', 'hr_viewer', 'reviewer'] },
-  { href: '/tracks', label: 'Tracks', icon: Layers, roles: ['super_admin', 'admin', 'mentor', 'hr_viewer'] },
-  {
-    href: '/assessments',
-    label: 'Assessments',
-    icon: FileQuestion,
-    roles: ['super_admin', 'admin', 'mentor', 'hr_viewer', 'reviewer'],
-  },
-  { href: '/assignments', label: 'Assignments', icon: ClipboardList, roles: ['super_admin', 'admin', 'mentor', 'employee', 'hr_viewer', 'reviewer'] },
-  { href: '/users', label: 'Users', icon: Users, roles: ['super_admin', 'admin'] },
-  { href: '/reports', label: 'Reports', icon: FileText, roles: ['super_admin', 'admin', 'hr_viewer', 'mentor'] },
-  { href: '/settings', label: 'Settings', icon: Settings, roles: ['super_admin', 'admin'] },
+  { href: '/dashboard', label: 'Dashboard', icon: Gauge },
+  { href: '/tracks', label: 'Tracks', icon: Layers, module: 'tracks', permission: 'tracks:read' },
+  { href: '/assessments', label: 'Assessments', icon: FileQuestion, module: 'assessments', permission: 'assessments:read' },
+  { href: '/assignments', label: 'Assignments', icon: ClipboardList, module: 'assignments', permission: 'assignments:read' },
+  { href: '/users', label: 'Users', icon: Users, module: 'users', permission: 'users:read' },
+  { href: '/reports', label: 'Reports', icon: FileText, module: 'reports', permission: 'reports:read' },
+  { href: '/settings', label: 'Settings', icon: Settings, module: 'settings', permission: 'settings:manage' },
 ];
 
 export function SidebarNav() {
   const pathname = usePathname();
-  const { user } = useAuth();
+  const { hasModule, hasPermission, isLoading } = useTenant();
 
-  const allowedItems = NAV_ITEMS.filter((item) => item.roles.some((role) => user?.roles.includes(role as never)));
+  const allowedItems = NAV_ITEMS.filter((item) => {
+    if (!item.module || !item.permission) {
+      return true;
+    }
+    if (isLoading) {
+      return false;
+    }
+    return hasModule(item.module) && hasPermission(item.permission);
+  });
 
   return (
     <aside className='flex w-14 flex-col border-r bg-white/80 p-2 backdrop-blur sm:w-16 md:w-64 md:p-4'>

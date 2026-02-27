@@ -13,6 +13,7 @@ from app.models.assessment import (
     AssessmentAttempt,
     AssessmentAttemptAnswer,
     AssessmentDelivery,
+    AssessmentCategory,
     AssessmentQuestion,
     AssessmentQuestionOption,
     AssessmentTest,
@@ -26,16 +27,20 @@ def list_questions(
     *,
     page: int,
     page_size: int,
-    status_filter: str | None,
+    status_filters: list[str] | None,
     query: str | None,
-    tag: str | None,
-    difficulty: str | None,
+    tags: list[str] | None,
+    difficulties: list[str] | None,
+    categories: list[str] | None,
 ) -> tuple[list[AssessmentQuestion], int]:
-    base = select(AssessmentQuestion).options(joinedload(AssessmentQuestion.options))
-    if status_filter:
-        base = base.where(AssessmentQuestion.status == status_filter)
-    if difficulty:
-        base = base.where(AssessmentQuestion.difficulty == difficulty)
+    base = select(AssessmentQuestion).options(
+        joinedload(AssessmentQuestion.options),
+        joinedload(AssessmentQuestion.category),
+    )
+    if status_filters:
+        base = base.where(AssessmentQuestion.status.in_(status_filters))
+    if difficulties:
+        base = base.where(AssessmentQuestion.difficulty.in_(difficulties))
     if query:
         base = base.where(
             or_(
@@ -43,8 +48,18 @@ def list_questions(
                 AssessmentQuestion.explanation.ilike(f'%{query}%'),
             )
         )
-    if tag:
-        base = base.where(AssessmentQuestion.tags.contains([tag]))
+    if tags:
+        base = base.where(or_(*[AssessmentQuestion.tags.contains([tag]) for tag in tags]))
+    if categories:
+        include_unclassified = 'unclassified' in categories
+        category_slugs = [slug for slug in categories if slug != 'unclassified']
+        filters = []
+        if category_slugs:
+            filters.append(AssessmentCategory.slug.in_(category_slugs))
+        if include_unclassified:
+            filters.append(AssessmentQuestion.category_id.is_(None))
+        if filters:
+            base = base.outerjoin(AssessmentQuestion.category).where(or_(*filters))
 
     total = db.scalar(select(func.count()).select_from(base.subquery()))
     items = (
@@ -53,6 +68,10 @@ def list_questions(
         .all()
     )
     return items, int(total or 0)
+
+
+def list_categories(db: Session) -> list[AssessmentCategory]:
+    return db.scalars(select(AssessmentCategory).order_by(AssessmentCategory.name.asc())).all()
 
 
 def get_question(db: Session, question_id: UUID) -> AssessmentQuestion:
@@ -67,10 +86,17 @@ def get_question(db: Session, question_id: UUID) -> AssessmentQuestion:
 
 
 def create_question(db: Session, *, payload: dict, actor_user_id: UUID) -> AssessmentQuestion:
+    category_id = payload.get('category_id')
+    if category_id:
+        category = db.scalar(select(AssessmentCategory).where(AssessmentCategory.id == category_id))
+        if not category:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Category not found')
+
     question = AssessmentQuestion(
         prompt=payload['prompt'],
         question_type=payload['question_type'],
         difficulty=payload.get('difficulty'),
+        category_id=category_id,
         tags=payload.get('tags', []),
         status=payload.get('status', 'draft'),
         explanation=payload.get('explanation'),
@@ -101,6 +127,13 @@ def update_question(db: Session, *, question_id: UUID, payload: dict, actor_user
     for field in ['prompt', 'question_type', 'difficulty', 'tags', 'status', 'explanation']:
         if field in payload and payload[field] is not None:
             setattr(question, field, payload[field])
+    if 'category_id' in payload:
+        category_id = payload.get('category_id')
+        if category_id:
+            category = db.scalar(select(AssessmentCategory).where(AssessmentCategory.id == category_id))
+            if not category:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Category not found')
+        question.category_id = category_id
     question.updated_by = actor_user_id
 
     if 'options' in payload and payload['options'] is not None:

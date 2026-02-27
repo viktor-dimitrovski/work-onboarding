@@ -14,19 +14,21 @@ import { Progress } from '@/components/ui/progress';
 import { api } from '@/lib/api';
 import { formatPercent } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
+import { useTenant } from '@/lib/tenant-context';
 import type { Assignment } from '@/lib/types';
 
 export default function AssignmentDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { accessToken, user } = useAuth();
+  const { accessToken } = useAuth();
+  const { hasPermission, hasModule } = useTenant();
 
   const [assignment, setAssignment] = useState<Assignment | null>(null);
   const [loading, setLoading] = useState(true);
   const [workingTaskId, setWorkingTaskId] = useState<string | null>(null);
 
   const canReview = useMemo(
-    () => !!user?.roles.some((role) => ['mentor', 'admin', 'super_admin', 'reviewer'].includes(role)),
-    [user?.roles],
+    () => hasModule('assignments') && hasPermission('assignments:review'),
+    [hasModule, hasPermission],
   );
 
   const load = async () => {

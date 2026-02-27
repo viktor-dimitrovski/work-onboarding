@@ -34,6 +34,21 @@ class Settings(BaseSettings):
     OPENAI_MAX_OUTPUT_TOKENS: int | None = None
     OPENAI_TIMEOUT_MS: int = 60_000
 
+    FRONTEND_BASE_URL: str = 'http://localhost:3001'
+    OAUTH_STATE_TTL_MINUTES: int = 10
+    MICROSOFT_TENANT: str = 'common'
+    MICROSOFT_CLIENT_ID: str | None = None
+    MICROSOFT_CLIENT_SECRET: str | None = None
+    GOOGLE_CLIENT_ID: str | None = None
+    GOOGLE_CLIENT_SECRET: str | None = None
+    GITHUB_CLIENT_ID: str | None = None
+    GITHUB_CLIENT_SECRET: str | None = None
+
+    BASE_DOMAINS: str = 'app.com'
+    RESERVED_SUBDOMAINS: str = 'admin,billing,docs,status,api'
+    DEFAULT_TENANT_SLUG: str | None = None
+    TRUST_PROXY_HEADERS: bool = True
+
     @field_validator('DATABASE_URL')
     @classmethod
     def validate_database_url(cls, value: str) -> str:

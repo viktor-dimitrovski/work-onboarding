@@ -11,6 +11,7 @@ export const taskTypeOptions = [
 ] as const;
 
 export const roleOptions = ['super_admin', 'admin', 'mentor', 'employee', 'hr_viewer', 'reviewer'] as const;
+export const tenantRoleOptions = ['member', 'manager', 'mentor', 'tenant_admin', 'parent'] as const;
 
 export function statusTone(status: string): string {
   switch (status) {

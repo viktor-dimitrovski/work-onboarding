@@ -4,6 +4,8 @@ from app.models.assessment import (
     AssessmentAttempt,
     AssessmentAttemptAnswer,
     AssessmentDelivery,
+    AssessmentCategory,
+    AssessmentClassificationJob,
     AssessmentQuestion,
     AssessmentQuestionOption,
     AssessmentTest,
@@ -13,6 +15,7 @@ from app.models.assessment import (
 from app.models.audit import AuditLog
 from app.models.comment import Comment
 from app.models.rbac import Role, User, UserRole
+from app.models.tenant import Group, GroupMembership, Plan, Subscription, Tenant, TenantDomain, TenantMembership, TenantModule, UsageEvent
 from app.models.token import RefreshToken
 from app.models.track import TaskResource, TrackPhase, TrackTask, TrackTemplate, TrackVersion
 
@@ -24,6 +27,8 @@ __all__ = [
     'AssessmentAttempt',
     'AssessmentAttemptAnswer',
     'AssessmentDelivery',
+    'AssessmentCategory',
+    'AssessmentClassificationJob',
     'AssessmentQuestion',
     'AssessmentQuestionOption',
     'AssessmentTest',
@@ -44,4 +49,13 @@ __all__ = [
     'TrackVersion',
     'User',
     'UserRole',
+    'Tenant',
+    'TenantDomain',
+    'TenantMembership',
+    'Group',
+    'GroupMembership',
+    'Plan',
+    'Subscription',
+    'TenantModule',
+    'UsageEvent',
 ]

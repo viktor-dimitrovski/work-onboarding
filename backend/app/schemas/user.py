@@ -11,6 +11,7 @@ class UserCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=255)
     password: str = Field(min_length=8, max_length=128)
     roles: list[str] = Field(default_factory=list)
+    tenant_role: str | None = None
 
 
 class UserUpdate(BaseModel):
@@ -25,6 +26,7 @@ class UserOut(BaseSchema):
     full_name: str
     is_active: bool
     roles: list[str]
+    tenant_role: str | None = None
     created_at: datetime
     updated_at: datetime
 

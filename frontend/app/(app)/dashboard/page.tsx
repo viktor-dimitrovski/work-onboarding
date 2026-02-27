@@ -12,6 +12,7 @@ import { Progress } from '@/components/ui/progress';
 import { api } from '@/lib/api';
 import { formatPercent } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
+import { useTenant } from '@/lib/tenant-context';
 import type {
   AdminDashboardReport,
   Assignment,
@@ -34,7 +35,8 @@ interface NextTaskResponse {
 }
 
 export default function DashboardPage() {
-  const { accessToken, user } = useAuth();
+  const { accessToken } = useAuth();
+  const { context: tenantContext } = useTenant();
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [reportData, setReportData] = useState<
     AdminDashboardReport | EmployeeDashboardReport | MentorDashboardReport | null
@@ -42,12 +44,12 @@ export default function DashboardPage() {
   const [nextTask, setNextTask] = useState<NextTaskResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const roleSet = useMemo(() => new Set(user?.roles ?? []), [user?.roles]);
   const primaryRole = useMemo(() => {
-    if (roleSet.has('super_admin') || roleSet.has('admin') || roleSet.has('hr_viewer')) return 'admin';
-    if (roleSet.has('mentor')) return 'mentor';
+    const role = tenantContext?.role;
+    if (role === 'tenant_admin' || role === 'manager') return 'admin';
+    if (role === 'mentor') return 'mentor';
     return 'employee';
-  }, [roleSet]);
+  }, [tenantContext?.role]);
 
   useEffect(() => {
     const run = async () => {

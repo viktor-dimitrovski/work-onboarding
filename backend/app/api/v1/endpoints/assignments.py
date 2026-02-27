@@ -3,9 +3,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_user_role_names, require_roles
+from app.api.deps import get_current_active_user
 from app.db.session import get_db
 from app.models.rbac import User
+from app.multitenancy.deps import TenantContext, require_tenant_membership
+from app.multitenancy.permissions import require_access
 from app.schemas.assignment import AssignmentCreate, AssignmentListResponse, AssignmentOut
 from app.schemas.common import PaginationMeta
 from app.services import assignment_service, audit_service, track_service
@@ -22,15 +24,17 @@ def list_assignments(
     employee_id: UUID | None = Query(default=None),
     mentor_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'employee', 'hr_viewer')),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assignments', 'assignments:read')),
 ) -> AssignmentListResponse:
-    roles = get_user_role_names(current_user)
+    roles = set(ctx.roles)
     effective_employee_id = employee_id
     effective_mentor_id = mentor_id
 
-    if 'employee' in roles and not {'super_admin', 'admin', 'hr_viewer'} & roles:
+    if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
         effective_employee_id = current_user.id
-    if 'mentor' in roles and not {'super_admin', 'admin', 'hr_viewer'} & roles:
+    if 'mentor' in roles and not {'tenant_admin', 'manager'} & roles:
         effective_mentor_id = current_user.id
 
     assignments, total = assignment_service.list_assignments(
@@ -45,7 +49,7 @@ def list_assignments(
     payload: list[AssignmentOut] = []
     for item in assignments:
         assignment_out = AssignmentOut.model_validate(item)
-        if 'employee' in roles and not {'super_admin', 'admin', 'mentor', 'hr_viewer', 'reviewer'} & roles:
+        if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
             assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
         payload.append(assignment_out)
 
@@ -56,7 +60,8 @@ def list_assignments(
 def create_assignment(
     payload: AssignmentCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assignments', 'assignments:write')),
 ) -> AssignmentOut:
     track_version = track_service.get_published_track_version(db, payload.track_version_id)
 
@@ -89,7 +94,8 @@ def create_assignment(
 @router.get('/my', response_model=list[AssignmentOut])
 def my_assignments(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('employee')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assignments', 'assignments:read')),
 ) -> list[AssignmentOut]:
     assignments = assignment_service.get_employee_assignments(db, employee_id=current_user.id)
     payload = [AssignmentOut.model_validate(item) for item in assignments]
@@ -100,12 +106,14 @@ def my_assignments(
 def get_assignment(
     assignment_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'employee', 'hr_viewer')),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assignments', 'assignments:read')),
 ) -> AssignmentOut:
     assignment = assignment_service.get_assignment_by_id(db, assignment_id)
-    roles = get_user_role_names(current_user)
+    roles = set(ctx.roles)
     assignment_service.access_guard(assignment, user_id=current_user.id, roles=roles)
     assignment_out = AssignmentOut.model_validate(assignment)
-    if 'employee' in roles and not {'super_admin', 'admin', 'mentor', 'hr_viewer', 'reviewer'} & roles:
+    if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
         assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
     return assignment_out

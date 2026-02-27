@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_active_user, require_roles
+from app.api.deps import get_current_active_user
 from app.db.session import get_db
 from app.models.rbac import User
+from app.multitenancy.permissions import require_access
 from app.schemas.common import PaginationMeta
 from app.schemas.track import (
     DuplicateTrackResponse,
@@ -30,6 +31,7 @@ def list_tracks(
     role_target: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:read')),
 ) -> TrackListResponse:
     tracks, total = track_service.list_track_templates(
         db,
@@ -49,7 +51,8 @@ def list_tracks(
 def create_track(
     payload: TrackTemplateCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
 ) -> TrackTemplateOut:
     track = track_service.create_track_template(
         db,
@@ -74,6 +77,7 @@ def get_track(
     template_id: UUID,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:read')),
 ) -> TrackTemplateOut:
     track = track_service.get_track_template(db, template_id)
     return TrackTemplateOut.model_validate(track)
@@ -84,7 +88,8 @@ def update_track(
     template_id: UUID,
     payload: TrackTemplateUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
 ) -> TrackTemplateOut:
     track = track_service.republish_track_template(
         db,
@@ -112,7 +117,8 @@ def update_track(
 def duplicate_track(
     template_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
 ) -> DuplicateTrackResponse:
     duplicated = track_service.duplicate_track_template(
         db,
@@ -136,7 +142,8 @@ def duplicate_track(
 def deactivate_track(
     template_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
 ) -> TrackTemplateOut:
     track = track_service.get_track_template(db, template_id)
     track.is_active = False
@@ -157,7 +164,8 @@ def deactivate_track(
 def activate_track(
     template_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
 ) -> TrackTemplateOut:
     track = track_service.get_track_template(db, template_id)
     track.is_active = True
@@ -178,7 +186,8 @@ def activate_track(
 def delete_track(
     template_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
 ) -> Response:
     track = track_service.get_track_template(db, template_id)
     audit_service.log_action(
@@ -206,7 +215,8 @@ def publish_track(
     template_id: UUID,
     version_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles('super_admin', 'admin')),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
 ) -> PublishTrackResponse:
     published = track_service.publish_track_version(
         db,

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.security import hash_password
 from app.models.rbac import Role, User, UserRole
+from app.models.tenant import TenantMembership
 from app.schemas.user import UserCreate
 
 
@@ -69,6 +70,31 @@ def list_users(
     rows = db.scalars(
         base_query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     ).unique().all()
+    return rows, int(total or 0)
+
+
+def list_tenant_users(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    page: int,
+    page_size: int,
+    role: str | None,
+) -> tuple[list[tuple[User, str]], int]:
+    base_query = (
+        select(User, TenantMembership.role)
+        .join(TenantMembership, TenantMembership.user_id == User.id)
+        .where(TenantMembership.tenant_id == tenant_id, TenantMembership.status == 'active')
+        .options(joinedload(User.user_roles).joinedload(UserRole.role))
+    )
+
+    if role:
+        base_query = base_query.where(TenantMembership.role == role)
+
+    total = db.scalar(select(func.count()).select_from(base_query.subquery()))
+    rows = db.execute(
+        base_query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    ).all()
     return rows, int(total or 0)
 
 

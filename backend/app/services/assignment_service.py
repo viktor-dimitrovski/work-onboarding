@@ -544,10 +544,10 @@ def list_pending_reviews_for_mentor(db: Session, mentor_id: UUID) -> int:
 
 
 def access_guard(assignment: OnboardingAssignment, *, user_id: UUID, roles: set[str]) -> None:
-    if {'super_admin', 'admin', 'hr_viewer'} & roles:
+    if {'tenant_admin', 'manager'} & roles:
         return
     if assignment.employee_id == user_id:
         return
-    if assignment.mentor_id == user_id:
+    if assignment.mentor_id == user_id and 'mentor' in roles:
         return
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Access denied for assignment')

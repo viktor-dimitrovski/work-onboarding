@@ -17,6 +17,7 @@ class AssessmentQuestionCreate(BaseModel):
     prompt: str = Field(min_length=1)
     question_type: str
     difficulty: str | None = None
+    category_id: UUID | None = None
     tags: list[str] = Field(default_factory=list)
     status: str = Field(default='draft')
     explanation: str | None = None
@@ -27,6 +28,7 @@ class AssessmentQuestionUpdate(BaseModel):
     prompt: str | None = None
     question_type: str | None = None
     difficulty: str | None = None
+    category_id: UUID | None = None
     tags: list[str] | None = None
     status: str | None = None
     explanation: str | None = None
@@ -42,11 +44,21 @@ class AssessmentQuestionOptionOut(BaseSchema):
     updated_at: datetime
 
 
+class AssessmentCategoryOut(BaseSchema):
+    id: UUID
+    name: str
+    slug: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class AssessmentQuestionOut(BaseSchema):
     id: UUID
     prompt: str
     question_type: str
     difficulty: str | None
+    category_id: UUID | None = None
+    category: AssessmentCategoryOut | None = None
     tags: list[str]
     status: str
     explanation: str | None
@@ -58,6 +70,27 @@ class AssessmentQuestionOut(BaseSchema):
 class AssessmentQuestionListResponse(BaseModel):
     items: list[AssessmentQuestionOut]
     meta: PaginationMeta
+
+
+class AssessmentCategoryListResponse(BaseModel):
+    items: list[AssessmentCategoryOut]
+
+
+class AssessmentClassificationJobCreate(BaseModel):
+    mode: str = Field(default='unclassified_only')
+    dry_run: bool = False
+    batch_size: int = Field(default=25, ge=5, le=50)
+
+
+class AssessmentClassificationJobOut(BaseSchema):
+    id: UUID
+    status: str
+    total: int
+    processed: int
+    error_summary: str | None
+    report_json: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
 
 
 class AssessmentPdfImportResponse(BaseModel):
