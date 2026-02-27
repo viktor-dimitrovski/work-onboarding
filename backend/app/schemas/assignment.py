@@ -61,6 +61,7 @@ class AssignmentOut(BaseSchema):
     template_id: UUID
     track_version_id: UUID
     title: str
+    purpose: str | None = None
     start_date: date
     target_date: date
     status: str

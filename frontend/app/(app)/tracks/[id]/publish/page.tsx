@@ -45,6 +45,7 @@ export default function PublishTrackPage() {
 
   if (loading) return <LoadingState label='Loading publish options...' />;
   if (!track) return <EmptyState title='Track not found' description='Track template does not exist.' />;
+  const draftVersions = track.versions.filter((version) => version.status === 'draft');
 
   return (
     <div className='space-y-6'>
@@ -55,40 +56,41 @@ export default function PublishTrackPage() {
 
       {error && <p className='rounded-md bg-destructive/10 p-3 text-sm text-destructive'>{error}</p>}
 
-      <div className='space-y-3'>
-        {track.versions
-          .slice()
-          .sort((a, b) => b.version_number - a.version_number)
-          .map((version) => (
-            <Card key={version.id}>
-              <CardHeader>
-                <div className='flex items-center justify-between'>
-                  <CardTitle>Version {version.version_number}</CardTitle>
-                  <StatusChip status={version.status} />
-                </div>
-                <CardDescription>{version.description || 'No version description provided.'}</CardDescription>
-              </CardHeader>
-              <CardContent className='flex items-center justify-between'>
-                <p className='text-sm text-muted-foreground'>
-                  Phases: {version.phases.length} • Current: {version.is_current ? 'Yes' : 'No'}
-                </p>
-                <ConfirmDialog
-                  title='Publish this version?'
-                  description='Publishing this version will archive any currently published version.'
-                  confirmText='Publish'
-                  onConfirm={() => {
-                    void publishVersion(version.id);
-                  }}
-                  trigger={
-                    <Button disabled={version.status === 'published'}>
-                      {version.status === 'published' ? 'Published' : 'Publish'}
-                    </Button>
-                  }
-                />
-              </CardContent>
-            </Card>
-          ))}
-      </div>
+      {draftVersions.length === 0 ? (
+        <EmptyState
+          title='No drafts to publish'
+          description='Edit a track to create a draft version, then publish it here.'
+        />
+      ) : (
+        <div className='space-y-3'>
+          {draftVersions
+            .slice()
+            .sort((a, b) => b.version_number - a.version_number)
+            .map((version) => (
+              <Card key={version.id}>
+                <CardHeader>
+                  <div className='flex items-center justify-between'>
+                    <CardTitle>Version {version.version_number}</CardTitle>
+                    <StatusChip status={version.status} />
+                  </div>
+                  <CardDescription>{version.description || 'No version description provided.'}</CardDescription>
+                </CardHeader>
+                <CardContent className='flex items-center justify-between'>
+                  <p className='text-sm text-muted-foreground'>Phases: {version.phases.length}</p>
+                  <ConfirmDialog
+                    title='Publish this version?'
+                    description='Publishing this version will archive any currently published version.'
+                    confirmText='Publish'
+                    onConfirm={() => {
+                      void publishVersion(version.id);
+                    }}
+                    trigger={<Button>Publish</Button>}
+                  />
+                </CardContent>
+              </Card>
+            ))}
+        </div>
+      )}
     </div>
   );
 }

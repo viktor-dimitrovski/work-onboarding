@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.track import TaskResource, TrackPhase, TrackTask, TrackTemplate, TrackVersion
-from app.schemas.track import TrackTemplateCreate
+from app.schemas.track import TrackTemplateCreate, TrackTemplateUpdate
 
 
 def _sort_phases(phases: list) -> list:
@@ -17,33 +17,28 @@ def _sort_tasks(tasks: list) -> list:
     return sorted(tasks, key=lambda t: t.order_index)
 
 
-def create_track_template(
+def _create_track_version(
     db: Session,
     *,
-    payload: TrackTemplateCreate,
+    template_id: UUID,
+    payload: TrackTemplateCreate | TrackTemplateUpdate,
     actor_user_id: UUID,
-) -> TrackTemplate:
-    template = TrackTemplate(
-        title=payload.title,
-        description=payload.description,
-        role_target=payload.role_target,
-        estimated_duration_days=payload.estimated_duration_days,
-        tags=payload.tags,
-        created_by=actor_user_id,
-        updated_by=actor_user_id,
-    )
-    db.add(template)
-    db.flush()
-
+    version_number: int,
+    status: str,
+    is_current: bool,
+    published_at: datetime | None,
+) -> TrackVersion:
     version = TrackVersion(
-        template_id=template.id,
-        version_number=1,
-        status='draft',
+        template_id=template_id,
+        version_number=version_number,
+        status=status,
         title=payload.title,
         description=payload.description,
         estimated_duration_days=payload.estimated_duration_days,
         tags=payload.tags,
-        is_current=False,
+        purpose=payload.purpose,
+        is_current=is_current,
+        published_at=published_at,
         created_by=actor_user_id,
         updated_by=actor_user_id,
     )
@@ -56,6 +51,7 @@ def create_track_template(
             title=phase_input.title,
             description=phase_input.description,
             order_index=phase_input.order_index,
+            source_phase_id=phase_input.source_phase_id,
             created_by=actor_user_id,
             updated_by=actor_user_id,
         )
@@ -75,6 +71,7 @@ def create_track_template(
                 passing_score=task_input.passing_score,
                 metadata_json=task_input.metadata,
                 due_days_offset=task_input.due_days_offset,
+                source_task_id=task_input.source_task_id,
                 created_by=actor_user_id,
                 updated_by=actor_user_id,
             )
@@ -96,6 +93,38 @@ def create_track_template(
                 db.add(resource)
 
     db.flush()
+    return version
+
+
+def create_track_template(
+    db: Session,
+    *,
+    payload: TrackTemplateCreate,
+    actor_user_id: UUID,
+) -> TrackTemplate:
+    template = TrackTemplate(
+        title=payload.title,
+        description=payload.description,
+        role_target=payload.role_target,
+        estimated_duration_days=payload.estimated_duration_days,
+        tags=payload.tags,
+        purpose=payload.purpose,
+        created_by=actor_user_id,
+        updated_by=actor_user_id,
+    )
+    db.add(template)
+    db.flush()
+
+    _create_track_version(
+        db,
+        template_id=template.id,
+        payload=payload,
+        actor_user_id=actor_user_id,
+        version_number=1,
+        status='draft',
+        is_current=False,
+        published_at=None,
+    )
     return get_track_template(db, template.id)
 
 
@@ -158,6 +187,7 @@ def duplicate_track_template(db: Session, *, template_id: UUID, actor_user_id: U
         role_target=source.role_target,
         estimated_duration_days=source.estimated_duration_days,
         tags=source.tags,
+        purpose=source.purpose,
         created_by=actor_user_id,
         updated_by=actor_user_id,
     )
@@ -172,6 +202,7 @@ def duplicate_track_template(db: Session, *, template_id: UUID, actor_user_id: U
         description=source_version.description,
         estimated_duration_days=source_version.estimated_duration_days,
         tags=source_version.tags,
+        purpose=source_version.purpose,
         is_current=False,
         created_by=actor_user_id,
         updated_by=actor_user_id,
@@ -229,6 +260,42 @@ def duplicate_track_template(db: Session, *, template_id: UUID, actor_user_id: U
     return get_track_template(db, new_template.id)
 
 
+def republish_track_template(
+    db: Session,
+    *,
+    template_id: UUID,
+    payload: TrackTemplateUpdate,
+    actor_user_id: UUID,
+    apply_to_assignments: bool,
+) -> TrackTemplate:
+    template = get_track_template(db, template_id)
+
+    template.title = payload.title
+    template.description = payload.description
+    template.role_target = payload.role_target
+    template.estimated_duration_days = payload.estimated_duration_days
+    template.tags = payload.tags
+    template.purpose = payload.purpose
+    template.updated_by = actor_user_id
+
+    next_version_number = max((version.version_number for version in template.versions), default=0) + 1
+
+    new_version = _create_track_version(
+        db,
+        template_id=template.id,
+        payload=payload,
+        actor_user_id=actor_user_id,
+        version_number=next_version_number,
+        status='draft',
+        is_current=False,
+        published_at=None,
+    )
+    _ = apply_to_assignments
+
+    db.flush()
+    return get_track_template(db, template.id)
+
+
 def publish_track_version(
     db: Session,
     *,
@@ -266,9 +333,14 @@ def get_published_track_version(db: Session, track_version_id: UUID) -> TrackVer
             TrackVersion.id == track_version_id,
             TrackVersion.status == 'published',
         )
-        .options(joinedload(TrackVersion.phases).joinedload(TrackPhase.tasks).joinedload(TrackTask.resources))
+        .options(
+            joinedload(TrackVersion.template),
+            joinedload(TrackVersion.phases).joinedload(TrackPhase.tasks).joinedload(TrackTask.resources),
+        )
     )
 
     if not version:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Published track version not found')
+    if not version.template.is_active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Track is disabled')
     return version

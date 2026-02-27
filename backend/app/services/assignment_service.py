@@ -5,12 +5,16 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.assignment import AssignmentPhase, AssignmentTask, OnboardingAssignment
+from app.models.assignment import AssignmentPhase, AssignmentTask, OnboardingAssignment, QuizAttempt
+from app.services import assessment_service
+from app.schemas.assignment import AssignmentOut
 from app.models.track import TrackPhase, TrackTask, TrackVersion
 
 
 COMPLETED_TASK_STATUSES = {'completed'}
 IN_PROGRESS_TASK_STATUSES = {'in_progress', 'pending_review', 'revision_requested'}
+PRESERVE_TASK_STATUSES = {'completed', 'pending_review', 'revision_requested'}
+ARCHIVE_METADATA_KEY = 'archived_from_republish'
 
 
 def _serialize_snapshot(track_version: TrackVersion) -> dict:
@@ -18,6 +22,7 @@ def _serialize_snapshot(track_version: TrackVersion) -> dict:
         'track_version_id': str(track_version.id),
         'title': track_version.title,
         'description': track_version.description,
+        'purpose': track_version.purpose,
         'phases': [
             {
                 'id': str(phase.id),
@@ -107,28 +112,71 @@ def create_assignment_from_track(
             if task.due_days_offset is not None:
                 due_date = start_date + timedelta(days=task.due_days_offset)
 
-            db.add(
-                AssignmentTask(
-                    assignment_id=assignment.id,
-                    assignment_phase_id=assignment_phase.id,
-                    source_task_id=task.id,
-                    title=task.title,
-                    description=task.description,
-                    instructions=task.instructions,
-                    task_type=task.task_type,
-                    required=task.required,
-                    order_index=task.order_index,
-                    estimated_minutes=task.estimated_minutes,
-                    passing_score=task.passing_score,
-                    metadata_json=task.metadata_json,
-                    due_date=due_date,
-                    status='not_started',
-                    progress_percent=0.0,
-                    is_next_recommended=False,
-                    created_by=actor_user_id,
-                    updated_by=actor_user_id,
-                )
+            assignment_task = AssignmentTask(
+                assignment_id=assignment.id,
+                assignment_phase_id=assignment_phase.id,
+                source_task_id=task.id,
+                title=task.title,
+                description=task.description,
+                instructions=task.instructions,
+                task_type=task.task_type,
+                required=task.required,
+                order_index=task.order_index,
+                estimated_minutes=task.estimated_minutes,
+                passing_score=task.passing_score,
+                metadata_json=task.metadata_json,
+                due_date=due_date,
+                status='not_started',
+                progress_percent=0.0,
+                is_next_recommended=False,
+                created_by=actor_user_id,
+                updated_by=actor_user_id,
             )
+            db.add(assignment_task)
+            db.flush()
+
+            if task.task_type == 'assessment_test':
+                metadata = dict(task.metadata_json or {})
+                assessment_meta = (
+                    dict(metadata.get('assessment')) if isinstance(metadata.get('assessment'), dict) else {}
+                )
+                test_id_raw = assessment_meta.get('test_id')
+                if not test_id_raw:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail='Assessment task missing test_id in metadata',
+                    )
+                try:
+                    test_id = UUID(str(test_id_raw))
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail='Assessment test_id is invalid',
+                    ) from exc
+
+                test_version = assessment_service.get_published_test_version(db, test_id=test_id)
+                delivery = assessment_service.create_delivery(
+                    db,
+                    payload={
+                        'test_version_id': test_version.id,
+                        'title': task.title,
+                        'audience_type': 'assignment',
+                        'source_assignment_id': assignment.id,
+                        'source_assignment_task_id': assignment_task.id,
+                        'participant_user_id': employee_id,
+                        'due_date': due_date,
+                        'attempts_allowed': test_version.attempts_allowed or 1,
+                        'duration_minutes': test_version.time_limit_minutes,
+                    },
+                    actor_user_id=actor_user_id,
+                )
+                metadata['assessment'] = {
+                    **assessment_meta,
+                    'test_id': str(test_id),
+                    'test_version_id': str(test_version.id),
+                    'delivery_id': str(delivery.id),
+                }
+                assignment_task.metadata_json = metadata
 
     db.flush()
     refresh_overdue_and_status(db, assignment)
@@ -201,6 +249,198 @@ def get_assignment_task(db: Session, *, assignment_id: UUID, task_id: UUID) -> A
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Task not found in assignment')
     return task
+
+
+def mask_quiz_answers_for_employee(db: Session, assignment_out: AssignmentOut) -> AssignmentOut:
+    task_ids = [task.id for phase in assignment_out.phases for task in phase.tasks]
+    if not task_ids:
+        return assignment_out
+
+    rows = db.execute(
+        select(QuizAttempt.assignment_task_id, func.count())
+        .where(QuizAttempt.assignment_task_id.in_(task_ids))
+        .group_by(QuizAttempt.assignment_task_id)
+    ).all()
+    attempts_by_task = {row[0]: int(row[1]) for row in rows}
+
+    for phase in assignment_out.phases:
+        for task in phase.tasks:
+            if task.task_type != 'quiz':
+                continue
+            metadata = dict(task.metadata or {})
+            quiz = dict(metadata.get('quiz', {}) if isinstance(metadata.get('quiz'), dict) else {})
+            attempts_allowed = quiz.get('attempts_allowed')
+            attempts_used = attempts_by_task.get(task.id, 0)
+            quiz['attempts_used'] = attempts_used
+            if attempts_allowed is not None:
+                try:
+                    attempts_allowed_value = int(attempts_allowed)
+                except (TypeError, ValueError):
+                    attempts_allowed_value = None
+                if attempts_allowed_value is not None:
+                    quiz['attempts_remaining'] = max(0, attempts_allowed_value - attempts_used)
+                    if attempts_used < attempts_allowed_value:
+                        questions = quiz.get('questions', [])
+                        if isinstance(questions, list):
+                            sanitized_questions = []
+                            for question in questions:
+                                if not isinstance(question, dict):
+                                    sanitized_questions.append(question)
+                                    continue
+                                sanitized = dict(question)
+                                sanitized.pop('correct_option_ids', None)
+                                sanitized_questions.append(sanitized)
+                            quiz['questions'] = sanitized_questions
+            else:
+                questions = quiz.get('questions', [])
+                if isinstance(questions, list):
+                    sanitized_questions = []
+                    for question in questions:
+                        if not isinstance(question, dict):
+                            sanitized_questions.append(question)
+                            continue
+                        sanitized = dict(question)
+                        sanitized.pop('correct_option_ids', None)
+                        sanitized_questions.append(sanitized)
+                    quiz['questions'] = sanitized_questions
+            metadata['quiz'] = quiz
+            task.metadata = metadata
+
+    return assignment_out
+
+
+def apply_track_version_to_assignments(
+    db: Session,
+    *,
+    template_id: UUID,
+    new_version: TrackVersion,
+    actor_user_id: UUID,
+) -> None:
+    assignments = db.scalars(
+        select(OnboardingAssignment)
+        .where(OnboardingAssignment.template_id == template_id)
+        .options(
+            joinedload(OnboardingAssignment.phases).joinedload(AssignmentPhase.tasks),
+            joinedload(OnboardingAssignment.tasks),
+        )
+    ).unique().all()
+
+    new_phases = sorted(new_version.phases, key=lambda row: row.order_index)
+    new_phase_by_source = {phase.source_phase_id: phase for phase in new_phases if phase.source_phase_id}
+
+    new_task_by_source: dict[UUID, TrackTask] = {}
+    for phase in new_phases:
+        for task in sorted(phase.tasks, key=lambda row: row.order_index):
+            if task.source_task_id:
+                new_task_by_source[task.source_task_id] = task
+
+    for assignment in assignments:
+        assignment.track_version_id = new_version.id
+        assignment.snapshot_json = _serialize_snapshot(new_version)
+        assignment.title = new_version.title
+        assignment.updated_by = actor_user_id
+
+        assignment_phase_by_source = {
+            phase.source_phase_id: phase for phase in assignment.phases if phase.source_phase_id
+        }
+        phase_map: dict[UUID, AssignmentPhase] = {}
+
+        for phase in new_phases:
+            if phase.source_phase_id and phase.source_phase_id in assignment_phase_by_source:
+                assignment_phase = assignment_phase_by_source[phase.source_phase_id]
+                assignment_phase.title = phase.title
+                assignment_phase.description = phase.description
+                assignment_phase.order_index = phase.order_index
+                assignment_phase.source_phase_id = phase.id
+                assignment_phase.updated_by = actor_user_id
+                phase_map[phase.id] = assignment_phase
+            else:
+                new_assignment_phase = AssignmentPhase(
+                    assignment_id=assignment.id,
+                    source_phase_id=phase.id,
+                    title=phase.title,
+                    description=phase.description,
+                    order_index=phase.order_index,
+                    status='not_started',
+                    progress_percent=0.0,
+                    created_by=actor_user_id,
+                    updated_by=actor_user_id,
+                )
+                db.add(new_assignment_phase)
+                db.flush()
+                phase_map[phase.id] = new_assignment_phase
+
+        matched_assignment_task_ids: set[UUID] = set()
+
+        for phase in new_phases:
+            assignment_phase = phase_map.get(phase.id)
+            if not assignment_phase:
+                continue
+
+            for task in sorted(phase.tasks, key=lambda row: row.order_index):
+                if task.source_task_id and task.source_task_id in new_task_by_source:
+                    assignment_task = next(
+                        (item for item in assignment.tasks if item.source_task_id == task.source_task_id), None
+                    )
+                    if assignment_task:
+                        matched_assignment_task_ids.add(assignment_task.id)
+                        assignment_task.assignment_phase_id = assignment_phase.id
+                        assignment_task.order_index = task.order_index
+                        assignment_task.source_task_id = task.id
+                        assignment_task.updated_by = actor_user_id
+
+                        if assignment_task.status not in PRESERVE_TASK_STATUSES:
+                            assignment_task.title = task.title
+                            assignment_task.description = task.description
+                            assignment_task.instructions = task.instructions
+                            assignment_task.task_type = task.task_type
+                            assignment_task.required = task.required
+                            assignment_task.estimated_minutes = task.estimated_minutes
+                            assignment_task.passing_score = task.passing_score
+                            assignment_task.metadata_json = task.metadata_json
+                            if task.due_days_offset is not None:
+                                assignment_task.due_date = assignment.start_date + timedelta(days=task.due_days_offset)
+                        continue
+
+                new_assignment_task = AssignmentTask(
+                    assignment_id=assignment.id,
+                    assignment_phase_id=assignment_phase.id,
+                    source_task_id=task.id,
+                    title=task.title,
+                    description=task.description,
+                    instructions=task.instructions,
+                    task_type=task.task_type,
+                    required=task.required,
+                    order_index=task.order_index,
+                    estimated_minutes=task.estimated_minutes,
+                    passing_score=task.passing_score,
+                    metadata_json=task.metadata_json,
+                    due_date=assignment.start_date + timedelta(days=task.due_days_offset)
+                    if task.due_days_offset is not None
+                    else None,
+                    status='not_started',
+                    progress_percent=0.0,
+                    is_next_recommended=False,
+                    created_by=actor_user_id,
+                    updated_by=actor_user_id,
+                )
+                db.add(new_assignment_task)
+                db.flush()
+                matched_assignment_task_ids.add(new_assignment_task.id)
+
+        for task in assignment.tasks:
+            if task.id in matched_assignment_task_ids:
+                continue
+            if task.status in PRESERVE_TASK_STATUSES:
+                continue
+            task.metadata_json = {**task.metadata_json, ARCHIVE_METADATA_KEY: True}
+            task.updated_by = actor_user_id
+
+        refresh_overdue_and_status(db, assignment)
+        recompute_progress(db, assignment)
+        refresh_next_task(db, assignment)
+
+    db.flush()
 
 
 def refresh_overdue_and_status(db: Session, assignment: OnboardingAssignment) -> None:

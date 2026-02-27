@@ -57,7 +57,17 @@ Optional:
 ### Frontend (`frontend/.env.local`)
 
 - `NEXT_PUBLIC_API_BASE_URL` (default `/api/v1`)
-- `BACKEND_API_URL` (used by Next rewrite, default `http://localhost:8000`)
+- `BACKEND_API_URL` (used by Next rewrite, default `http://localhost:8001`)
+
+Optional, for AI-assisted track drafting (Create track → "Draft with AI"):
+
+- `OPENAI_API_KEY` – required for AI drafting. Create an API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys). If you only see "Default project" when creating the key, that project may not have access to all models.
+- `OPENAI_MODEL` – model to use (e.g. `gpt-4o-mini`, `gpt-3.5-turbo`). If you get a 403 "project does not have access to model", set this to a model your project can use (e.g. `gpt-3.5-turbo`) or add billing/model access for your project under [platform.openai.com/settings/organization](https://platform.openai.com/settings/organization).
+- `OPENAI_TEXT_FORMAT` – set to `json_object` if using older models (e.g. `gpt-3.5-turbo`) that do not support Structured Outputs.
+- `OPENAI_INCLUDE_TEMPERATURE` – set to `false` for models that don't support it (e.g. `gpt-5.2-pro`) to avoid an extra retry.
+- `OPENAI_TEXT_VERBOSITY` – set to `low` to reduce output length (often faster) on GPT‑5 models.
+- `OPENAI_MAX_OUTPUT_TOKENS` – optional hard cap for GPT‑5 output tokens (can reduce latency/cost, but too low may truncate output).
+- `OPENAI_TIMEOUT_MS` – timeout for the OpenAI call in ms (default `60000`). Increase (e.g. `90000`) if you see timeouts with larger prompts or slower models.
 
 ## Replit Setup
 
@@ -75,7 +85,7 @@ Optional:
    - `cd frontend && npm install`
 4. Run one command from repo root:
    - `python scripts/dev.py`
-5. Open frontend on port `3000` (rewrites `/api/v1/*` to backend).
+5. Open frontend on port `3001` (rewrites `/api/v1/*` to backend).
 
 ### Replit PostgreSQL Notes
 
@@ -143,8 +153,8 @@ docker compose up --build
 
 Services:
 
-- Frontend: `http://localhost:3000`
-- Backend: `http://localhost:8000`
+- Frontend: `http://localhost:3001`
+- Backend: `http://localhost:8001`
 - Postgres: `localhost:5432`
 
 ## Ubuntu VPS Deployment (Systemd Services)
@@ -211,8 +221,8 @@ python scripts/seed_backend.py
 
 ## API Docs
 
-- Swagger UI: `http://localhost:8000/api/v1/docs`
-- OpenAPI JSON: `http://localhost:8000/api/v1/openapi.json`
+- Swagger UI: `http://localhost:8001/api/v1/docs`
+- OpenAPI JSON: `http://localhost:8001/api/v1/openapi.json`
 
 ## Testing
 

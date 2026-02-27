@@ -23,7 +23,7 @@ def spawn_processes() -> list[subprocess.Popen]:
         '--host',
         '0.0.0.0',
         '--port',
-        '8000',
+        '8001',
         '--reload',
     ]
     frontend_cmd = ['npm', 'run', 'dev']

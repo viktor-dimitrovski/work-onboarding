@@ -52,6 +52,7 @@ export default function NewAssignmentPage() {
       const mentorRows = usersResponse.items.filter((user) => user.roles.includes('mentor'));
 
       const versions = tracksResponse.items
+        .filter((track) => track.is_active)
         .flatMap((track) =>
           track.versions
             .filter((version) => version.status === 'published')

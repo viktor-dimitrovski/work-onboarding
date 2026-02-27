@@ -28,6 +28,7 @@ class TrackTemplate(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     role_target: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     estimated_duration_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    purpose: Mapped[str] = mapped_column(String(30), nullable=False, default='onboarding')
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     versions: Mapped[list['TrackVersion']] = relationship(
@@ -51,6 +52,7 @@ class TrackVersion(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     estimated_duration_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    purpose: Mapped[str] = mapped_column(String(30), nullable=False, default='onboarding')
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -69,6 +71,7 @@ class TrackPhase(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     track_version_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey('track_versions.id', ondelete='CASCADE'), nullable=False
     )
+    source_phase_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -84,7 +87,7 @@ class TrackTask(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     __table_args__ = (
         UniqueConstraint('track_phase_id', 'order_index', name='uq_track_tasks_phase_order'),
         CheckConstraint(
-            "task_type in ('read_material', 'video', 'checklist', 'quiz', 'code_assignment', 'external_link', 'mentor_approval', 'file_upload')",
+            "task_type in ('read_material', 'video', 'checklist', 'quiz', 'code_assignment', 'external_link', 'mentor_approval', 'file_upload', 'assessment_test')",
             name='track_task_type_values',
         ),
     )
@@ -92,6 +95,7 @@ class TrackTask(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     track_phase_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey('track_phases.id', ondelete='CASCADE'), nullable=False
     )
+    source_task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)

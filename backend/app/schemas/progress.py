@@ -29,6 +29,18 @@ class TaskSubmissionOut(BaseSchema):
     submitted_at: datetime
 
 
+class QuizAttemptOut(BaseSchema):
+    id: UUID
+    assignment_task_id: UUID
+    employee_id: UUID
+    attempt_number: int
+    score: float
+    max_score: float
+    passed: bool
+    answers: dict[str, Any] = Field(alias='answers_json')
+    submitted_at: datetime
+
+
 class MentorReviewCreate(BaseModel):
     decision: str
     comment: str | None = None

@@ -76,13 +76,13 @@ popd
 
 echo.
 echo [INFO] Launching backend and frontend in separate windows...
-start "Onboarding Backend" cmd /k "cd /d %CD%\backend && call ..\.venv\Scripts\activate.bat && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+start "Onboarding Backend" cmd /k "cd /d %CD%\backend && call ..\.venv\Scripts\activate.bat && uvicorn app.main:app --reload --host 0.0.0.0 --port 8001"
 start "Onboarding Frontend" cmd /k "cd /d %CD%\frontend && npm run dev"
 
 echo.
 echo [OK] Startup commands launched.
-echo Frontend: http://localhost:3000
-echo Backend:  http://localhost:8000
-echo API docs: http://localhost:8000/api/v1/docs
+echo Frontend: http://localhost:3001
+echo Backend:  http://localhost:8001
+echo API docs: http://localhost:8001/api/v1/docs
 
 exit /b 0

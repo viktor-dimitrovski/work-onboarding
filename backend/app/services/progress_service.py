@@ -51,11 +51,8 @@ def submit_task(
     db.flush()
 
     if task.task_type == 'quiz':
-        if quiz_score is None or quiz_max_score is None or quiz_max_score <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail='Quiz tasks require quiz_score and quiz_max_score > 0',
-            )
+        quiz_meta = task.metadata_json.get('quiz', {}) if isinstance(task.metadata_json, dict) else {}
+        attempts_allowed = quiz_meta.get('attempts_allowed')
 
         attempt_count = int(
             db.scalar(
@@ -68,6 +65,38 @@ def submit_task(
             )
             or 0
         )
+        if attempts_allowed is not None and attempt_count >= int(attempts_allowed):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail='No remaining quiz attempts for this task',
+            )
+
+        if quiz_score is None or quiz_max_score is None or quiz_max_score <= 0:
+            questions = quiz_meta.get('questions', [])
+            if not isinstance(questions, list):
+                questions = []
+
+            total_points = 0.0
+            earned_points = 0.0
+            for idx, question in enumerate(questions):
+                if not isinstance(question, dict):
+                    continue
+                points = float(question.get('points', 1))
+                total_points += points
+                correct = set(question.get('correct_option_ids', []) or [])
+                selected = set((quiz_answers or {}).get(str(idx), []) or [])
+                if correct and selected == correct:
+                    earned_points += points
+
+            if total_points <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail='Quiz tasks require quiz_score or valid quiz metadata',
+                )
+
+            quiz_score = earned_points
+            quiz_max_score = total_points
+
         percent = (quiz_score / quiz_max_score) * 100
         passed = percent >= float(task.passing_score or 0)
 
@@ -80,6 +109,7 @@ def submit_task(
                 max_score=quiz_max_score,
                 passed=passed,
                 answers_json=quiz_answers,
+                submission_id=submission.id,
             )
         )
 

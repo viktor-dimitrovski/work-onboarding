@@ -27,14 +27,14 @@ services:
       JWT_SECRET_KEY: dev-access-secret-change-me-32-chars-min-0001
       JWT_REFRESH_SECRET_KEY: dev-refresh-secret-change-me-32-chars-min-0002
       APP_ENV: development
-      CORS_ORIGINS: http://localhost:3000
+      CORS_ORIGINS: http://localhost:3001
       FIRST_ADMIN_EMAIL: super.admin@example.com
       FIRST_ADMIN_PASSWORD: ChangeMe123!
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8001"
     volumes:
       - ./backend:/app
     ports:
-      - '8000:8000'
+      - '8001:8001'
     depends_on:
       postgres:
         condition: service_healthy
@@ -45,12 +45,12 @@ services:
     container_name: onboarding-frontend
     environment:
       NEXT_PUBLIC_API_BASE_URL: /api/v1
-      BACKEND_API_URL: http://backend:8000
+      BACKEND_API_URL: http://backend:8001
     volumes:
       - ./frontend:/app
       - /app/node_modules
     ports:
-      - '3000:3000'
+      - '3001:3001'
     depends_on:
       - backend
 

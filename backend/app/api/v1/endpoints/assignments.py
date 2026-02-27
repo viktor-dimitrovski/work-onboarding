@@ -42,10 +42,14 @@ def list_assignments(
         mentor_id=effective_mentor_id,
     )
 
-    return AssignmentListResponse(
-        items=[AssignmentOut.model_validate(item) for item in assignments],
-        meta=PaginationMeta(page=page, page_size=page_size, total=total),
-    )
+    payload: list[AssignmentOut] = []
+    for item in assignments:
+        assignment_out = AssignmentOut.model_validate(item)
+        if 'employee' in roles and not {'super_admin', 'admin', 'mentor', 'hr_viewer', 'reviewer'} & roles:
+            assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
+        payload.append(assignment_out)
+
+    return AssignmentListResponse(items=payload, meta=PaginationMeta(page=page, page_size=page_size, total=total))
 
 
 @router.post('', response_model=AssignmentOut, status_code=status.HTTP_201_CREATED)
@@ -88,7 +92,8 @@ def my_assignments(
     current_user: User = Depends(require_roles('employee')),
 ) -> list[AssignmentOut]:
     assignments = assignment_service.get_employee_assignments(db, employee_id=current_user.id)
-    return [AssignmentOut.model_validate(item) for item in assignments]
+    payload = [AssignmentOut.model_validate(item) for item in assignments]
+    return [assignment_service.mask_quiz_answers_for_employee(db, item) for item in payload]
 
 
 @router.get('/{assignment_id}', response_model=AssignmentOut)
@@ -98,9 +103,9 @@ def get_assignment(
     current_user: User = Depends(require_roles('super_admin', 'admin', 'mentor', 'employee', 'hr_viewer')),
 ) -> AssignmentOut:
     assignment = assignment_service.get_assignment_by_id(db, assignment_id)
-    assignment_service.access_guard(
-        assignment,
-        user_id=current_user.id,
-        roles=get_user_role_names(current_user),
-    )
-    return AssignmentOut.model_validate(assignment)
+    roles = get_user_role_names(current_user)
+    assignment_service.access_guard(assignment, user_id=current_user.id, roles=roles)
+    assignment_out = AssignmentOut.model_validate(assignment)
+    if 'employee' in roles and not {'super_admin', 'admin', 'mentor', 'hr_viewer', 'reviewer'} & roles:
+        assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
+    return assignment_out

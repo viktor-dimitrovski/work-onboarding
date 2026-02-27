@@ -62,6 +62,7 @@ export interface TrackVersion {
   description?: string | null;
   estimated_duration_days: number;
   tags: string[];
+  purpose?: string;
   is_current: boolean;
   published_at?: string | null;
   phases: TrackPhase[];
@@ -74,6 +75,7 @@ export interface TrackTemplate {
   role_target?: string | null;
   estimated_duration_days: number;
   tags: string[];
+  purpose?: string;
   is_active: boolean;
   versions: TrackVersion[];
 }
@@ -114,11 +116,122 @@ export interface Assignment {
   template_id: string;
   track_version_id: string;
   title: string;
+  purpose?: string | null;
   start_date: string;
   target_date: string;
   status: string;
   progress_percent: number;
   phases: AssignmentPhase[];
+}
+
+export interface QuizAttempt {
+  id: string;
+  assignment_task_id: string;
+  employee_id: string;
+  attempt_number: number;
+  score: number;
+  max_score: number;
+  passed: boolean;
+  answers: Record<string, unknown>;
+  submitted_at: string;
+}
+
+export interface AssessmentQuestionOption {
+  id: string;
+  option_text: string;
+  is_correct: boolean;
+  order_index: number;
+}
+
+export interface AssessmentQuestion {
+  id: string;
+  prompt: string;
+  question_type: string;
+  difficulty?: string | null;
+  tags: string[];
+  status: string;
+  explanation?: string | null;
+  options: AssessmentQuestionOption[];
+}
+
+export interface AssessmentTestVersionQuestion {
+  id: string;
+  question_id?: string | null;
+  order_index: number;
+  points: number;
+  question_snapshot: Record<string, unknown>;
+}
+
+export interface AssessmentTestVersion {
+  id: string;
+  test_id: string;
+  version_number: number;
+  status: string;
+  passing_score: number;
+  time_limit_minutes?: number | null;
+  shuffle_questions: boolean;
+  attempts_allowed?: number | null;
+  published_at?: string | null;
+  questions: AssessmentTestVersionQuestion[];
+}
+
+export interface AssessmentTest {
+  id: string;
+  title: string;
+  description?: string | null;
+  category?: string | null;
+  role_target?: string | null;
+  status: string;
+  is_active: boolean;
+  versions: AssessmentTestVersion[];
+}
+
+export interface AssessmentDelivery {
+  id: string;
+  test_version_id: string;
+  title: string;
+  audience_type: string;
+  source_assignment_id?: string | null;
+  source_assignment_task_id?: string | null;
+  participant_user_id?: string | null;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  attempts_allowed: number;
+  duration_minutes?: number | null;
+  due_date?: string | null;
+}
+
+export interface AssessmentAttempt {
+  id: string;
+  delivery_id: string;
+  user_id: string;
+  attempt_number: number;
+  status: string;
+  started_at: string;
+  submitted_at?: string | null;
+  expires_at?: string | null;
+  score?: number | null;
+  max_score?: number | null;
+  score_percent?: number | null;
+  passed: boolean;
+}
+
+export interface AssessmentAttemptQuestionOption {
+  key: string;
+  text: string;
+}
+
+export interface AssessmentAttemptQuestion {
+  index: number;
+  prompt: string;
+  question_type: string;
+  points: number;
+  options: AssessmentAttemptQuestionOption[];
+}
+
+export interface AssessmentAttemptStart {
+  attempt: AssessmentAttempt;
+  questions: AssessmentAttemptQuestion[];
 }
 
 export interface UserRow {

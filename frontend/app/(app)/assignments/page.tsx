@@ -13,6 +13,7 @@ import { api } from '@/lib/api';
 import { formatPercent } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
 import type { Assignment } from '@/lib/types';
+import { cn } from '@/lib/utils';
 
 interface AssignmentListResponse {
   items: Assignment[];
@@ -57,30 +58,39 @@ export default function AssignmentsPage() {
         <EmptyState title='No assignments' description='Assign a published track to an employee to start onboarding.' />
       ) : (
         <div className='space-y-3'>
-          {assignments.map((assignment) => (
-            <Card key={assignment.id}>
-              <CardHeader>
-                <div className='flex items-center justify-between'>
-                  <CardTitle>{assignment.title}</CardTitle>
-                  <StatusChip status={assignment.status} />
-                </div>
-                <CardDescription>
-                  Start {assignment.start_date} • Target {assignment.target_date}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className='flex items-center gap-3'>
-                  <Progress value={assignment.progress_percent} className='flex-1' />
-                  <span className='w-12 text-right text-xs text-muted-foreground'>
-                    {formatPercent(assignment.progress_percent)}
-                  </span>
-                  <Button variant='outline' asChild>
-                    <Link href={`/assignments/${assignment.id}`}>Open</Link>
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+          {assignments.map((assignment) => {
+            const isCompleted = assignment.status === 'completed';
+            return (
+              <Card
+                key={assignment.id}
+                className={cn(isCompleted && 'border-emerald-200 bg-emerald-50/40')}
+              >
+                <CardHeader>
+                  <div className='flex items-center justify-between'>
+                    <CardTitle>{assignment.title}</CardTitle>
+                    <StatusChip status={assignment.status} />
+                  </div>
+                  <CardDescription>
+                    Start {assignment.start_date} • Target {assignment.target_date}
+                  </CardDescription>
+                  {assignment.purpose && (
+                    <p className='text-xs text-muted-foreground'>Purpose: {assignment.purpose}</p>
+                  )}
+                </CardHeader>
+                <CardContent>
+                  <div className='flex items-center gap-3'>
+                    <Progress value={assignment.progress_percent} className='flex-1' />
+                    <span className='w-12 text-right text-xs text-muted-foreground'>
+                      {formatPercent(assignment.progress_percent)}
+                    </span>
+                    <Button variant='outline' asChild>
+                      <Link href={`/assignments/${assignment.id}`}>Open</Link>
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

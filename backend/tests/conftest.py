@@ -14,7 +14,7 @@ os.environ.setdefault('DATABASE_URL', TEST_DATABASE_URL)
 os.environ.setdefault('JWT_SECRET_KEY', 'test-access-secret-32-chars-min-0001')
 os.environ.setdefault('JWT_REFRESH_SECRET_KEY', 'test-refresh-secret-32-chars-min-0002')
 os.environ.setdefault('APP_ENV', 'test')
-os.environ.setdefault('CORS_ORIGINS', 'http://localhost:3000')
+os.environ.setdefault('CORS_ORIGINS', 'http://localhost:3001')
 os.environ.setdefault('FIRST_ADMIN_EMAIL', 'seed-super-admin@example.com')
 os.environ.setdefault('FIRST_ADMIN_PASSWORD', 'SeedPass123!')
 

@@ -17,6 +17,7 @@ TASK_TYPE_VALUES = [
     'external_link',
     'mentor_approval',
     'file_upload',
+    'assessment_test',
 ]
 RESOURCE_TYPE_VALUES = [
     'markdown_text',

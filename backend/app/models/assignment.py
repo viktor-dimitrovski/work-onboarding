@@ -64,6 +64,12 @@ class OnboardingAssignment(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, 
         back_populates='assignment', cascade='all, delete-orphan', order_by='Comment.created_at'
     )
 
+    @property
+    def purpose(self) -> str | None:
+        if isinstance(self.snapshot_json, dict):
+            return self.snapshot_json.get('purpose')
+        return None
+
 
 class AssignmentPhase(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     __tablename__ = 'assignment_phases'

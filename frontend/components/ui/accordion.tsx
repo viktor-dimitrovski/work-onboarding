@@ -37,7 +37,12 @@ export function AccordionContent({
 }: React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Content>) {
   return (
     <AccordionPrimitive.Content
-      className={cn('overflow-hidden text-sm data-[state=closed]:animate-none data-[state=open]:animate-fade-up', className)}
+      className={cn(
+        'relative overflow-hidden text-sm data-[state=closed]:animate-none data-[state=open]:animate-fade-up',
+        className,
+        // Opaque background + clipping avoids corner tint artifacts
+        'rounded-b-lg bg-white',
+      )}
       {...props}
     >
       <div className='pb-3'>{children}</div>

@@ -1,5 +1,15 @@
 from app.db.base_class import Base
 from app.models.assignment import AssignmentPhase, AssignmentTask, MentorReview, OnboardingAssignment, QuizAttempt, TaskSubmission
+from app.models.assessment import (
+    AssessmentAttempt,
+    AssessmentAttemptAnswer,
+    AssessmentDelivery,
+    AssessmentQuestion,
+    AssessmentQuestionOption,
+    AssessmentTest,
+    AssessmentTestVersion,
+    AssessmentTestVersionQuestion,
+)
 from app.models.audit import AuditLog
 from app.models.comment import Comment
 from app.models.rbac import Role, User, UserRole
@@ -11,6 +21,14 @@ __all__ = [
     'AssignmentPhase',
     'AssignmentTask',
     'AuditLog',
+    'AssessmentAttempt',
+    'AssessmentAttemptAnswer',
+    'AssessmentDelivery',
+    'AssessmentQuestion',
+    'AssessmentQuestionOption',
+    'AssessmentTest',
+    'AssessmentTestVersion',
+    'AssessmentTestVersionQuestion',
     'Base',
     'Comment',
     'MentorReview',

@@ -28,6 +28,7 @@ class TrackTaskCreate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     due_days_offset: int | None = Field(default=None, ge=0)
     resources: list[TaskResourceCreate] = Field(default_factory=list)
+    source_task_id: UUID | None = None
 
 
 class TrackPhaseCreate(BaseModel):
@@ -35,6 +36,7 @@ class TrackPhaseCreate(BaseModel):
     description: str | None = None
     order_index: int = Field(ge=0)
     tasks: list[TrackTaskCreate] = Field(default_factory=list)
+    source_phase_id: UUID | None = None
 
 
 class TrackTemplateCreate(BaseModel):
@@ -44,6 +46,7 @@ class TrackTemplateCreate(BaseModel):
     estimated_duration_days: int = Field(default=30, ge=1, le=365)
     tags: list[str] = Field(default_factory=list)
     phases: list[TrackPhaseCreate] = Field(default_factory=list)
+    purpose: str = Field(default='onboarding')
 
 
 class TaskResourceOut(BaseSchema):
@@ -93,6 +96,7 @@ class TrackVersionOut(BaseSchema):
     description: str | None
     estimated_duration_days: int
     tags: list[str]
+    purpose: str
     is_current: bool
     published_at: datetime | None
     phases: list[TrackPhaseOut]
@@ -107,10 +111,22 @@ class TrackTemplateOut(BaseSchema):
     role_target: str | None
     estimated_duration_days: int
     tags: list[str]
+    purpose: str
     is_active: bool
     versions: list[TrackVersionOut]
     created_at: datetime
     updated_at: datetime
+
+
+class TrackTemplateUpdate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    description: str | None = None
+    role_target: str | None = Field(default=None, max_length=100)
+    estimated_duration_days: int = Field(default=30, ge=1, le=365)
+    tags: list[str] = Field(default_factory=list)
+    phases: list[TrackPhaseCreate] = Field(default_factory=list)
+    purpose: str = Field(default='onboarding')
+    apply_to_assignments: bool = False
 
 
 class TrackListResponse(BaseModel):

@@ -5,19 +5,34 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', case_sensitive=True)
+    model_config = SettingsConfigDict(
+        env_file='.env',
+        env_file_encoding='utf-8',
+        case_sensitive=True,
+        extra='forbid',
+    )
 
     DATABASE_URL: str
     JWT_SECRET_KEY: str
     JWT_REFRESH_SECRET_KEY: str
     APP_ENV: str = 'development'
-    CORS_ORIGINS: str = 'http://localhost:3000'
+    CORS_ORIGINS: str = 'http://localhost:3001'
     FIRST_ADMIN_EMAIL: EmailStr
     FIRST_ADMIN_PASSWORD: str
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     JWT_ALGORITHM: str = 'HS256'
+
+    OPENAI_API_KEY: str | None = None
+    OPENAI_API_BASE: str = 'https://api.openai.com/v1'
+    OPENAI_MODEL: str = 'gpt-5.2-pro'
+    OPENAI_PROJECT_ID: str | None = None
+    OPENAI_TEXT_FORMAT: str | None = None
+    OPENAI_INCLUDE_TEMPERATURE: bool = True
+    OPENAI_TEXT_VERBOSITY: str | None = None
+    OPENAI_MAX_OUTPUT_TOKENS: int | None = None
+    OPENAI_TIMEOUT_MS: int = 60_000
 
     @field_validator('DATABASE_URL')
     @classmethod
@@ -45,7 +60,8 @@ class Settings(BaseSettings):
     @field_validator('FIRST_ADMIN_EMAIL')
     @classmethod
     def normalize_first_admin_email(cls, value: EmailStr) -> EmailStr:
-        return EmailStr(str(value).strip().lower())
+        # Pydantic will re-validate; we just normalize casing/whitespace.
+        return str(value).strip().lower()
 
     @property
     def cors_origins(self) -> list[str]:

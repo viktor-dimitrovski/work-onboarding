@@ -27,7 +27,7 @@ if errorlevel 1 (
 popd
 
 echo [INFO] Starting backend and frontend...
-start "Onboarding Backend" cmd /k "cd /d %CD%\backend && call ..\.venv\Scripts\activate.bat && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+start "Onboarding Backend" cmd /k "cd /d %CD%\backend && call ..\.venv\Scripts\activate.bat && uvicorn app.main:app --reload --host 0.0.0.0 --port 8001"
 start "Onboarding Frontend" cmd /k "cd /d %CD%\frontend && npm run dev"
 
 echo [OK] Started.

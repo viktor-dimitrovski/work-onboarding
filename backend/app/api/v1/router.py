@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import assignments, auth, health, progress, reports, tracks, users
+from app.api.v1.endpoints import assessments, assignments, auth, health, progress, reports, tracks, users
 
 
 api_router = APIRouter()
@@ -11,3 +11,4 @@ api_router.include_router(tracks.router)
 api_router.include_router(assignments.router)
 api_router.include_router(progress.router)
 api_router.include_router(reports.router)
+api_router.include_router(assessments.router)
