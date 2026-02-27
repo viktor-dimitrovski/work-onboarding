@@ -21,7 +21,9 @@ export function BuilderShell({ main, workspace, workspaceLabel = 'Workspace' }: 
       </div>
       <div className='grid gap-6 md:grid-cols-12'>
         <div className='space-y-6 md:col-span-8'>{main}</div>
-        <div className='hidden space-y-6 md:col-span-4 md:sticky md:top-20 md:self-start'>{workspace}</div>
+        <div className='hidden space-y-6 md:col-span-4 md:sticky md:top-20 md:self-start md:block'>
+          {workspace}
+        </div>
       </div>
 
       <Sheet open={workspaceOpen} onOpenChange={setWorkspaceOpen}>

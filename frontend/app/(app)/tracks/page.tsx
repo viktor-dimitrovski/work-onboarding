@@ -118,10 +118,16 @@ export default function TracksPage() {
               <Card
                 key={track.id}
                 className={cn(
-                  'animate-fade-up',
+                  'relative animate-fade-up overflow-hidden',
                   isInactive && 'border-amber-200 bg-amber-50/40 shadow-none',
                 )}
               >
+                {isInactive && (
+                  <div
+                    aria-hidden
+                    className='pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(251,191,36,0.10)_0%,rgba(251,191,36,0.10)_10%,transparent_10%,transparent_50%,rgba(251,191,36,0.10)_50%,rgba(251,191,36,0.10)_60%,transparent_60%,transparent_100%)] bg-[length:18px_18px]'
+                  />
+                )}
                 <CardHeader>
                   <div className='flex items-center justify-between gap-3'>
                     <CardTitle>{track.title}</CardTitle>
@@ -183,8 +189,20 @@ export default function TracksPage() {
                     <p>Estimated duration: {track.estimated_duration_days} days</p>
                     <p>Purpose: {getLabel(track.purpose)}</p>
                     <p>Versions: {track.versions.length}</p>
-                    {!track.is_active && <p className='text-amber-600'>Inactive (not assignable)</p>}
                   </div>
+
+                  {isInactive && (
+                    <div className='mt-3 flex items-start gap-2 rounded-md border border-amber-200 bg-white/70 px-3 py-2 text-xs text-amber-900'>
+                      <Ban className='mt-0.5 h-4 w-4 flex-none text-amber-700' />
+                      <div>
+                        <p className='font-medium'>Disabled</p>
+                        <p className='text-amber-800/90'>
+                          This track can’t be assigned. Enable it from the menu when you’re ready.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   <div className='mt-4 flex flex-wrap gap-2'>
                     <Button variant='outline' asChild>
                       <Link href={`/tracks/${track.id}`}>Open builder</Link>

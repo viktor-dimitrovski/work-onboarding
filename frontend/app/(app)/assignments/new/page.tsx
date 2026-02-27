@@ -22,7 +22,7 @@ interface UserListResponse {
 }
 
 export default function NewAssignmentPage() {
-  const { accessToken } = useAuth();
+  const { accessToken, hasRole, isLoading } = useAuth();
   const router = useRouter();
 
   const [employees, setEmployees] = useState<UserRow[]>([]);
@@ -38,6 +38,12 @@ export default function NewAssignmentPage() {
   const [targetDate, setTargetDate] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isLoading && !(hasRole('admin') || hasRole('super_admin') || hasRole('mentor'))) {
+      router.replace('/assignments');
+    }
+  }, [hasRole, isLoading, router]);
 
   useEffect(() => {
     const run = async () => {

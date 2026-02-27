@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,11 +10,20 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useTrackPurposeLabels } from '@/lib/track-purpose';
+import { useAuth } from '@/lib/auth-context';
 import { Plus, Trash2 } from 'lucide-react';
 
 export default function SettingsPage() {
+  const router = useRouter();
+  const { hasRole, isLoading } = useAuth();
   const { items, addPurpose, removePurpose, updateLabel, resetItems } = useTrackPurposeLabels();
   const [newLabel, setNewLabel] = useState('');
+
+  useEffect(() => {
+    if (!isLoading && !(hasRole('admin') || hasRole('super_admin'))) {
+      router.replace('/dashboard');
+    }
+  }, [hasRole, isLoading, router]);
 
   return (
     <div className='space-y-6'>

@@ -21,9 +21,10 @@ interface AssignmentListResponse {
 }
 
 export default function AssignmentsPage() {
-  const { accessToken } = useAuth();
+  const { accessToken, hasRole } = useAuth();
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [loading, setLoading] = useState(true);
+  const canCreateAssignment = hasRole('admin') || hasRole('super_admin') || hasRole('mentor');
 
   useEffect(() => {
     const run = async () => {
@@ -49,49 +50,60 @@ export default function AssignmentsPage() {
           <h2 className='text-2xl font-semibold'>Assignments</h2>
           <p className='text-sm text-muted-foreground'>Track active onboarding instances and statuses.</p>
         </div>
-        <Button asChild>
-          <Link href='/assignments/new'>New assignment</Link>
-        </Button>
+        {canCreateAssignment && (
+          <Button asChild>
+            <Link href='/assignments/new'>New assignment</Link>
+          </Button>
+        )}
       </div>
 
       {assignments.length === 0 ? (
         <EmptyState title='No assignments' description='Assign a published track to an employee to start onboarding.' />
       ) : (
-        <div className='space-y-3'>
-          {assignments.map((assignment) => {
-            const isCompleted = assignment.status === 'completed';
-            return (
-              <Card
-                key={assignment.id}
-                className={cn(isCompleted && 'border-emerald-200 bg-emerald-50/40')}
-              >
-                <CardHeader>
-                  <div className='flex items-center justify-between'>
-                    <CardTitle>{assignment.title}</CardTitle>
-                    <StatusChip status={assignment.status} />
+        <Card className='overflow-hidden'>
+          <CardContent className='p-0'>
+            <div className='divide-y'>
+              {assignments.map((assignment) => {
+                const isCompleted = assignment.status === 'completed';
+                return (
+                  <div
+                    key={assignment.id}
+                    className={cn(
+                      'flex flex-wrap items-center justify-between gap-3 px-4 py-3 transition-colors',
+                      isCompleted ? 'bg-emerald-50/40' : 'bg-white',
+                      'hover:bg-muted/20',
+                    )}
+                  >
+                    <div className='min-w-0 flex-1'>
+                      <div className='flex flex-wrap items-center gap-2'>
+                        <p className={cn('truncate font-medium', isCompleted && 'text-emerald-900')}>{assignment.title}</p>
+                        {assignment.purpose && (
+                          <span className='text-xs text-muted-foreground'>• {assignment.purpose}</span>
+                        )}
+                      </div>
+                      <p className='mt-0.5 text-xs text-muted-foreground'>
+                        Start {assignment.start_date} • Target {assignment.target_date}
+                      </p>
+                      <div className='mt-2 flex items-center gap-3'>
+                        <Progress value={assignment.progress_percent} className='h-2 flex-1' />
+                        <span className='w-12 text-right text-xs text-muted-foreground'>
+                          {formatPercent(assignment.progress_percent)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className='flex items-center gap-2'>
+                      <StatusChip status={assignment.status} />
+                      <Button variant='outline' size='sm' asChild>
+                        <Link href={`/assignments/${assignment.id}`}>Open</Link>
+                      </Button>
+                    </div>
                   </div>
-                  <CardDescription>
-                    Start {assignment.start_date} • Target {assignment.target_date}
-                  </CardDescription>
-                  {assignment.purpose && (
-                    <p className='text-xs text-muted-foreground'>Purpose: {assignment.purpose}</p>
-                  )}
-                </CardHeader>
-                <CardContent>
-                  <div className='flex items-center gap-3'>
-                    <Progress value={assignment.progress_percent} className='flex-1' />
-                    <span className='w-12 text-right text-xs text-muted-foreground'>
-                      {formatPercent(assignment.progress_percent)}
-                    </span>
-                    <Button variant='outline' asChild>
-                      <Link href={`/assignments/${assignment.id}`}>Open</Link>
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

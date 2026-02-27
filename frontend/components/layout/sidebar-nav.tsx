@@ -28,7 +28,7 @@ const NAV_ITEMS = [
   { href: '/assignments', label: 'Assignments', icon: ClipboardList, roles: ['super_admin', 'admin', 'mentor', 'employee', 'hr_viewer', 'reviewer'] },
   { href: '/users', label: 'Users', icon: Users, roles: ['super_admin', 'admin'] },
   { href: '/reports', label: 'Reports', icon: FileText, roles: ['super_admin', 'admin', 'hr_viewer', 'mentor'] },
-  { href: '/settings', label: 'Settings', icon: Settings, roles: ['super_admin', 'admin', 'mentor', 'employee', 'hr_viewer', 'reviewer'] },
+  { href: '/settings', label: 'Settings', icon: Settings, roles: ['super_admin', 'admin'] },
 ];
 
 export function SidebarNav() {

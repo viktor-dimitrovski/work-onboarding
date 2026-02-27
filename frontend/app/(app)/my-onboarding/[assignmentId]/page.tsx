@@ -1,7 +1,7 @@
 'use client';
 
-import { useParams } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
@@ -18,6 +18,7 @@ import type { Assignment, AssignmentTask, QuizAttempt } from '@/lib/types';
 export default function MyOnboardingPage() {
   const { assignmentId } = useParams<{ assignmentId: string }>();
   const { accessToken } = useAuth();
+  const router = useRouter();
 
   const [assignment, setAssignment] = useState<Assignment | null>(null);
   const [selectedTask, setSelectedTask] = useState<AssignmentTask | null>(null);
@@ -26,32 +27,80 @@ export default function MyOnboardingPage() {
   const [quizAnswers, setQuizAnswers] = useState<Record<string, number[]>>({});
   const [quizAttempts, setQuizAttempts] = useState<QuizAttempt[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [openPhaseIds, setOpenPhaseIds] = useState<string[]>([]);
+  const selectedTaskIdRef = useRef<string | null>(null);
 
   const nextTask = useMemo(
     () => assignment?.phases.flatMap((phase) => phase.tasks).find((task) => task.is_next_recommended) || null,
     [assignment],
   );
 
-  const load = async () => {
+  const load = async ({ silent } = { silent: false }) => {
     if (!accessToken || !assignmentId) return;
-    setLoading(true);
+    if (!silent || !assignment) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
     try {
       const response = await api.get<Assignment>(`/assignments/${assignmentId}`, accessToken);
       setAssignment(response);
-      if (!selectedTask) {
-        const firstTask = response.phases.flatMap((phase) => phase.tasks)[0];
-        setSelectedTask(firstTask || null);
+
+      const desiredTaskId = selectedTaskIdRef.current ?? selectedTask?.id ?? null;
+      const allTasks = response.phases.flatMap((phase) => phase.tasks);
+      const nextSelected =
+        (desiredTaskId ? allTasks.find((task) => task.id === desiredTaskId) : null) ||
+        allTasks.find((task) => task.is_next_recommended) ||
+        allTasks[0] ||
+        null;
+      setSelectedTask(nextSelected);
+
+      const storageKey = `onboarding:assignment:${assignmentId}:open-phases`;
+      if (typeof window !== 'undefined') {
+        try {
+          const stored = window.localStorage.getItem(storageKey);
+          if (stored) {
+            const parsed = JSON.parse(stored) as unknown;
+            if (Array.isArray(parsed) && parsed.every((v) => typeof v === 'string')) {
+              setOpenPhaseIds(parsed);
+              return;
+            }
+          }
+        } catch {
+          // ignore
+        }
       }
+
+      const phaseContainingSelected = nextSelected
+        ? response.phases.find((phase) => phase.tasks.some((t) => t.id === nextSelected.id))?.id
+        : null;
+      setOpenPhaseIds(phaseContainingSelected ? [phaseContainingSelected] : response.phases[0] ? [response.phases[0].id] : []);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
     void load();
   }, [accessToken, assignmentId]);
+
+  useEffect(() => {
+    selectedTaskIdRef.current = selectedTask?.id ?? null;
+  }, [selectedTask?.id]);
+
+  useEffect(() => {
+    if (!assignmentId) return;
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(`onboarding:assignment:${assignmentId}:open-phases`, JSON.stringify(openPhaseIds));
+    } catch {
+      // ignore
+    }
+  }, [assignmentId, openPhaseIds]);
 
   useEffect(() => {
     setAnswerText('');
@@ -100,7 +149,7 @@ export default function MyOnboardingPage() {
       );
       setAnswerText('');
       setFileUrl('');
-      await load();
+      await load({ silent: true });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Failed to submit task');
     } finally {
@@ -126,7 +175,7 @@ export default function MyOnboardingPage() {
         accessToken,
       );
       setQuizAnswers({});
-      await load();
+      await load({ silent: true });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Failed to submit quiz');
     } finally {
@@ -159,6 +208,13 @@ export default function MyOnboardingPage() {
 
   return (
     <div className='space-y-6'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <Button type='button' variant='outline' size='sm' onClick={() => router.back()}>
+          Back
+        </Button>
+        {refreshing && <p className='text-xs text-muted-foreground'>Refreshing…</p>}
+      </div>
+
       <Card>
         <CardHeader>
           <CardTitle>{assignment.title}</CardTitle>
@@ -181,13 +237,13 @@ export default function MyOnboardingPage() {
         </CardContent>
       </Card>
 
-      <div className='grid gap-6 lg:grid-cols-[1.2fr,1fr]'>
-        <Card>
+      <div className='grid gap-6 lg:grid-cols-[1.2fr,1fr] lg:items-start lg:h-[calc(100vh-260px)] lg:overflow-hidden'>
+        <Card className='lg:flex lg:h-full lg:flex-col'>
           <CardHeader>
             <CardTitle>Phase timeline</CardTitle>
           </CardHeader>
-          <CardContent>
-            <Accordion type='multiple' className='space-y-2'>
+          <CardContent className='lg:flex-1 lg:overflow-auto lg:pr-2'>
+            <Accordion type='multiple' className='space-y-2' value={openPhaseIds} onValueChange={setOpenPhaseIds}>
               {assignment.phases
                 .slice()
                 .sort((a, b) => a.order_index - b.order_index)
@@ -213,7 +269,10 @@ export default function MyOnboardingPage() {
                                   ? 'border-primary bg-secondary/70'
                                   : 'bg-muted/30 hover:border-primary/40'
                               }`}
-                              onClick={() => setSelectedTask(task)}
+                              onClick={() => {
+                                setSelectedTask(task);
+                                setOpenPhaseIds((prev) => (prev.includes(phase.id) ? prev : [...prev, phase.id]));
+                              }}
                             >
                               <div className='flex items-center justify-between'>
                                 <p className='font-medium'>{task.title}</p>
@@ -230,7 +289,7 @@ export default function MyOnboardingPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className='lg:sticky lg:top-24 lg:max-h-[calc(100vh-260px)] lg:overflow-auto'>
           <CardHeader>
             <CardTitle>{isQuiz ? 'Complete quiz' : 'Submit selected task'}</CardTitle>
             <CardDescription>{selectedTask?.title || 'Choose a task from the phase timeline.'}</CardDescription>

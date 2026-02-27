@@ -158,29 +158,34 @@ export default function DashboardPage() {
           {assignments.length === 0 ? (
             <EmptyState title='No assignments yet' description='Create or assign a published track to get started.' />
           ) : (
-            <div className='space-y-3'>
-              {assignments.map((assignment) => (
-                <div key={assignment.id} className='rounded-md border bg-white p-4'>
-                  <div className='flex flex-wrap items-center justify-between gap-3'>
-                    <div>
-                      <p className='font-medium'>{assignment.title}</p>
-                      <p className='text-xs text-muted-foreground'>
-                        Start {assignment.start_date} / Target {assignment.target_date}
+            <div className='overflow-hidden rounded-md border bg-white'>
+              <div className='divide-y'>
+                {assignments.map((assignment) => (
+                  <div
+                    key={assignment.id}
+                    className='flex flex-wrap items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/20'
+                  >
+                    <div className='min-w-0 flex-1'>
+                      <p className='truncate font-medium'>{assignment.title}</p>
+                      <p className='mt-0.5 text-xs text-muted-foreground'>
+                        Start {assignment.start_date} • Target {assignment.target_date}
                       </p>
+                      <div className='mt-2 flex items-center gap-3'>
+                        <Progress value={assignment.progress_percent} className='h-2 flex-1' />
+                        <span className='w-12 text-right text-xs text-muted-foreground'>
+                          {formatPercent(assignment.progress_percent)}
+                        </span>
+                      </div>
                     </div>
-                    <StatusChip status={assignment.status} />
+                    <div className='flex items-center gap-2'>
+                      <StatusChip status={assignment.status} />
+                      <Button variant='outline' size='sm' asChild>
+                        <Link href={`/assignments/${assignment.id}`}>View</Link>
+                      </Button>
+                    </div>
                   </div>
-                  <div className='mt-3 flex items-center gap-3'>
-                    <Progress value={assignment.progress_percent} className='flex-1' />
-                    <span className='w-12 text-right text-xs text-muted-foreground'>
-                      {formatPercent(assignment.progress_percent)}
-                    </span>
-                    <Button variant='outline' asChild>
-                      <Link href={`/assignments/${assignment.id}`}>View</Link>
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           )}
         </CardContent>
