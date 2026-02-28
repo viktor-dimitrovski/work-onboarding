@@ -14,6 +14,16 @@ class UserCreate(BaseModel):
     tenant_role: str | None = None
 
 
+class UserAddExisting(BaseModel):
+    email: EmailStr
+    tenant_role: str = Field(default='member', min_length=1, max_length=50)
+
+
+class TenantMembershipUpdate(BaseModel):
+    role: str | None = Field(default=None, min_length=1, max_length=50)
+    status: str | None = Field(default=None, min_length=1, max_length=20)
+
+
 class UserUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=255)
     is_active: bool | None = None
@@ -27,6 +37,7 @@ class UserOut(BaseSchema):
     is_active: bool
     roles: list[str]
     tenant_role: str | None = None
+    tenant_status: str | None = None
     created_at: datetime
     updated_at: datetime
 

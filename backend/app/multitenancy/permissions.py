@@ -17,6 +17,7 @@ DEFAULT_MODULES = {
     'users',
     'settings',
     'billing',
+    'releases',
 }
 
 MODULE_PERMISSIONS: dict[str, set[str]] = {
@@ -27,6 +28,7 @@ MODULE_PERMISSIONS: dict[str, set[str]] = {
         'assignments:submit',
         'assignments:review',
     },
+    'releases': {'releases:read', 'releases:write'},
     'assessments': {'assessments:read', 'assessments:write', 'assessments:take'},
     'reports': {'reports:read'},
     'users': {'users:read', 'users:write'},
@@ -41,6 +43,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'assignments:read',
         'assignments:write',
         'assignments:review',
+        'releases:read',
+        'releases:write',
         'assessments:read',
         'assessments:take',
         'reports:read',
@@ -51,6 +55,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'assignments:read',
         'assignments:write',
         'assignments:review',
+        'releases:read',
         'assessments:read',
         'assessments:take',
         'reports:read',
@@ -62,6 +67,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'assignments:write',
         'assignments:submit',
         'assignments:review',
+        'releases:read',
+        'releases:write',
         'assessments:read',
         'assessments:write',
         'assessments:take',

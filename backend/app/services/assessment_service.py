@@ -22,21 +22,22 @@ from app.models.assessment import (
 )
 
 
-def list_questions(
-    db: Session,
+def build_question_query(
     *,
-    page: int,
-    page_size: int,
     status_filters: list[str] | None,
     query: str | None,
     tags: list[str] | None,
     difficulties: list[str] | None,
     categories: list[str] | None,
-) -> tuple[list[AssessmentQuestion], int]:
-    base = select(AssessmentQuestion).options(
-        joinedload(AssessmentQuestion.options),
-        joinedload(AssessmentQuestion.category),
-    )
+    include_joins: bool,
+):
+    base = select(AssessmentQuestion)
+    if include_joins:
+        base = base.options(
+            joinedload(AssessmentQuestion.options),
+            joinedload(AssessmentQuestion.category),
+        )
+
     if status_filters:
         base = base.where(AssessmentQuestion.status.in_(status_filters))
     if difficulties:
@@ -61,6 +62,29 @@ def list_questions(
         if filters:
             base = base.outerjoin(AssessmentQuestion.category).where(or_(*filters))
 
+    return base
+
+
+def list_questions(
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    status_filters: list[str] | None,
+    query: str | None,
+    tags: list[str] | None,
+    difficulties: list[str] | None,
+    categories: list[str] | None,
+) -> tuple[list[AssessmentQuestion], int]:
+    base = build_question_query(
+        status_filters=status_filters,
+        query=query,
+        tags=tags,
+        difficulties=difficulties,
+        categories=categories,
+        include_joins=True,
+    )
+
     total = db.scalar(select(func.count()).select_from(base.subquery()))
     items = (
         db.scalars(base.order_by(AssessmentQuestion.created_at.desc()).offset((page - 1) * page_size).limit(page_size))
@@ -68,6 +92,159 @@ def list_questions(
         .all()
     )
     return items, int(total or 0)
+
+
+def question_stats(
+    db: Session,
+    *,
+    status_filters: list[str] | None,
+    query: str | None,
+    tags: list[str] | None,
+    difficulties: list[str] | None,
+    categories: list[str] | None,
+) -> dict[str, object]:
+    base = build_question_query(
+        status_filters=status_filters,
+        query=query,
+        tags=tags,
+        difficulties=difficulties,
+        categories=categories,
+        include_joins=False,
+    ).subquery()
+
+    total = int(db.scalar(select(func.count()).select_from(base)) or 0)
+    unclassified_category = int(
+        db.scalar(select(func.count()).select_from(base).where(base.c.category_id.is_(None))) or 0
+    )
+    unclassified_difficulty = int(
+        db.scalar(select(func.count()).select_from(base).where(base.c.difficulty.is_(None))) or 0
+    )
+
+    by_status_rows = db.execute(
+        select(base.c.status, func.count()).select_from(base).group_by(base.c.status)
+    ).all()
+    by_status = {str(row[0]): int(row[1] or 0) for row in by_status_rows if row[0]}
+
+    by_diff_rows = db.execute(
+        select(base.c.difficulty, func.count()).select_from(base).group_by(base.c.difficulty)
+    ).all()
+    by_difficulty: dict[str, int] = {}
+    for diff, cnt in by_diff_rows:
+        key = str(diff) if diff else 'unspecified'
+        by_difficulty[key] = int(cnt or 0)
+
+    cat_rows = db.execute(
+        select(AssessmentCategory.slug, func.count())
+        .select_from(base.join(AssessmentCategory, base.c.category_id == AssessmentCategory.id, isouter=True))
+        .group_by(AssessmentCategory.slug)
+    ).all()
+    by_category: dict[str, int] = {'unclassified': 0}
+    for slug, cnt in cat_rows:
+        if slug is None:
+            by_category['unclassified'] = int(cnt or 0)
+        else:
+            by_category[str(slug)] = int(cnt or 0)
+
+    return {
+        'total': total,
+        'unclassified_category': unclassified_category,
+        'unclassified_difficulty': unclassified_difficulty,
+        'by_status': by_status,
+        'by_difficulty': by_difficulty,
+        'by_category': by_category,
+    }
+
+
+def bulk_update_questions(
+    db: Session,
+    *,
+    actor_user_id: UUID,
+    scope: str,
+    question_ids: list[UUID],
+    status_filters: list[str] | None,
+    query: str | None,
+    tags: list[str] | None,
+    difficulties: list[str] | None,
+    categories: list[str] | None,
+    action: str,
+    status_value: str | None,
+    category_id: UUID | None,
+    difficulty_value: str | None,
+    tags_value: list[str],
+) -> int:
+    if scope not in ('selected', 'all_matching'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid scope')
+
+    ids: list[UUID]
+    if scope == 'selected':
+        ids = list(question_ids or [])
+    else:
+        base = build_question_query(
+            status_filters=status_filters,
+            query=query,
+            tags=tags,
+            difficulties=difficulties,
+            categories=categories,
+            include_joins=False,
+        )
+        ids = [row[0] for row in db.execute(select(AssessmentQuestion.id).select_from(base.subquery())).all()]
+
+    if not ids:
+        return 0
+
+    if action == 'set_status':
+        if status_value not in ('draft', 'published', 'archived'):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid status_value')
+        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
+        for q in rows:
+            q.status = status_value
+            q.updated_by = actor_user_id
+        db.flush()
+        return len(rows)
+
+    if action == 'set_category':
+        if category_id is not None:
+            category = db.scalar(select(AssessmentCategory).where(AssessmentCategory.id == category_id))
+            if not category:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Category not found')
+        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
+        for q in rows:
+            q.category_id = category_id
+            q.updated_by = actor_user_id
+        db.flush()
+        return len(rows)
+
+    if action == 'set_difficulty':
+        if difficulty_value is not None and difficulty_value not in ('easy', 'medium', 'hard'):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid difficulty_value')
+        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
+        for q in rows:
+            q.difficulty = difficulty_value
+            q.updated_by = actor_user_id
+        db.flush()
+        return len(rows)
+
+    normalized_tags = [t.strip() for t in (tags_value or []) if t and t.strip()]
+    # de-dupe while preserving order
+    seen = set()
+    normalized_tags = [t for t in normalized_tags if not (t in seen or seen.add(t))]
+
+    if action in ('add_tags', 'remove_tags', 'replace_tags'):
+        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
+        for q in rows:
+            current = list(q.tags or [])
+            if action == 'replace_tags':
+                q.tags = normalized_tags
+            elif action == 'add_tags':
+                merged = current + [t for t in normalized_tags if t not in current]
+                q.tags = merged
+            else:  # remove_tags
+                q.tags = [t for t in current if t not in set(normalized_tags)]
+            q.updated_by = actor_user_id
+        db.flush()
+        return len(rows)
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid action')
 
 
 def list_categories(db: Session) -> list[AssessmentCategory]:

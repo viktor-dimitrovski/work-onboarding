@@ -6,6 +6,7 @@ from app.models.assessment import (
     AssessmentDelivery,
     AssessmentCategory,
     AssessmentClassificationJob,
+    AssessmentClassificationJobItem,
     AssessmentQuestion,
     AssessmentQuestionOption,
     AssessmentTest,
@@ -15,7 +16,23 @@ from app.models.assessment import (
 from app.models.audit import AuditLog
 from app.models.comment import Comment
 from app.models.rbac import Role, User, UserRole
-from app.models.tenant import Group, GroupMembership, Plan, Subscription, Tenant, TenantDomain, TenantMembership, TenantModule, UsageEvent
+from app.models.tenant import Group, GroupMembership, Tenant, TenantDomain, TenantMembership
+from app.modules.billing.models import (
+    CreditGrant,
+    CreditPack,
+    Invoice,
+    InvoiceLine,
+    LedgerEntry,
+    Meter,
+    MeterRate,
+    OutboxEvent,
+    Plan,
+    PlanPrice,
+    ProviderEvent,
+    Subscription,
+    TenantModule,
+    UsageEvent,
+)
 from app.models.token import RefreshToken
 from app.models.track import TaskResource, TrackPhase, TrackTask, TrackTemplate, TrackVersion
 
@@ -29,6 +46,7 @@ __all__ = [
     'AssessmentDelivery',
     'AssessmentCategory',
     'AssessmentClassificationJob',
+    'AssessmentClassificationJobItem',
     'AssessmentQuestion',
     'AssessmentQuestionOption',
     'AssessmentTest',
@@ -55,7 +73,17 @@ __all__ = [
     'Group',
     'GroupMembership',
     'Plan',
+    'PlanPrice',
     'Subscription',
     'TenantModule',
     'UsageEvent',
+    'Meter',
+    'MeterRate',
+    'CreditPack',
+    'CreditGrant',
+    'LedgerEntry',
+    'Invoice',
+    'InvoiceLine',
+    'OutboxEvent',
+    'ProviderEvent',
 ]

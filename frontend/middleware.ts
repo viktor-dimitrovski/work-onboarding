@@ -35,14 +35,20 @@ export function middleware(req: NextRequest) {
 
   if (resolution.kind === 'product' && resolution.productKey === 'admin') {
     const adminUrl = req.nextUrl.clone();
-    if (!adminUrl.pathname.startsWith('/admin')) {
-      adminUrl.pathname = `/admin${adminUrl.pathname === '/' ? '' : adminUrl.pathname}`;
+    // Serve the admin console under /admin regardless of the requested path.
+    // This avoids 404s for paths like /dashboard on admin.<baseDomain>.
+    if (adminUrl.pathname !== '/admin') {
+      adminUrl.pathname = '/admin';
       return NextResponse.rewrite(adminUrl);
     }
   }
 
+  // In production, keep tenant apps from hitting /admin routes.
+  // In local/dev, allow it so you can manage everything from one console.
   if (resolution.kind === 'tenant' && req.nextUrl.pathname.startsWith('/admin')) {
-    return NextResponse.redirect(new URL('/dashboard', req.url));
+    if (process.env.NODE_ENV === 'production') {
+      return NextResponse.redirect(new URL('/dashboard', req.url));
+    }
   }
 
   const requestHeaders = new Headers(req.headers);

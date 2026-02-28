@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -32,6 +33,7 @@ const schema = z.object({
   estimated_duration_days: z.coerce.number().min(1).max(365),
   tags: z.string().optional(),
   purpose: z.string(),
+  track_type: z.string(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -94,9 +96,11 @@ export default function TrackDetailPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveNotice, setSaveNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedPhaseId, setSelectedPhaseId] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const saveNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -107,6 +111,7 @@ export default function TrackDetailPage() {
       estimated_duration_days: 30,
       tags: '',
       purpose: 'onboarding',
+      track_type: 'GENERAL',
     },
   });
 
@@ -135,6 +140,7 @@ export default function TrackDetailPage() {
           estimated_duration_days: response.estimated_duration_days,
           tags: response.tags.join(', '),
           purpose,
+          track_type: response.track_type || version?.track_type || 'GENERAL',
         });
       } finally {
         setLoading(false);
@@ -143,6 +149,22 @@ export default function TrackDetailPage() {
 
     void run();
   }, [accessToken, id, form, trackPurposeOptions, defaultPurpose]);
+
+  useEffect(() => {
+    return () => {
+      if (saveNoticeTimer.current) {
+        clearTimeout(saveNoticeTimer.current);
+      }
+    };
+  }, []);
+
+  const flashSaveNotice = (kind: 'success' | 'error', message: string) => {
+    setSaveNotice({ kind, message });
+    if (saveNoticeTimer.current) {
+      clearTimeout(saveNoticeTimer.current);
+    }
+    saveNoticeTimer.current = setTimeout(() => setSaveNotice(null), 4000);
+  };
 
   const canSubmit = useMemo(
     () => phases.length > 0 && phases.every((phase) => phase.title && phase.tasks.length > 0),
@@ -231,6 +253,7 @@ export default function TrackDetailPage() {
     if (!accessToken || !id) return;
     setSaving(true);
     setError(null);
+    setSaveNotice(null);
 
     const payload = {
       title: values.title,
@@ -239,6 +262,7 @@ export default function TrackDetailPage() {
       estimated_duration_days: values.estimated_duration_days,
       tags: values.tags?.split(',').map((tag) => tag.trim()).filter(Boolean) ?? [],
       purpose: values.purpose,
+      track_type: values.track_type,
       apply_to_assignments: false,
       phases: phases.map((phase, phaseIndex) => ({
         title: phase.title,
@@ -270,10 +294,13 @@ export default function TrackDetailPage() {
     };
 
     try {
-      await api.put(`/tracks/${id}`, payload, accessToken);
-      router.refresh();
+      const updated = await api.put<TrackTemplate>(`/tracks/${id}`, payload, accessToken);
+      setTrack(updated);
+      flashSaveNotice('success', 'Changes saved.');
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Failed to update track');
+      const message = submitError instanceof Error ? submitError.message : 'Failed to update track';
+      setError(message);
+      flashSaveNotice('error', message);
     } finally {
       setSaving(false);
     }
@@ -299,6 +326,19 @@ export default function TrackDetailPage() {
 
   return (
     <div className='space-y-6'>
+      {saveNotice && (
+        <div className='fixed right-6 top-20 z-50 w-[360px] max-w-[calc(100vw-3rem)]'>
+          <Alert
+            variant={saveNotice.kind === 'error' ? 'destructive' : 'default'}
+            className={saveNotice.kind === 'success' ? 'border-emerald-200 bg-emerald-50/70 text-emerald-900' : ''}
+          >
+            <AlertTitle>{saveNotice.kind === 'error' ? 'Save failed' : 'Saved'}</AlertTitle>
+            <AlertDescription className={saveNotice.kind === 'success' ? 'text-emerald-800/80' : ''}>
+              {saveNotice.message}
+            </AlertDescription>
+          </Alert>
+        </div>
+      )}
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
           <h2 className='text-2xl font-semibold'>Edit track</h2>
@@ -319,58 +359,308 @@ export default function TrackDetailPage() {
         />
       </div>
 
-      <BuilderShell
-        workspaceLabel='Workspace'
-        main={
-          <form className='space-y-6' onSubmit={onSubmit}>
-            <div className='rounded-xl border bg-white px-4 py-3'>
-              <div className='flex flex-wrap items-start justify-between gap-3'>
-                <div className='min-w-0'>
-                  <p className='truncate text-sm font-semibold'>{form.watch('title') || 'Untitled track'}</p>
-                  <div className='mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
-                    <span>{selectedPurposeLabel}</span>
-                    <span>•</span>
-                    <span>{form.watch('role_target') || 'role: —'}</span>
-                    <span>•</span>
-                    <span>{estimatedDays || 1} days</span>
-                    {form.watch('tags') ? (
-                      <>
+      <form onSubmit={onSubmit}>
+        <div className='space-y-6 pb-28'>
+          <BuilderShell
+            workspaceLabel='Workspace'
+            main={
+              <div className='space-y-6'>
+                <div className='rounded-xl border bg-white px-4 py-3'>
+                  <div className='flex flex-wrap items-start justify-between gap-3'>
+                    <div className='min-w-0'>
+                      <p className='truncate text-sm font-semibold'>{form.watch('title') || 'Untitled track'}</p>
+                      <div className='mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
+                        <span>{selectedPurposeLabel}</span>
                         <span>•</span>
-                        <span className='truncate'>{form.watch('tags')}</span>
-                      </>
-                    ) : null}
+                        <span>{form.watch('role_target') || 'role: —'}</span>
+                        <span>•</span>
+                        <span>{estimatedDays || 1} days</span>
+                        {form.watch('tags') ? (
+                          <>
+                            <span>•</span>
+                            <span className='truncate'>{form.watch('tags')}</span>
+                          </>
+                        ) : null}
+                      </div>
+                      {form.formState.errors.title && (
+                        <p className='mt-1 text-xs text-destructive'>{form.formState.errors.title.message}</p>
+                      )}
+                    </div>
+                    <div className='flex items-center gap-2'>
+                      <Button type='button' variant='outline' onClick={() => setDetailsOpen(true)}>
+                        Edit track details
+                      </Button>
+                    </div>
                   </div>
-                  {form.formState.errors.title && (
-                    <p className='mt-1 text-xs text-destructive'>{form.formState.errors.title.message}</p>
-                  )}
                 </div>
-                <div className='flex items-center gap-2'>
-                  <Button type='button' variant='outline' onClick={() => setDetailsOpen(true)}>
-                    Edit track details
-                  </Button>
-                </div>
+
+                {error && <p className='text-sm text-destructive'>{error}</p>}
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Builder</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <TrackBuilder
+                      phases={phases}
+                      setPhases={setPhases}
+                      estimatedDurationDays={form.watch('estimated_duration_days')}
+                      selectedTaskId={selectedTaskId}
+                      onSelectTask={setSelectedTaskId}
+                      selectedPhaseId={selectedPhaseId}
+                    />
+                  </CardContent>
+                </Card>
+
+                <Sheet open={detailsOpen} onOpenChange={setDetailsOpen}>
+                  <SheetContent side='right' className='flex h-full flex-col'>
+                    <SheetHeader>
+                      <SheetTitle>Track details</SheetTitle>
+                      <p className='text-xs text-muted-foreground'>
+                        Keep this out of the way while authoring phases and tasks.
+                      </p>
+                    </SheetHeader>
+
+                    <div className='mt-4 flex-1 overflow-auto pr-1'>
+                      <div className='grid gap-4 md:grid-cols-2'>
+                        <div className='space-y-2'>
+                          <Label htmlFor='title'>Title</Label>
+                          <Input id='title' {...form.register('title')} />
+                          {form.formState.errors.title && (
+                            <p className='text-xs text-destructive'>{form.formState.errors.title.message}</p>
+                          )}
+                        </div>
+
+                        <div className='space-y-2'>
+                          <Label htmlFor='role_target'>Role target</Label>
+                          <Input id='role_target' {...form.register('role_target')} />
+                        </div>
+
+                        <div className='space-y-2 md:col-span-2'>
+                          <Label htmlFor='description'>Description</Label>
+                          <Textarea id='description' rows={3} {...form.register('description')} />
+                        </div>
+
+                        <div className='space-y-2'>
+                          <Label htmlFor='estimated_duration_days'>Estimated duration (days)</Label>
+                          <Input
+                            id='estimated_duration_days'
+                            type='number'
+                            {...form.register('estimated_duration_days')}
+                          />
+                        </div>
+
+                        <div className='space-y-2'>
+                          <Label htmlFor='tags'>Tags (comma separated)</Label>
+                          <Input id='tags' placeholder='devops, platform, security' {...form.register('tags')} />
+                        </div>
+
+                        <div className='space-y-2'>
+                          <Label htmlFor='purpose'>Track purpose</Label>
+                          <select
+                            id='purpose'
+                            className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+                            {...form.register('purpose')}
+                          >
+                            {trackPurposeOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className='space-y-2'>
+                          <Label htmlFor='track_type'>Track type</Label>
+                          <select
+                            id='track_type'
+                            className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+                            {...form.register('track_type')}
+                          >
+                            <option value='GENERAL'>GENERAL</option>
+                            <option value='RELEASE'>RELEASE</option>
+                            <option value='TENANT_CREATION'>TENANT_CREATION</option>
+                            <option value='WORK_ORDER'>WORK_ORDER</option>
+                          </select>
+                          <p className='text-xs text-muted-foreground'>
+                            Use <span className='font-medium'>RELEASE</span> to make templates appear in Release Center.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </SheetContent>
+                </Sheet>
               </div>
-            </div>
+            }
+            workspace={
+              <Tabs defaultValue='summary' className='w-full'>
+                <Card>
+                  <CardHeader className='space-y-3'>
+                    <CardTitle className='text-base'>Workspace</CardTitle>
+                    <TabsList className='grid w-full grid-cols-4'>
+                      <TabsTrigger value='summary'>Summary</TabsTrigger>
+                      <TabsTrigger value='ai'>AI</TabsTrigger>
+                      <TabsTrigger value='validation'>Validation</TabsTrigger>
+                      <TabsTrigger value='outline'>Outline</TabsTrigger>
+                    </TabsList>
+                  </CardHeader>
+                  <CardContent>
+                    <TabsContent value='summary'>
+                      <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
+                        <div className='rounded-xl border bg-background/60 p-4'>
+                          <div className='grid grid-cols-2 gap-3 sm:grid-cols-3'>
+                            {[
+                              {
+                                label: 'Phases',
+                                value: summary.totalPhases,
+                                className: 'border-l-4 border-l-blue-200 bg-blue-50/60',
+                              },
+                              {
+                                label: 'Tasks',
+                                value: summary.totalTasks,
+                                className: 'border-l-4 border-l-emerald-200 bg-emerald-50/60',
+                              },
+                              {
+                                label: 'Required',
+                                value: summary.requiredTasks,
+                                className: 'border-l-4 border-l-amber-200 bg-amber-50/60',
+                              },
+                              {
+                                label: 'Total minutes',
+                                value: summary.totalMinutes,
+                                className: 'border-l-4 border-l-slate-200 bg-slate-50/60',
+                              },
+                              {
+                                label: 'Quizzes',
+                                value: summary.quizCount,
+                                className: 'border-l-4 border-l-violet-200 bg-violet-50/60',
+                              },
+                              {
+                                label: 'Mentor approvals',
+                                value: summary.mentorApprovalCount,
+                                className: 'border-l-4 border-l-teal-200 bg-teal-50/60',
+                              },
+                            ].map((metric) => (
+                              <div
+                                key={metric.label}
+                                className={`flex items-center justify-between rounded-lg border px-3 py-2 ${metric.className}`}
+                              >
+                                <span className='text-xs text-muted-foreground leading-none'>{metric.label}</span>
+                                <span
+                                  className={`text-base font-semibold tabular-nums leading-none ${
+                                    metric.value === 0 ? 'text-muted-foreground' : 'text-foreground'
+                                  }`}
+                                >
+                                  {metric.value}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
 
-            {error && <p className='text-sm text-destructive'>{error}</p>}
+                        <div className='mt-3 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground'>
+                          <p>
+                            Capacity: {summary.capacityMinutes} min ({summary.days} days × 6h)
+                          </p>
+                          {summary.totalMinutes > summary.capacityMinutes && (
+                            <p className='mt-1 text-destructive'>Track is longer than estimated capacity.</p>
+                          )}
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Builder</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <TrackBuilder
-                  phases={phases}
-                  setPhases={setPhases}
-                  estimatedDurationDays={form.watch('estimated_duration_days')}
-                  selectedTaskId={selectedTaskId}
-                  onSelectTask={setSelectedTaskId}
-                  selectedPhaseId={selectedPhaseId}
-                />
-              </CardContent>
-            </Card>
+                    <TabsContent value='ai'>
+                      <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
+                        <div className='rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground'>
+                          AI drafting is available on the create track screen.
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
 
-            <div className='sticky bottom-0 z-10 -mx-4 mt-2 flex gap-2 border-t bg-white px-4 py-3'>
+                    <TabsContent value='validation'>
+                      <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
+                        <div className='space-y-3'>
+                          {validationIssues.length === 0 ? (
+                            <div className='rounded-md bg-slate-50 p-3 text-xs text-muted-foreground'>
+                              No validation issues detected.
+                            </div>
+                          ) : (
+                            validationIssues.map((issue) => (
+                              <button
+                                key={issue.id}
+                                type='button'
+                                className='w-full rounded-md border bg-white p-3 text-left text-sm transition hover:border-primary/40'
+                                onClick={() => {
+                                  setSelectedPhaseId(issue.phaseId);
+                                  if (issue.taskId) {
+                                    setSelectedTaskId(issue.taskId);
+                                  }
+                                }}
+                              >
+                                <div className='flex items-start justify-between gap-2'>
+                                  <div>
+                                    <p className='font-medium'>{issue.title}</p>
+                                    <p className='text-xs text-muted-foreground'>{issue.description}</p>
+                                  </div>
+                                  <Badge variant='outline'>{issue.severity}</Badge>
+                                </div>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
+
+                    <TabsContent value='outline'>
+                      <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
+                        <div className='space-y-3'>
+                          {phases.map((phase) => (
+                            <div key={phase.client_id} className='rounded-md border bg-white p-3'>
+                              <button
+                                type='button'
+                                className='w-full text-left'
+                                onClick={() => {
+                                  setSelectedPhaseId(phase.client_id);
+                                  setSelectedTaskId(null);
+                                }}
+                              >
+                                <p className='text-sm font-semibold'>{phase.title || 'Untitled phase'}</p>
+                                <p className='text-xs text-muted-foreground'>{phase.tasks.length} tasks</p>
+                              </button>
+                              <div className='mt-2 space-y-1'>
+                                {phase.tasks.map((task) => (
+                                  <button
+                                    key={task.client_id}
+                                    type='button'
+                                    className='flex w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted/40'
+                                    onClick={() => {
+                                      setSelectedPhaseId(phase.client_id);
+                                      setSelectedTaskId(task.client_id);
+                                    }}
+                                  >
+                                    <span className='truncate'>{task.title || 'Untitled task'}</span>
+                                    <span>{task.task_type}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </ScrollArea>
+                    </TabsContent>
+                  </CardContent>
+                </Card>
+              </Tabs>
+            }
+          />
+        </div>
+
+        <div className='fixed bottom-0 left-0 right-0 z-20 border-t bg-white/95 backdrop-blur'>
+          <div className='flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3'>
+            <p className='text-xs text-muted-foreground'>
+              {saving ? 'Saving changes...' : 'Saving creates a new draft version.'}
+            </p>
+            <div className='flex gap-2'>
               <Button type='submit' disabled={saving || !canSubmit}>
                 {saving ? 'Saving changes...' : 'Save changes'}
               </Button>
@@ -378,227 +668,9 @@ export default function TrackDetailPage() {
                 Cancel
               </Button>
             </div>
-
-            <Sheet open={detailsOpen} onOpenChange={setDetailsOpen}>
-              <SheetContent side='right' className='flex h-full flex-col'>
-                <SheetHeader>
-                  <SheetTitle>Track details</SheetTitle>
-                  <p className='text-xs text-muted-foreground'>
-                    Keep this out of the way while authoring phases and tasks.
-                  </p>
-                </SheetHeader>
-
-                <div className='mt-4 flex-1 overflow-auto pr-1'>
-                  <div className='grid gap-4 md:grid-cols-2'>
-                    <div className='space-y-2'>
-                      <Label htmlFor='title'>Title</Label>
-                      <Input id='title' {...form.register('title')} />
-                      {form.formState.errors.title && (
-                        <p className='text-xs text-destructive'>{form.formState.errors.title.message}</p>
-                      )}
-                    </div>
-
-                    <div className='space-y-2'>
-                      <Label htmlFor='role_target'>Role target</Label>
-                      <Input id='role_target' {...form.register('role_target')} />
-                    </div>
-
-                    <div className='space-y-2 md:col-span-2'>
-                      <Label htmlFor='description'>Description</Label>
-                      <Textarea id='description' rows={3} {...form.register('description')} />
-                    </div>
-
-                    <div className='space-y-2'>
-                      <Label htmlFor='estimated_duration_days'>Estimated duration (days)</Label>
-                      <Input id='estimated_duration_days' type='number' {...form.register('estimated_duration_days')} />
-                    </div>
-
-                    <div className='space-y-2'>
-                      <Label htmlFor='tags'>Tags (comma separated)</Label>
-                      <Input id='tags' placeholder='devops, platform, security' {...form.register('tags')} />
-                    </div>
-
-                    <div className='space-y-2'>
-                      <Label htmlFor='purpose'>Track purpose</Label>
-                      <select
-                        id='purpose'
-                        className='h-10 rounded-md border border-input bg-white px-3 text-sm'
-                        {...form.register('purpose')}
-                      >
-                        {trackPurposeOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              </SheetContent>
-            </Sheet>
-          </form>
-        }
-        workspace={
-          <Tabs defaultValue='summary' className='w-full'>
-            <Card>
-              <CardHeader className='space-y-3'>
-                <CardTitle className='text-base'>Workspace</CardTitle>
-                <TabsList className='grid w-full grid-cols-4'>
-                  <TabsTrigger value='summary'>Summary</TabsTrigger>
-                  <TabsTrigger value='ai'>AI</TabsTrigger>
-                  <TabsTrigger value='validation'>Validation</TabsTrigger>
-                  <TabsTrigger value='outline'>Outline</TabsTrigger>
-                </TabsList>
-              </CardHeader>
-              <CardContent>
-                <TabsContent value='summary'>
-                  <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
-                    <div className='rounded-xl border bg-background/60 p-4'>
-                      <div className='grid grid-cols-2 gap-3 sm:grid-cols-3'>
-                        {[
-                          {
-                            label: 'Phases',
-                            value: summary.totalPhases,
-                            className: 'border-l-4 border-l-blue-200 bg-blue-50/60',
-                          },
-                          {
-                            label: 'Tasks',
-                            value: summary.totalTasks,
-                            className: 'border-l-4 border-l-emerald-200 bg-emerald-50/60',
-                          },
-                          {
-                            label: 'Required',
-                            value: summary.requiredTasks,
-                            className: 'border-l-4 border-l-amber-200 bg-amber-50/60',
-                          },
-                          {
-                            label: 'Total minutes',
-                            value: summary.totalMinutes,
-                            className: 'border-l-4 border-l-slate-200 bg-slate-50/60',
-                          },
-                          {
-                            label: 'Quizzes',
-                            value: summary.quizCount,
-                            className: 'border-l-4 border-l-violet-200 bg-violet-50/60',
-                          },
-                          {
-                            label: 'Mentor approvals',
-                            value: summary.mentorApprovalCount,
-                            className: 'border-l-4 border-l-teal-200 bg-teal-50/60',
-                          },
-                        ].map((metric) => (
-                          <div
-                            key={metric.label}
-                            className={`flex items-center justify-between rounded-lg border px-3 py-2 ${metric.className}`}
-                          >
-                            <span className='text-xs text-muted-foreground leading-none'>{metric.label}</span>
-                            <span
-                              className={`text-base font-semibold tabular-nums leading-none ${
-                                metric.value === 0 ? 'text-muted-foreground' : 'text-foreground'
-                              }`}
-                            >
-                              {metric.value}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className='mt-3 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground'>
-                      <p>
-                        Capacity: {summary.capacityMinutes} min ({summary.days} days × 6h)
-                      </p>
-                      {summary.totalMinutes > summary.capacityMinutes && (
-                        <p className='mt-1 text-destructive'>Track is longer than estimated capacity.</p>
-                      )}
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-
-                <TabsContent value='ai'>
-                  <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
-                    <div className='rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground'>
-                      AI drafting is available on the create track screen.
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-
-                <TabsContent value='validation'>
-                  <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
-                    <div className='space-y-3'>
-                      {validationIssues.length === 0 ? (
-                        <div className='rounded-md bg-slate-50 p-3 text-xs text-muted-foreground'>
-                          No validation issues detected.
-                        </div>
-                      ) : (
-                        validationIssues.map((issue) => (
-                          <button
-                            key={issue.id}
-                            type='button'
-                            className='w-full rounded-md border bg-white p-3 text-left text-sm transition hover:border-primary/40'
-                            onClick={() => {
-                              setSelectedPhaseId(issue.phaseId);
-                              if (issue.taskId) {
-                                setSelectedTaskId(issue.taskId);
-                              }
-                            }}
-                          >
-                            <div className='flex items-start justify-between gap-2'>
-                              <div>
-                                <p className='font-medium'>{issue.title}</p>
-                                <p className='text-xs text-muted-foreground'>{issue.description}</p>
-                              </div>
-                              <Badge variant='outline'>{issue.severity}</Badge>
-                            </div>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-
-                <TabsContent value='outline'>
-                  <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
-                    <div className='space-y-3'>
-                      {phases.map((phase) => (
-                        <div key={phase.client_id} className='rounded-md border bg-white p-3'>
-                          <button
-                            type='button'
-                            className='w-full text-left'
-                            onClick={() => {
-                              setSelectedPhaseId(phase.client_id);
-                              setSelectedTaskId(null);
-                            }}
-                          >
-                            <p className='text-sm font-semibold'>{phase.title || 'Untitled phase'}</p>
-                            <p className='text-xs text-muted-foreground'>{phase.tasks.length} tasks</p>
-                          </button>
-                          <div className='mt-2 space-y-1'>
-                            {phase.tasks.map((task) => (
-                              <button
-                                key={task.client_id}
-                                type='button'
-                                className='flex w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted/40'
-                                onClick={() => {
-                                  setSelectedPhaseId(phase.client_id);
-                                  setSelectedTaskId(task.client_id);
-                                }}
-                              >
-                                <span className='truncate'>{task.title || 'Untitled task'}</span>
-                                <span>{task.task_type}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-              </CardContent>
-            </Card>
-          </Tabs>
-        }
-      />
+          </div>
+        </div>
+      </form>
     </div>
   );
 }

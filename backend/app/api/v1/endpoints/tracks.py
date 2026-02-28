@@ -3,6 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from app.api.deps import get_current_active_user
 from app.db.session import get_db
@@ -29,6 +30,7 @@ def list_tracks(
     page_size: int = Query(default=20, ge=1, le=100),
     status_filter: str | None = Query(default=None, alias='status'),
     role_target: str | None = Query(default=None),
+    track_type: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
     __: object = Depends(require_access('tracks', 'tracks:read')),
@@ -39,12 +41,33 @@ def list_tracks(
         page_size=page_size,
         status=status_filter,
         role_target=role_target,
+        track_type=track_type,
     )
 
-    return TrackListResponse(
-        items=[TrackTemplateOut.model_validate(track) for track in tracks],
-        meta=PaginationMeta(page=page, page_size=page_size, total=total),
-    )
+    user_ids: set[UUID] = set()
+    for track in tracks:
+        if track.created_by:
+            user_ids.add(track.created_by)
+        if track.updated_by:
+            user_ids.add(track.updated_by)
+    users_by_id: dict[UUID, User] = {}
+    if user_ids:
+        users = db.scalars(select(User).where(User.id.in_(list(user_ids)))).all()
+        users_by_id = {row.id: row for row in users}
+
+    def display_name(user: User | None) -> str | None:
+        if not user:
+            return None
+        return (user.full_name or "").strip() or (user.email or "").strip() or None
+
+    items: list[TrackTemplateOut] = []
+    for track in tracks:
+        out = TrackTemplateOut.model_validate(track)
+        out.created_by_name = display_name(users_by_id.get(track.created_by))
+        out.updated_by_name = display_name(users_by_id.get(track.updated_by))
+        items.append(out)
+
+    return TrackListResponse(items=items, meta=PaginationMeta(page=page, page_size=page_size, total=total))
 
 
 @router.post('', response_model=TrackTemplateOut, status_code=status.HTTP_201_CREATED)

@@ -38,6 +38,7 @@ class TrackTemplate(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     estimated_duration_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     purpose: Mapped[str] = mapped_column(String(30), nullable=False, default='onboarding')
+    track_type: Mapped[str] = mapped_column(String(30), nullable=False, default='GENERAL', index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     versions: Mapped[list['TrackVersion']] = relationship(
@@ -72,6 +73,7 @@ class TrackVersion(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     estimated_duration_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     purpose: Mapped[str] = mapped_column(String(30), nullable=False, default='onboarding')
+    track_type: Mapped[str] = mapped_column(String(30), nullable=False, default='GENERAL', index=True)
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

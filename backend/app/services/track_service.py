@@ -37,6 +37,7 @@ def _create_track_version(
         estimated_duration_days=payload.estimated_duration_days,
         tags=payload.tags,
         purpose=payload.purpose,
+        track_type=payload.track_type,
         is_current=is_current,
         published_at=published_at,
         created_by=actor_user_id,
@@ -109,6 +110,7 @@ def create_track_template(
         estimated_duration_days=payload.estimated_duration_days,
         tags=payload.tags,
         purpose=payload.purpose,
+        track_type=payload.track_type,
         created_by=actor_user_id,
         updated_by=actor_user_id,
     )
@@ -135,10 +137,14 @@ def list_track_templates(
     page_size: int,
     status: str | None,
     role_target: str | None,
+    track_type: str | None = None,
 ) -> tuple[list[TrackTemplate], int]:
     base = select(TrackTemplate)
     if role_target:
         base = base.where(TrackTemplate.role_target == role_target)
+
+    if track_type:
+        base = base.where(TrackTemplate.track_type == track_type)
 
     if status:
         base = base.join(TrackTemplate.versions).where(TrackVersion.status == status)
@@ -188,6 +194,7 @@ def duplicate_track_template(db: Session, *, template_id: UUID, actor_user_id: U
         estimated_duration_days=source.estimated_duration_days,
         tags=source.tags,
         purpose=source.purpose,
+        track_type=source.track_type,
         created_by=actor_user_id,
         updated_by=actor_user_id,
     )
@@ -203,6 +210,7 @@ def duplicate_track_template(db: Session, *, template_id: UUID, actor_user_id: U
         estimated_duration_days=source_version.estimated_duration_days,
         tags=source_version.tags,
         purpose=source_version.purpose,
+        track_type=source_version.track_type,
         is_current=False,
         created_by=actor_user_id,
         updated_by=actor_user_id,
@@ -276,6 +284,10 @@ def republish_track_template(
     template.estimated_duration_days = payload.estimated_duration_days
     template.tags = payload.tags
     template.purpose = payload.purpose
+    if payload.track_type:
+        template.track_type = payload.track_type
+    else:
+        payload.track_type = template.track_type
     template.updated_by = actor_user_id
 
     next_version_number = max((version.version_number for version in template.versions), default=0) + 1

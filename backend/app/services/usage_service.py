@@ -6,7 +6,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.tenant import UsageEvent
+from app.modules.billing.emitter import BillingEmitter
+from app.modules.billing.models import UsageEvent
 
 
 def record_event(
@@ -17,17 +18,19 @@ def record_event(
     quantity: float = 1.0,
     meta: dict | None = None,
     actor_user_id: UUID | None = None,
+    occurred_at: datetime | None = None,
+    idempotency_key: str | None = None,
 ) -> UsageEvent:
-    event = UsageEvent(
+    return BillingEmitter.emit_usage(
+        db,
         tenant_id=tenant_id,
         event_key=event_key,
         quantity=quantity,
-        meta_json=meta or {},
+        meta=meta,
         actor_user_id=actor_user_id,
+        occurred_at=occurred_at,
+        idempotency_key=idempotency_key,
     )
-    db.add(event)
-    db.flush()
-    return event
 
 
 def summarize_usage(
@@ -41,9 +44,9 @@ def summarize_usage(
         UsageEvent.tenant_id == tenant_id
     )
     if from_date:
-        query = query.where(UsageEvent.created_at >= from_date)
+        query = query.where(UsageEvent.occurred_at >= from_date)
     if to_date:
-        query = query.where(UsageEvent.created_at <= to_date)
+        query = query.where(UsageEvent.occurred_at <= to_date)
     query = query.group_by(UsageEvent.event_key).order_by(UsageEvent.event_key.asc())
 
     rows = db.execute(query).all()
@@ -67,8 +70,8 @@ def record_daily_event(
             UsageEvent.tenant_id == tenant_id,
             UsageEvent.event_key == event_key,
             UsageEvent.actor_user_id == actor_user_id,
-            UsageEvent.created_at >= start,
-            UsageEvent.created_at < end,
+            UsageEvent.occurred_at >= start,
+            UsageEvent.occurred_at < end,
         )
     )
     if existing:
@@ -79,5 +82,6 @@ def record_daily_event(
         event_key=event_key,
         quantity=1.0,
         actor_user_id=actor_user_id,
+        occurred_at=start,
         meta={'date': start.date().isoformat()},
     )

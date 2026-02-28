@@ -115,7 +115,7 @@ class AssessmentClassificationJob(UUIDPrimaryKeyMixin, TimestampMixin, AuditUser
     __tablename__ = 'assessment_classification_jobs'
     __table_args__ = (
         CheckConstraint(
-            "status in ('queued', 'running', 'completed', 'failed')",
+            "status in ('queued', 'running', 'paused', 'completed', 'failed', 'canceled')",
             name='assessment_classification_job_status_values',
         ),
     )
@@ -132,6 +132,61 @@ class AssessmentClassificationJob(UUIDPrimaryKeyMixin, TimestampMixin, AuditUser
     processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    mode: Mapped[str] = mapped_column(String(40), nullable=False, default='unclassified_only')
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False, default=25)
+    scope_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    pause_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    items: Mapped[list['AssessmentClassificationJobItem']] = relationship(
+        back_populates='job', cascade='all, delete-orphan'
+    )
+
+
+class AssessmentClassificationJobItem(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
+    __tablename__ = 'assessment_classification_job_items'
+    __table_args__ = (
+        UniqueConstraint('job_id', 'question_id', name='uq_assessment_classify_job_item'),
+        ForeignKeyConstraint(
+            ['tenant_id', 'question_id'],
+            ['assessment_questions.tenant_id', 'assessment_questions.id'],
+            ondelete='CASCADE',
+        ),
+        ForeignKeyConstraint(
+            ['job_id'],
+            ['assessment_classification_jobs.id'],
+            ondelete='CASCADE',
+        ),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        server_default=text("current_setting('app.tenant_id')::uuid"),
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    question_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    old_category_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    old_difficulty: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    new_category_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    new_category_slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    new_category_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    new_difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    job: Mapped['AssessmentClassificationJob'] = relationship(back_populates='items')
 
 
 class AssessmentTest(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
@@ -365,6 +420,9 @@ Index('ix_assessment_questions_type', AssessmentQuestion.question_type)
 Index('ix_assessment_questions_category_id', AssessmentQuestion.category_id)
 Index('ix_assessment_question_options_question_id', AssessmentQuestionOption.question_id)
 Index('ix_assessment_classification_jobs_status', AssessmentClassificationJob.status)
+Index('ix_assessment_classify_job_items_job', AssessmentClassificationJobItem.job_id)
+Index('ix_assessment_classify_job_items_tenant', AssessmentClassificationJobItem.tenant_id)
+Index('ix_assessment_classify_job_items_question', AssessmentClassificationJobItem.question_id)
 Index('ix_assessment_tests_status', AssessmentTest.status)
 Index('ix_assessment_tests_category', AssessmentTest.category)
 Index('ix_assessment_test_versions_test_id', AssessmentTestVersion.test_id)

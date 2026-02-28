@@ -139,6 +139,92 @@ def submit_task(
     return submission
 
 
+def update_checklist_item(
+    db: Session,
+    *,
+    assignment_id: UUID,
+    task_id: UUID,
+    employee_id: UUID,
+    item_id: str,
+    checked: bool,
+    comment: str | None,
+) -> AssignmentTask:
+    assignment = get_assignment_by_id(db, assignment_id)
+    if assignment.employee_id != employee_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only assigned employee can update checklist')
+
+    task = get_assignment_task(db, assignment_id=assignment_id, task_id=task_id)
+    if task.task_type != 'checklist':
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Task is not a checklist')
+
+    metadata = dict(task.metadata_json or {})
+    checklist = metadata.get('checklist') if isinstance(metadata.get('checklist'), dict) else {}
+    items = checklist.get('items') if isinstance(checklist.get('items'), list) else []
+
+    item_ids = {str(item.get('id')) for item in items if isinstance(item, dict) and item.get('id')}
+    if item_id not in item_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Checklist item not found')
+
+    state = metadata.get('checklist_state') if isinstance(metadata.get('checklist_state'), dict) else {}
+    completed_ids = {
+        str(value)
+        for value in (state.get('completed_item_ids') or [])
+        if value
+    }
+    if checked:
+        completed_ids.add(item_id)
+    else:
+        completed_ids.discard(item_id)
+
+    if comment is not None:
+        comments = state.get('comments') if isinstance(state.get('comments'), dict) else {}
+        if comment:
+            comments[item_id] = comment
+        else:
+            comments.pop(item_id, None)
+        state['comments'] = comments
+
+    ordered_completed = [
+        str(item.get('id'))
+        for item in items
+        if isinstance(item, dict)
+        and item.get('id')
+        and str(item.get('id')) in completed_ids
+    ]
+    state['completed_item_ids'] = ordered_completed
+    metadata['checklist_state'] = state
+    task.metadata_json = metadata
+
+    required_items = [
+        item for item in items if isinstance(item, dict) and item.get('id') and item.get('required', True) is not False
+    ]
+    if required_items:
+        required_ids = {str(item.get('id')) for item in required_items}
+        required_completed = len(required_ids & completed_ids)
+        task.progress_percent = round((required_completed / len(required_ids)) * 100, 2)
+        if required_completed == 0:
+            task.status = 'not_started'
+            task.completed_at = None
+        elif required_completed < len(required_ids):
+            task.status = 'in_progress'
+            task.completed_at = None
+        else:
+            task.status = 'completed'
+            task.progress_percent = 100.0
+            task.completed_at = datetime.now(UTC)
+    else:
+        task.progress_percent = 0.0
+        task.status = 'not_started'
+        task.completed_at = None
+
+    refresh_overdue_and_status(db, assignment)
+    recompute_progress(db, assignment)
+    refresh_next_task(db, assignment)
+    db.flush()
+
+    return task
+
+
 def mentor_review_task(
     db: Session,
     *,

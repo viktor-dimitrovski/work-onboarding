@@ -68,6 +68,7 @@ class OnboardingAssignment(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, 
     status: Mapped[str] = mapped_column(String(30), nullable=False, default='not_started', index=True)
     progress_percent: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     snapshot_json: Mapped[dict[str, Any]] = mapped_column('snapshot', JSONB, nullable=False, default=dict)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column('metadata', JSONB, nullable=False, default=dict)
 
     phases: Mapped[list['AssignmentPhase']] = relationship(
         back_populates='assignment', cascade='all, delete-orphan', order_by='AssignmentPhase.order_index'

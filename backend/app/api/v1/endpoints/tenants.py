@@ -20,12 +20,14 @@ def get_tenant_context(
     permissions = sorted(permissions_for_roles(ctx.roles))
     modules = sorted(enabled_modules(ctx))
     if ctx.membership:
-        usage_service.record_daily_event(
+        event = usage_service.record_daily_event(
             db=db,
             tenant_id=ctx.tenant.id,
             event_key='active_user_day',
             actor_user_id=ctx.membership.user_id,
         )
+        if event:
+            db.commit()
     return TenantContextOut(
         tenant=TenantOut.model_validate(ctx.tenant),
         role=role,

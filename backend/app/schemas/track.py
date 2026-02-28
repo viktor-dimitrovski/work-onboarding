@@ -47,6 +47,7 @@ class TrackTemplateCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     phases: list[TrackPhaseCreate] = Field(default_factory=list)
     purpose: str = Field(default='onboarding')
+    track_type: str = Field(default='GENERAL')
 
 
 class TaskResourceOut(BaseSchema):
@@ -97,6 +98,7 @@ class TrackVersionOut(BaseSchema):
     estimated_duration_days: int
     tags: list[str]
     purpose: str
+    track_type: str
     is_current: bool
     published_at: datetime | None
     phases: list[TrackPhaseOut]
@@ -112,10 +114,15 @@ class TrackTemplateOut(BaseSchema):
     estimated_duration_days: int
     tags: list[str]
     purpose: str
+    track_type: str
     is_active: bool
     versions: list[TrackVersionOut]
     created_at: datetime
     updated_at: datetime
+    created_by: UUID | None = None
+    updated_by: UUID | None = None
+    created_by_name: str | None = None
+    updated_by_name: str | None = None
 
 
 class TrackTemplateUpdate(BaseModel):
@@ -126,6 +133,7 @@ class TrackTemplateUpdate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     phases: list[TrackPhaseCreate] = Field(default_factory=list)
     purpose: str = Field(default='onboarding')
+    track_type: str | None = None
     apply_to_assignments: bool = False
 
 

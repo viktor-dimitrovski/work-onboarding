@@ -80,11 +80,11 @@ def list_tenant_users(
     page: int,
     page_size: int,
     role: str | None,
-) -> tuple[list[tuple[User, str]], int]:
+) -> tuple[list[tuple[User, str, str]], int]:
     base_query = (
-        select(User, TenantMembership.role)
+        select(User, TenantMembership.role, TenantMembership.status)
         .join(TenantMembership, TenantMembership.user_id == User.id)
-        .where(TenantMembership.tenant_id == tenant_id, TenantMembership.status == 'active')
+        .where(TenantMembership.tenant_id == tenant_id)
         .options(joinedload(User.user_roles).joinedload(UserRole.role))
     )
 
@@ -92,9 +92,14 @@ def list_tenant_users(
         base_query = base_query.where(TenantMembership.role == role)
 
     total = db.scalar(select(func.count()).select_from(base_query.subquery()))
-    rows = db.execute(
-        base_query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
-    ).all()
+    # joinedload(User.user_roles) eager-loads a collection; SQLAlchemy requires de-duping the result.
+    rows = (
+        db.execute(
+            base_query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        )
+        .unique()
+        .all()
+    )
     return rows, int(total or 0)
 
 

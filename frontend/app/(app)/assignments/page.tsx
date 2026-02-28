@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { api } from '@/lib/api';
-import { formatPercent } from '@/lib/constants';
+import { formatDateTime, formatPercent, shortId } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
 import { useTenant } from '@/lib/tenant-context';
 import type { Assignment } from '@/lib/types';
@@ -85,6 +85,12 @@ export default function AssignmentsPage() {
                       </div>
                       <p className='mt-0.5 text-xs text-muted-foreground'>
                         Start {assignment.start_date} • Target {assignment.target_date}
+                      </p>
+                      <p className='mt-0.5 text-xs text-muted-foreground'>
+                        Created {formatDateTime(assignment.created_at)} • By{' '}
+                        {assignment.created_by_name || shortId(assignment.created_by)} • Phases{' '}
+                        {assignment.phases?.length ?? 0} • Tasks{' '}
+                        {assignment.phases?.reduce((sum, phase) => sum + (phase.tasks?.length ?? 0), 0) ?? 0}
                       </p>
                       <div className='mt-2 flex items-center gap-3'>
                         <Progress value={assignment.progress_percent} className='h-2 flex-1' />

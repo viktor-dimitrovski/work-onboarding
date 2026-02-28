@@ -16,7 +16,7 @@ from app.schemas.track import (
     TrackTemplateCreate,
     TrackTemplateOut,
 )
-from app.schemas.user import UserCreate, UserListResponse, UserOut
+from app.schemas.user import TenantMembershipUpdate, UserAddExisting, UserCreate, UserListResponse, UserOut
 
 __all__ = [
     'AdminDashboardReport',
@@ -41,6 +41,8 @@ __all__ = [
     'TrackTemplateCreate',
     'TrackTemplateOut',
     'UserCreate',
+    'UserAddExisting',
+    'TenantMembershipUpdate',
     'UserListResponse',
     'UserOut',
     'UserSummary',

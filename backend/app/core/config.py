@@ -43,11 +43,24 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str | None = None
     GITHUB_CLIENT_ID: str | None = None
     GITHUB_CLIENT_SECRET: str | None = None
+    GITHUB_TOKEN: str | None = None
+    GITHUB_REPO_OWNER: str | None = None
+    GITHUB_REPO_NAME: str | None = None
+    GITHUB_BASE_BRANCH: str = 'main'
 
     BASE_DOMAINS: str = 'app.com'
     RESERVED_SUBDOMAINS: str = 'admin,billing,docs,status,api'
     DEFAULT_TENANT_SLUG: str | None = None
     TRUST_PROXY_HEADERS: bool = True
+
+    BILLING_PROVIDER: str = 'stripe'
+    STRIPE_API_KEY: str | None = None
+    STRIPE_WEBHOOK_SECRET: str | None = None
+
+    CELERY_BROKER_URL: str = 'redis://localhost:6379/0'
+    CELERY_RESULT_BACKEND: str = 'redis://localhost:6379/0'
+    BILLING_OUTBOX_INTERVAL_SECONDS: int = 15
+    BILLING_OUTBOX_BATCH_SIZE: int = 100
 
     @field_validator('DATABASE_URL')
     @classmethod

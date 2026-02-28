@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_active_user
@@ -9,11 +10,29 @@ from app.models.rbac import User
 from app.multitenancy.deps import TenantContext, require_tenant_membership
 from app.multitenancy.permissions import require_access
 from app.schemas.assignment import AssignmentCreate, AssignmentListResponse, AssignmentOut
+from app.schemas.track import TaskResourceOut
 from app.schemas.common import PaginationMeta
 from app.services import assignment_service, audit_service, track_service
 
 
 router = APIRouter(prefix='/assignments', tags=['assignments'])
+
+
+def _add_task_resources(assignment_out: AssignmentOut, assignment) -> AssignmentOut:
+    resources_by_source_id = assignment_service.extract_task_resources(assignment.snapshot_json)
+    resources_by_task_id: dict[str, list[dict]] = {}
+
+    for phase in assignment.phases:
+        for task in phase.tasks:
+            source_id = str(task.source_task_id) if task.source_task_id else None
+            resources_by_task_id[str(task.id)] = resources_by_source_id.get(source_id, [])
+
+    for phase in assignment_out.phases:
+        for task in phase.tasks:
+            raw_resources = resources_by_task_id.get(str(task.id), [])
+            task.resources = [TaskResourceOut.model_validate(resource) for resource in raw_resources]
+
+    return assignment_out
 
 
 @router.get('', response_model=AssignmentListResponse)
@@ -46,11 +65,30 @@ def list_assignments(
         mentor_id=effective_mentor_id,
     )
 
+    user_ids: set[UUID] = set()
+    for item in assignments:
+        if item.created_by:
+            user_ids.add(item.created_by)
+        if item.updated_by:
+            user_ids.add(item.updated_by)
+    users_by_id: dict[UUID, User] = {}
+    if user_ids:
+        users = db.scalars(select(User).where(User.id.in_(list(user_ids)))).all()
+        users_by_id = {row.id: row for row in users}
+
+    def display_name(user: User | None) -> str | None:
+        if not user:
+            return None
+        return (user.full_name or "").strip() or (user.email or "").strip() or None
+
     payload: list[AssignmentOut] = []
     for item in assignments:
         assignment_out = AssignmentOut.model_validate(item)
+        assignment_out.created_by_name = display_name(users_by_id.get(item.created_by))
+        assignment_out.updated_by_name = display_name(users_by_id.get(item.updated_by))
         if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
             assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
+        assignment_out = _add_task_resources(assignment_out, item)
         payload.append(assignment_out)
 
     return AssignmentListResponse(items=payload, meta=PaginationMeta(page=page, page_size=page_size, total=total))
@@ -98,8 +136,31 @@ def my_assignments(
     __: object = Depends(require_access('assignments', 'assignments:read')),
 ) -> list[AssignmentOut]:
     assignments = assignment_service.get_employee_assignments(db, employee_id=current_user.id)
-    payload = [AssignmentOut.model_validate(item) for item in assignments]
-    return [assignment_service.mask_quiz_answers_for_employee(db, item) for item in payload]
+    user_ids: set[UUID] = set()
+    for item in assignments:
+        if item.created_by:
+            user_ids.add(item.created_by)
+        if item.updated_by:
+            user_ids.add(item.updated_by)
+    users_by_id: dict[UUID, User] = {}
+    if user_ids:
+        users = db.scalars(select(User).where(User.id.in_(list(user_ids)))).all()
+        users_by_id = {row.id: row for row in users}
+
+    def display_name(user: User | None) -> str | None:
+        if not user:
+            return None
+        return (user.full_name or "").strip() or (user.email or "").strip() or None
+
+    payload: list[AssignmentOut] = []
+    for assignment in assignments:
+        assignment_out = AssignmentOut.model_validate(assignment)
+        assignment_out.created_by_name = display_name(users_by_id.get(assignment.created_by))
+        assignment_out.updated_by_name = display_name(users_by_id.get(assignment.updated_by))
+        assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
+        assignment_out = _add_task_resources(assignment_out, assignment)
+        payload.append(assignment_out)
+    return payload
 
 
 @router.get('/{assignment_id}', response_model=AssignmentOut)
@@ -114,6 +175,13 @@ def get_assignment(
     roles = set(ctx.roles)
     assignment_service.access_guard(assignment, user_id=current_user.id, roles=roles)
     assignment_out = AssignmentOut.model_validate(assignment)
+    if assignment.created_by:
+        user = db.scalar(select(User).where(User.id == assignment.created_by))
+        assignment_out.created_by_name = ((user.full_name or '').strip() or (user.email or '').strip()) if user else None
+    if assignment.updated_by:
+        user = db.scalar(select(User).where(User.id == assignment.updated_by))
+        assignment_out.updated_by_name = ((user.full_name or '').strip() or (user.email or '').strip()) if user else None
     if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
         assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
+    assignment_out = _add_task_resources(assignment_out, assignment)
     return assignment_out

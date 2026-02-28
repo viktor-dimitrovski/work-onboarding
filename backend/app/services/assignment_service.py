@@ -23,6 +23,7 @@ def _serialize_snapshot(track_version: TrackVersion) -> dict:
         'title': track_version.title,
         'description': track_version.description,
         'purpose': track_version.purpose,
+        'track_type': track_version.track_type,
         'phases': [
             {
                 'id': str(phase.id),
@@ -61,6 +62,35 @@ def _serialize_snapshot(track_version: TrackVersion) -> dict:
             for phase in sorted(track_version.phases, key=lambda item: item.order_index)
         ],
     }
+
+
+def extract_task_resources(snapshot_json: dict | None) -> dict[str, list[dict]]:
+    if not isinstance(snapshot_json, dict):
+        return {}
+
+    phases = snapshot_json.get('phases', [])
+    if not isinstance(phases, list):
+        return {}
+
+    resources_by_task: dict[str, list[dict]] = {}
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        tasks = phase.get('tasks', [])
+        if not isinstance(tasks, list):
+            continue
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            task_id = task.get('id')
+            if not task_id:
+                continue
+            resources = task.get('resources', [])
+            if not isinstance(resources, list):
+                resources = []
+            resources_by_task[str(task_id)] = [resource for resource in resources if isinstance(resource, dict)]
+
+    return resources_by_task
 
 
 def create_assignment_from_track(
@@ -218,6 +248,44 @@ def list_assignments(
         base = base.where(OnboardingAssignment.employee_id == employee_id)
     if mentor_id:
         base = base.where(OnboardingAssignment.mentor_id == mentor_id)
+
+    total = db.scalar(select(func.count()).select_from(base.subquery()))
+    items = db.scalars(
+        base.options(joinedload(OnboardingAssignment.phases).joinedload(AssignmentPhase.tasks))
+        .order_by(OnboardingAssignment.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).unique().all()
+    return items, int(total or 0)
+
+
+def list_release_assignments(
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    status_filter: str | None,
+    environment: str | None,
+    owner_id: UUID | None,
+    target_from: date | None,
+    target_to: date | None,
+) -> tuple[list[OnboardingAssignment], int]:
+    base = (
+        select(OnboardingAssignment)
+        .join(TrackVersion, OnboardingAssignment.track_version_id == TrackVersion.id)
+        .where(TrackVersion.track_type == 'RELEASE')
+    )
+
+    if status_filter:
+        base = base.where(OnboardingAssignment.status == status_filter)
+    if environment:
+        base = base.where(OnboardingAssignment.metadata_json['environment'].astext == environment)
+    if owner_id:
+        base = base.where(OnboardingAssignment.metadata_json['release_manager_user_id'].astext == str(owner_id))
+    if target_from:
+        base = base.where(OnboardingAssignment.target_date >= target_from)
+    if target_to:
+        base = base.where(OnboardingAssignment.target_date <= target_to)
 
     total = db.scalar(select(func.count()).select_from(base.subquery()))
     items = db.scalars(
@@ -397,7 +465,12 @@ def apply_track_version_to_assignments(
                             assignment_task.required = task.required
                             assignment_task.estimated_minutes = task.estimated_minutes
                             assignment_task.passing_score = task.passing_score
-                            assignment_task.metadata_json = task.metadata_json
+                            existing_metadata = dict(assignment_task.metadata_json or {})
+                            existing_checklist_state = existing_metadata.get('checklist_state')
+                            next_metadata = dict(task.metadata_json or {})
+                            if isinstance(existing_checklist_state, dict):
+                                next_metadata['checklist_state'] = existing_checklist_state
+                            assignment_task.metadata_json = next_metadata
                             if task.due_days_offset is not None:
                                 assignment_task.due_date = assignment.start_date + timedelta(days=task.due_days_offset)
                         continue
@@ -470,8 +543,8 @@ def recompute_progress(db: Session, assignment: OnboardingAssignment) -> None:
     if not required_tasks:
         assignment.progress_percent = 100.0
     else:
-        completed_count = len([task for task in required_tasks if task.status in COMPLETED_TASK_STATUSES])
-        assignment.progress_percent = round((completed_count / len(required_tasks)) * 100, 2)
+        total = sum(max(0.0, min(100.0, task.progress_percent or 0.0)) for task in required_tasks)
+        assignment.progress_percent = round(total / len(required_tasks), 2)
 
     phase_map: dict[UUID, list[AssignmentTask]] = {}
     for task in assignment.tasks:
@@ -488,8 +561,8 @@ def recompute_progress(db: Session, assignment: OnboardingAssignment) -> None:
         if not required_phase_tasks:
             phase.progress_percent = 100.0
         else:
-            done = len([task for task in required_phase_tasks if task.status in COMPLETED_TASK_STATUSES])
-            phase.progress_percent = round((done / len(required_phase_tasks)) * 100, 2)
+            total = sum(max(0.0, min(100.0, task.progress_percent or 0.0)) for task in required_phase_tasks)
+            phase.progress_percent = round(total / len(required_phase_tasks), 2)
 
         if phase.progress_percent >= 100:
             phase.status = 'completed'

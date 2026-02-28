@@ -15,5 +15,6 @@ Start here for product and architecture documentation.
 
 ## Development
 
+- [Environment variables & local PC setup](dev/env-and-local-setup.md)
 - [Testing multitenancy locally](dev/local-multitenancy-testing.md)
 - [Local subdomains (localtest.me, hosts file)](dev/local-subdomains.md)

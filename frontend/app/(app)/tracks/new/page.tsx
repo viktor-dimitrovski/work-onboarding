@@ -30,6 +30,7 @@ const schema = z.object({
   estimated_duration_days: z.coerce.number().min(1).max(365),
   tags: z.string().optional(),
   purpose: z.string(),
+  track_type: z.string(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -121,6 +122,7 @@ export default function NewTrackPage() {
       estimated_duration_days: 45,
       tags: 'devops,platform,security',
       purpose: defaultPurpose,
+      track_type: 'GENERAL',
     },
   });
 
@@ -373,6 +375,7 @@ export default function NewTrackPage() {
       ...values,
       tags: values.tags?.split(',').map((tag) => tag.trim()).filter(Boolean) ?? [],
       purpose: values.purpose,
+      track_type: values.track_type,
       phases: phases.map((phase, phaseIndex) => ({
         title: phase.title,
         description: phase.description,
@@ -883,6 +886,23 @@ export default function NewTrackPage() {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <div className='space-y-2'>
+                  <Label htmlFor='track_type'>Track type</Label>
+                  <select
+                    id='track_type'
+                    className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+                    {...form.register('track_type')}
+                  >
+                    <option value='GENERAL'>GENERAL</option>
+                    <option value='RELEASE'>RELEASE</option>
+                    <option value='TENANT_CREATION'>TENANT_CREATION</option>
+                    <option value='WORK_ORDER'>WORK_ORDER</option>
+                  </select>
+                  <p className='text-xs text-muted-foreground'>
+                    Use <span className='font-medium'>RELEASE</span> to make templates appear in Release Center.
+                  </p>
                 </div>
               </div>
             </div>

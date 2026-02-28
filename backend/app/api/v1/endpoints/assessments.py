@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 import re
 from uuid import UUID
 
@@ -19,13 +20,18 @@ from app.schemas.assessment import (
     AssessmentCategoryListResponse,
     AssessmentClassificationJobCreate,
     AssessmentClassificationJobOut,
+    AssessmentClassificationJobItemListResponse,
+    AssessmentClassificationJobItemOut,
     AssessmentDeliveryCreate,
     AssessmentDeliveryListResponse,
     AssessmentDeliveryOut,
     AssessmentQuestionCreate,
     AssessmentQuestionListResponse,
     AssessmentQuestionOut,
+    AssessmentQuestionStatsOut,
     AssessmentQuestionUpdate,
+    AssessmentQuestionsBulkUpdate,
+    AssessmentBulkUpdateResult,
     AssessmentPdfImportResponse,
     AssessmentResultListResponse,
     AssessmentResultSummary,
@@ -38,6 +44,7 @@ from app.schemas.assessment import (
 )
 from app.schemas.common import PaginationMeta
 from app.models.assessment import AssessmentAttempt, AssessmentClassificationJob
+from app.models.assessment import AssessmentClassificationJobItem
 from app.services import assessment_classification_service, assessment_service, audit_service, usage_service
 from app.services.openai_responses_service import call_openai_responses_json
 from app.services.pdf_extract_service import chunk_pages, extract_pdf_pages_text
@@ -349,6 +356,32 @@ def list_categories(
     return AssessmentCategoryListResponse(items=[item for item in items])
 
 
+@router.get('/questions/stats', response_model=AssessmentQuestionStatsOut)
+def question_stats(
+    status_filter: str | None = Query(default=None, alias='status'),
+    query: str | None = Query(default=None, alias='q'),
+    tag: str | None = Query(default=None),
+    difficulty: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> AssessmentQuestionStatsOut:
+    status_filters = _split_csv(status_filter)
+    difficulties = _split_csv(difficulty)
+    tags = _split_csv(tag)
+    categories = _split_csv(category)
+    data = assessment_service.question_stats(
+        db,
+        status_filters=status_filters,
+        query=query,
+        tags=tags,
+        difficulties=difficulties,
+        categories=categories,
+    )
+    return AssessmentQuestionStatsOut(**data)  # type: ignore[arg-type]
+
+
 @router.post('/questions/classify', response_model=AssessmentClassificationJobOut, status_code=status.HTTP_202_ACCEPTED)
 def start_classification_job(
     payload: AssessmentClassificationJobCreate,
@@ -360,19 +393,50 @@ def start_classification_job(
 ) -> AssessmentClassificationJobOut:
     if payload.mode not in ('unclassified_only', 'reclassify_all'):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid classification mode')
+    if payload.scope not in ('all_matching', 'selected'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid classification scope')
+    if payload.scope == 'selected' and not payload.question_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='question_ids required for selected scope')
 
     existing = db.scalar(
         select(AssessmentClassificationJob)
-        .where(AssessmentClassificationJob.status.in_(['queued', 'running']))
+        .where(
+            AssessmentClassificationJob.tenant_id == ctx.tenant.id,
+            AssessmentClassificationJob.status.in_(['queued', 'running', 'paused']),
+        )
         .order_by(AssessmentClassificationJob.created_at.desc())
     )
     if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='A classification job is already running')
+        # If a prior job is stuck (e.g. server reload killed the worker), allow a new run by expiring it.
+        # Otherwise, return the running job so the UI can attach and poll.
+        stale_after = datetime.now(timezone.utc) - timedelta(minutes=5)
+        if existing.updated_at and existing.updated_at < stale_after:
+            existing.status = 'failed'
+            existing.error_summary = 'Expired stale job (no updates for 5+ minutes). Please re-run.'
+            existing.updated_by = current_user.id
+            db.commit()
+        else:
+            return AssessmentClassificationJobOut.model_validate(existing)
 
     job = AssessmentClassificationJob(
+        tenant_id=ctx.tenant.id,
         status='queued',
         total=0,
         processed=0,
+        mode=payload.mode,
+        dry_run=bool(payload.dry_run),
+        batch_size=int(payload.batch_size),
+        scope_json={
+            'scope': payload.scope,
+            'question_ids': [str(x) for x in (payload.question_ids or [])],
+            'filters': {
+                'status': payload.status,
+                'q': payload.q,
+                'tag': payload.tag,
+                'difficulty': payload.difficulty,
+                'category': payload.category,
+            },
+        },
         created_by=current_user.id,
         updated_by=current_user.id,
     )
@@ -398,12 +462,216 @@ def get_classification_job(
     job_id: UUID,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
+    ___: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentClassificationJobOut:
     job = db.scalar(select(AssessmentClassificationJob).where(AssessmentClassificationJob.id == job_id))
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Classification job not found')
     return AssessmentClassificationJobOut.model_validate(job)
+
+
+@router.get('/questions/classify/jobs/{job_id}/items', response_model=AssessmentClassificationJobItemListResponse)
+def list_classification_job_items(
+    job_id: UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    ___: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> AssessmentClassificationJobItemListResponse:
+    offset = (page - 1) * page_size
+    total = db.scalar(
+        select(func.count()).select_from(
+            select(AssessmentClassificationJobItem.id)
+            .where(AssessmentClassificationJobItem.job_id == job_id)
+            .subquery()
+        )
+    )
+    rows = db.scalars(
+        select(AssessmentClassificationJobItem)
+        .where(AssessmentClassificationJobItem.job_id == job_id)
+        .order_by(AssessmentClassificationJobItem.created_at.asc())
+        .offset(offset)
+        .limit(page_size)
+    ).all()
+    return AssessmentClassificationJobItemListResponse(
+        items=[AssessmentClassificationJobItemOut.model_validate(r) for r in rows],
+        meta=PaginationMeta(page=page, page_size=page_size, total=int(total or 0)),
+    )
+
+
+@router.post('/questions/classify/jobs/{job_id}/cancel')
+def cancel_classification_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> dict[str, str]:
+    _ = ctx
+    job = db.scalar(select(AssessmentClassificationJob).where(AssessmentClassificationJob.id == job_id))
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Classification job not found')
+    if job.status not in ('queued', 'running', 'paused'):
+        return {'status': 'noop'}
+    job.cancel_requested = True
+    job.updated_by = current_user.id
+    db.commit()
+    return {'status': 'ok'}
+
+
+@router.post('/questions/classify/jobs/{job_id}/pause')
+def pause_classification_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> dict[str, str]:
+    _ = ctx
+    job = db.scalar(select(AssessmentClassificationJob).where(AssessmentClassificationJob.id == job_id))
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Classification job not found')
+    if job.status not in ('queued', 'running', 'paused'):
+        return {'status': 'noop'}
+    job.pause_requested = True
+    job.updated_by = current_user.id
+    db.commit()
+    return {'status': 'ok'}
+
+
+@router.post('/questions/classify/jobs/{job_id}/resume')
+def resume_classification_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> dict[str, str]:
+    _ = ctx
+    job = db.scalar(select(AssessmentClassificationJob).where(AssessmentClassificationJob.id == job_id))
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Classification job not found')
+    if job.status not in ('queued', 'running', 'paused'):
+        return {'status': 'noop'}
+    job.pause_requested = False
+    job.updated_by = current_user.id
+    db.commit()
+    return {'status': 'ok'}
+
+
+@router.get('/questions/classify/jobs/latest', response_model=AssessmentClassificationJobOut)
+def latest_classification_job(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> AssessmentClassificationJobOut:
+    job = db.scalar(
+        select(AssessmentClassificationJob)
+        .where(AssessmentClassificationJob.tenant_id == ctx.tenant.id)
+        .order_by(AssessmentClassificationJob.created_at.desc())
+    )
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No classification jobs found')
+    return AssessmentClassificationJobOut.model_validate(job)
+
+
+@router.post('/questions/classify/jobs/{job_id}/apply')
+def apply_classification_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> dict[str, int]:
+    _ = ctx
+    job = db.scalar(select(AssessmentClassificationJob).where(AssessmentClassificationJob.id == job_id))
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Classification job not found')
+    if job.status != 'completed':
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Job is not completed')
+    if not job.dry_run:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Job is not a dry run')
+
+    applied = assessment_classification_service.apply_job_items(
+        db,
+        job_id=job.id,
+        actor_user_id=current_user.id,
+    )
+    job.applied_at = datetime.now(timezone.utc)
+    job.updated_by = current_user.id
+    db.commit()
+    return {'applied': applied}
+
+
+@router.post('/questions/classify/jobs/{job_id}/rollback')
+def rollback_classification_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> dict[str, int]:
+    _ = ctx
+    job = db.scalar(select(AssessmentClassificationJob).where(AssessmentClassificationJob.id == job_id))
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Classification job not found')
+    if job.status != 'completed':
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Job is not completed')
+
+    rolled_back = assessment_classification_service.rollback_job_items(
+        db,
+        job_id=job.id,
+        actor_user_id=current_user.id,
+    )
+    job.rolled_back_at = datetime.now(timezone.utc)
+    job.updated_by = current_user.id
+    db.commit()
+    return {'rolled_back': rolled_back}
+
+
+@router.post('/questions/bulk-update', response_model=AssessmentBulkUpdateResult)
+def bulk_update_questions(
+    payload: AssessmentQuestionsBulkUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentBulkUpdateResult:
+    # Ensure tenant context set for RLS-protected updates.
+    _ = ctx
+    updated = assessment_service.bulk_update_questions(
+        db,
+        actor_user_id=current_user.id,
+        scope=payload.scope,
+        question_ids=list(payload.question_ids or []),
+        status_filters=_split_csv(payload.status),
+        query=payload.q,
+        tags=_split_csv(payload.tag),
+        difficulties=_split_csv(payload.difficulty),
+        categories=_split_csv(payload.category),
+        action=payload.action,
+        status_value=payload.status_value,
+        category_id=payload.category_id,
+        difficulty_value=payload.difficulty_value,
+        tags_value=list(payload.tags_value or []),
+    )
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_questions_bulk_update',
+        entity_type='assessment_question',
+        details={
+            'scope': payload.scope,
+            'action': payload.action,
+            'updated_count': updated,
+        },
+    )
+    db.commit()
+    return AssessmentBulkUpdateResult(updated_count=updated)
 
 
 @router.post('/questions', response_model=AssessmentQuestionOut, status_code=status.HTTP_201_CREATED)

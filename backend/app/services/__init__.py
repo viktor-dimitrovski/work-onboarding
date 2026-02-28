@@ -5,10 +5,13 @@ from app.services import (
     audit_service,
     auth_service,
     bootstrap_service,
+    github_repo_service,
     oauth_service,
     progress_service,
+    release_manifest_service,
     report_service,
     track_service,
+    work_order_service,
     user_service,
 )
 
@@ -19,9 +22,12 @@ __all__ = [
     'audit_service',
     'auth_service',
     'bootstrap_service',
+    'github_repo_service',
     'oauth_service',
     'progress_service',
+    'release_manifest_service',
     'report_service',
     'track_service',
+    'work_order_service',
     'user_service',
 ]

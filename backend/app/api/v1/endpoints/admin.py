@@ -11,9 +11,12 @@ from app.core.security import hash_password
 from app.db.session import get_db, set_tenant_id
 from app.core.config import settings
 from app.models.rbac import User
-from app.models.tenant import Plan, Subscription, Tenant, TenantMembership, TenantModule
+from app.models.tenant import Tenant, TenantMembership
+from app.modules.billing.models import Plan, Subscription, TenantModule
 from app.multitenancy.deps import require_product_admin_host
 from app.schemas.tenant import (
+    PlanCreate,
+    PlanUpdate,
     PlanOut,
     TenantAdminInvite,
     TenantCreate,
@@ -36,6 +39,13 @@ def _validate_slug(slug: str) -> str:
     reserved = {item.strip().lower() for item in settings.RESERVED_SUBDOMAINS.split(',') if item.strip()}
     if normalized in reserved:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Slug is reserved')
+    return normalized
+
+
+def _validate_plan_key(key: str) -> str:
+    normalized = (key or '').strip().lower()
+    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{1,48}[a-z0-9]', normalized):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid plan key')
     return normalized
 
 
@@ -119,6 +129,47 @@ def list_plans(
 ) -> list[PlanOut]:
     plans = db.scalars(select(Plan).order_by(Plan.name.asc())).all()
     return [PlanOut.model_validate(plan) for plan in plans]
+
+
+@router.post('/plans', response_model=PlanOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_product_admin_host)])
+def create_plan(
+    payload: PlanCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> PlanOut:
+    key = _validate_plan_key(payload.key)
+    existing = db.scalar(select(Plan).where(Plan.key == key))
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Plan key already exists')
+
+    plan = Plan(
+        key=key,
+        name=payload.name,
+        tenant_type_scope=payload.tenant_type_scope,
+        module_defaults=payload.module_defaults,
+        limits_json=payload.limits_json,
+        is_active=payload.is_active,
+    )
+    db.add(plan)
+    db.commit()
+    return PlanOut.model_validate(plan)
+
+
+@router.put('/plans/{plan_id}', response_model=PlanOut, dependencies=[Depends(require_product_admin_host)])
+def update_plan(
+    plan_id: UUID,
+    payload: PlanUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> PlanOut:
+    plan = db.scalar(select(Plan).where(Plan.id == plan_id))
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Plan not found')
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(plan, field, value)
+    db.commit()
+    return PlanOut.model_validate(plan)
 
 
 @router.get('/tenants/{tenant_id}/modules', response_model=list[TenantModuleOut], dependencies=[Depends(require_product_admin_host)])

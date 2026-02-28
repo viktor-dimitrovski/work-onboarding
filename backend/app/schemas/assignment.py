@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.common import BaseSchema, PaginationMeta
+from app.schemas.track import TaskResourceOut
 
 
 class AssignmentCreate(BaseModel):
@@ -33,6 +34,7 @@ class AssignmentTaskOut(BaseSchema):
     estimated_minutes: int | None
     passing_score: int | None
     metadata: dict[str, Any] = Field(alias='metadata_json')
+    resources: list[TaskResourceOut] = Field(default_factory=list)
     due_date: date | None
     status: str
     progress_percent: float
@@ -62,6 +64,7 @@ class AssignmentOut(BaseSchema):
     track_version_id: UUID
     title: str
     purpose: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict, alias='metadata_json')
     start_date: date
     target_date: date
     status: str
@@ -69,6 +72,10 @@ class AssignmentOut(BaseSchema):
     phases: list[AssignmentPhaseOut]
     created_at: datetime
     updated_at: datetime
+    created_by: UUID | None = None
+    updated_by: UUID | None = None
+    created_by_name: str | None = None
+    updated_by_name: str | None = None
 
 
 class AssignmentListResponse(BaseModel):

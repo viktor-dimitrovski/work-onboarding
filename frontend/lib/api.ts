@@ -181,6 +181,14 @@ export const api = {
     });
   },
 
+  patch<T>(path: string, body: unknown, token: string) {
+    return request<T>(path, {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(body),
+    });
+  },
+
   delete<T>(path: string, token: string) {
     return request<T>(path, {
       method: 'DELETE',

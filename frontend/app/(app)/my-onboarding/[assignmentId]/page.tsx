@@ -6,10 +6,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
 import { StatusChip } from '@/components/common/status-chip';
+import { TaskPanelChecklist } from '@/components/assignments/task-panel-checklist';
+import { TaskPanelReadLink } from '@/components/assignments/task-panel-read-link';
+import { TaskPanelReviewRequired } from '@/components/assignments/task-panel-review-required';
+import { getTaskTypeIcon, getTaskTypeLabel } from '@/components/assignments/task-type';
+import { TaskResourceList } from '@/components/assignments/task-resource-list';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import { Textarea } from '@/components/ui/textarea';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -29,9 +35,13 @@ export default function MyOnboardingPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openPhaseIds, setOpenPhaseIds] = useState<string[]>([]);
+  const [commentOpen, setCommentOpen] = useState(false);
+  const [checklistUpdatingId, setChecklistUpdatingId] = useState<string | null>(null);
   const selectedTaskIdRef = useRef<string | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const nextTask = useMemo(
     () => assignment?.phases.flatMap((phase) => phase.tasks).find((task) => task.is_next_recommended) || null,
@@ -77,7 +87,9 @@ export default function MyOnboardingPage() {
       const phaseContainingSelected = nextSelected
         ? response.phases.find((phase) => phase.tasks.some((t) => t.id === nextSelected.id))?.id
         : null;
-      setOpenPhaseIds(phaseContainingSelected ? [phaseContainingSelected] : response.phases[0] ? [response.phases[0].id] : []);
+      const inProgressPhase = response.phases.find((phase) => phase.status === 'in_progress')?.id ?? null;
+      const defaultPhaseId = phaseContainingSelected || inProgressPhase || response.phases[0]?.id || null;
+      setOpenPhaseIds(defaultPhaseId ? [defaultPhaseId] : []);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -87,6 +99,22 @@ export default function MyOnboardingPage() {
   useEffect(() => {
     void load();
   }, [accessToken, assignmentId]);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimer.current) {
+        clearTimeout(noticeTimer.current);
+      }
+    };
+  }, []);
+
+  const flashNotice = (message: string) => {
+    setNotice(message);
+    if (noticeTimer.current) {
+      clearTimeout(noticeTimer.current);
+    }
+    noticeTimer.current = setTimeout(() => setNotice(null), 4000);
+  };
 
   useEffect(() => {
     selectedTaskIdRef.current = selectedTask?.id ?? null;
@@ -107,6 +135,7 @@ export default function MyOnboardingPage() {
     setFileUrl('');
     setQuizAnswers({});
     setError(null);
+    setCommentOpen(false);
   }, [selectedTask?.id]);
 
   useEffect(() => {
@@ -129,10 +158,42 @@ export default function MyOnboardingPage() {
     void loadAttempts();
   }, [accessToken, assignmentId, selectedTask?.id, selectedTask?.task_type]);
 
+  const updateTaskInState = (taskId: string, update: Partial<AssignmentTask>) => {
+    setAssignment((prev) => {
+      if (!prev) return prev;
+      const nextPhases = prev.phases.map((phase) => ({
+        ...phase,
+        tasks: phase.tasks.map((task) => (task.id === taskId ? { ...task, ...update } : task)),
+      }));
+      return { ...prev, phases: nextPhases };
+    });
+    setSelectedTask((prev) => (prev?.id === taskId ? { ...prev, ...update } : prev));
+  };
+
+  const replaceTaskInState = (nextTask: AssignmentTask) => {
+    setAssignment((prev) => {
+      if (!prev) return prev;
+      const nextPhases = prev.phases.map((phase) => ({
+        ...phase,
+        tasks: phase.tasks.map((task) => (task.id === nextTask.id ? nextTask : task)),
+      }));
+      return { ...prev, phases: nextPhases };
+    });
+    setSelectedTask((prev) => (prev?.id === nextTask.id ? nextTask : prev));
+  };
+
   const submitTask = async () => {
     if (!accessToken || !assignmentId || !selectedTask) return;
     setSubmitting(true);
     setError(null);
+    setNotice(null);
+
+    const needsReview = ['mentor_approval', 'code_assignment', 'file_upload'].includes(selectedTask.task_type);
+    updateTaskInState(selectedTask.id, {
+      status: needsReview ? 'pending_review' : 'completed',
+      progress_percent: needsReview ? 75 : 100,
+      completed_at: needsReview ? selectedTask.completed_at ?? null : new Date().toISOString(),
+    });
 
     try {
       await api.post(
@@ -150,8 +211,10 @@ export default function MyOnboardingPage() {
       setAnswerText('');
       setFileUrl('');
       await load({ silent: true });
+      flashNotice('Saved.');
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Failed to submit task');
+      await load({ silent: true });
     } finally {
       setSubmitting(false);
     }
@@ -161,6 +224,7 @@ export default function MyOnboardingPage() {
     if (!accessToken || !assignmentId || !selectedTask) return;
     setSubmitting(true);
     setError(null);
+    setNotice(null);
 
     try {
       await api.post(
@@ -176,10 +240,39 @@ export default function MyOnboardingPage() {
       );
       setQuizAnswers({});
       await load({ silent: true });
+      flashNotice('Quiz submitted.');
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Failed to submit quiz');
+      await load({ silent: true });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const updateChecklistItem = async (itemId: string, checked: boolean, comment?: string | null) => {
+    if (!accessToken || !assignmentId || !selectedTask) return;
+    setChecklistUpdatingId(itemId);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const updated = await api.patch<AssignmentTask>(
+        `/progress/assignments/${assignmentId}/tasks/${selectedTask.id}/checklist`,
+        {
+          item_id: itemId,
+          checked,
+          comment: comment ?? null,
+        },
+        accessToken,
+      );
+      replaceTaskInState(updated);
+      await load({ silent: true });
+      flashNotice('Checklist updated.');
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Failed to update checklist');
+      await load({ silent: true });
+    } finally {
+      setChecklistUpdatingId(null);
     }
   };
 
@@ -188,6 +281,8 @@ export default function MyOnboardingPage() {
 
   const isQuiz = selectedTask?.task_type === 'quiz';
   const isAssessment = selectedTask?.task_type === 'assessment_test';
+  const isChecklist = selectedTask?.task_type === 'checklist';
+  const isReadLike = ['read_material', 'video', 'external_link'].includes(selectedTask?.task_type || '');
   const quizMeta = (selectedTask?.metadata?.quiz as Record<string, unknown>) || null;
   const assessmentMeta = (selectedTask?.metadata?.assessment as Record<string, unknown>) || null;
   const assessmentDeliveryId = assessmentMeta?.delivery_id as string | undefined;
@@ -205,6 +300,7 @@ export default function MyOnboardingPage() {
   const taskCompleted = selectedTask?.status === 'completed';
   const taskPendingReview = selectedTask?.status === 'pending_review';
   const taskLocked = taskCompleted || taskPendingReview;
+  const taskResources = selectedTask?.resources ?? [];
 
   return (
     <div className='space-y-6'>
@@ -212,7 +308,10 @@ export default function MyOnboardingPage() {
         <Button type='button' variant='outline' size='sm' onClick={() => router.back()}>
           Back
         </Button>
-        {refreshing && <p className='text-xs text-muted-foreground'>Refreshing…</p>}
+        <div className='flex items-center gap-3'>
+          {notice && <p className='text-xs text-emerald-600'>{notice}</p>}
+          {refreshing && <p className='text-xs text-muted-foreground'>Refreshing…</p>}
+        </div>
       </div>
 
       <Card>
@@ -237,12 +336,12 @@ export default function MyOnboardingPage() {
         </CardContent>
       </Card>
 
-      <div className='grid gap-6 lg:grid-cols-[1.2fr,1fr] lg:items-start lg:h-[calc(100vh-260px)] lg:overflow-hidden'>
-        <Card className='lg:flex lg:h-full lg:flex-col'>
+      <div className='grid gap-6 lg:grid-cols-[1.2fr,1fr] lg:items-start'>
+        <Card>
           <CardHeader>
             <CardTitle>Phase timeline</CardTitle>
           </CardHeader>
-          <CardContent className='lg:flex-1 lg:overflow-auto lg:pr-2'>
+          <CardContent className='pr-2'>
             <Accordion type='multiple' className='space-y-2' value={openPhaseIds} onValueChange={setOpenPhaseIds}>
               {assignment.phases
                 .slice()
@@ -250,9 +349,16 @@ export default function MyOnboardingPage() {
                 .map((phase) => (
                   <AccordionItem key={phase.id} value={phase.id} className='rounded-md border px-3'>
                     <AccordionTrigger>
-                      <div>
-                        <p>{phase.title}</p>
-                        <p className='text-xs text-muted-foreground'>{phase.tasks.length} tasks</p>
+                      <div className='flex w-full flex-wrap items-center justify-between gap-3'>
+                        <div>
+                          <p className='font-medium'>{phase.title}</p>
+                          <p className='text-xs text-muted-foreground'>
+                            {phase.tasks.length} tasks • {Math.round(phase.progress_percent)}%
+                          </p>
+                        </div>
+                        <div className='w-28'>
+                          <Progress value={phase.progress_percent} className='h-2' />
+                        </div>
                       </div>
                     </AccordionTrigger>
                     <AccordionContent>
@@ -264,7 +370,7 @@ export default function MyOnboardingPage() {
                           .map((task) => (
                             <button
                               key={task.id}
-                              className={`w-full rounded-md border p-3 text-left transition ${
+                              className={`w-full rounded-md border px-3 py-2 text-left transition ${
                                 selectedTask?.id === task.id
                                   ? 'border-primary bg-secondary/70'
                                   : 'bg-muted/30 hover:border-primary/40'
@@ -274,11 +380,25 @@ export default function MyOnboardingPage() {
                                 setOpenPhaseIds((prev) => (prev.includes(phase.id) ? prev : [...prev, phase.id]));
                               }}
                             >
-                              <div className='flex items-center justify-between'>
-                                <p className='font-medium'>{task.title}</p>
+                              <div className='flex items-start justify-between gap-3'>
+                                <div className='flex min-w-0 items-start gap-2'>
+                                  <span className='mt-0.5 rounded-md border bg-white p-1 text-muted-foreground'>
+                                    {(() => {
+                                      const Icon = getTaskTypeIcon(task.task_type);
+                                      return <Icon className='h-3.5 w-3.5' />;
+                                    })()}
+                                  </span>
+                                  <div className='min-w-0'>
+                                    <p className='truncate text-sm font-medium'>{task.title}</p>
+                                    <p className='mt-0.5 text-xs text-muted-foreground'>
+                                      {getTaskTypeLabel(task.task_type)}
+                                      {task.estimated_minutes ? ` • ${task.estimated_minutes}m` : ''}
+                                      {task.due_date ? ` • due ${task.due_date}` : ''}
+                                    </p>
+                                  </div>
+                                </div>
                                 <StatusChip status={task.status} />
                               </div>
-                              <p className='mt-1 text-xs text-muted-foreground'>{task.instructions || 'No instructions'}</p>
                             </button>
                           ))}
                       </div>
@@ -291,11 +411,26 @@ export default function MyOnboardingPage() {
 
         <Card className='lg:sticky lg:top-24 lg:max-h-[calc(100vh-260px)] lg:overflow-auto'>
           <CardHeader>
-            <CardTitle>{isQuiz ? 'Complete quiz' : 'Submit selected task'}</CardTitle>
-            <CardDescription>{selectedTask?.title || 'Choose a task from the phase timeline.'}</CardDescription>
+            <div className='flex items-start justify-between gap-3'>
+              <div>
+                <CardTitle>{selectedTask ? getTaskTypeLabel(selectedTask.task_type) : 'Select a task'}</CardTitle>
+                <CardDescription>{selectedTask?.title || 'Choose a task from the phase timeline.'}</CardDescription>
+              </div>
+              {selectedTask && <StatusChip status={selectedTask.status} />}
+            </div>
+            {selectedTask ? (
+              <p className='text-xs text-muted-foreground'>
+                {selectedTask.estimated_minutes ? `${selectedTask.estimated_minutes} minutes` : 'No time estimate'}
+                {selectedTask.due_date ? ` • due ${selectedTask.due_date}` : ''}
+              </p>
+            ) : null}
           </CardHeader>
           <CardContent className='space-y-3'>
-            {isAssessment ? (
+            {!selectedTask ? (
+              <div className='rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground'>
+                Select a task from the left to see details and submit progress.
+              </div>
+            ) : isAssessment ? (
               <div className='space-y-3'>
                 <div className='rounded-md border bg-muted/30 p-3 text-sm'>
                   <p>Assessment task</p>
@@ -396,6 +531,46 @@ export default function MyOnboardingPage() {
                   </div>
                 )}
               </div>
+            ) : isChecklist ? (
+              <>
+                {selectedTask.instructions && (
+                  <div className='rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground'>
+                    {selectedTask.instructions}
+                  </div>
+                )}
+                <TaskResourceList resources={taskResources} />
+                <TaskPanelChecklist
+                  task={selectedTask}
+                  onToggleItem={updateChecklistItem}
+                  updatingItemId={checklistUpdatingId}
+                  disabled={taskLocked}
+                />
+              </>
+            ) : reviewRequired ? (
+              <TaskPanelReviewRequired
+                task={selectedTask}
+                resources={taskResources}
+                answerText={answerText}
+                onAnswerChange={setAnswerText}
+                fileUrl={fileUrl}
+                onFileUrlChange={setFileUrl}
+                submitting={submitting}
+                disabled={taskLocked}
+                pendingReview={taskPendingReview}
+                onSubmit={submitTask}
+              />
+            ) : isReadLike ? (
+              <TaskPanelReadLink
+                task={selectedTask}
+                resources={taskResources}
+                comment={answerText}
+                onCommentChange={setAnswerText}
+                commentOpen={commentOpen}
+                onToggleComment={() => setCommentOpen((prev) => !prev)}
+                submitting={submitting}
+                disabled={taskLocked}
+                onSubmit={submitTask}
+              />
             ) : (
               <>
                 {taskCompleted && (
@@ -429,51 +604,34 @@ export default function MyOnboardingPage() {
                     disabled={taskLocked}
                   />
                 </div>
+                <div className='flex flex-wrap gap-2'>
+                  <Button onClick={submitTask} disabled={!selectedTask || submitting || taskLocked}>
+                    {submitting ? 'Submitting...' : 'Submit task'}
+                  </Button>
+                  {!reviewRequired && (
+                    <Button
+                      variant='outline'
+                      onClick={() => {
+                        setAnswerText('');
+                        setFileUrl('');
+                        void submitTask();
+                      }}
+                      disabled={!selectedTask || submitting || taskLocked}
+                    >
+                      Mark complete
+                    </Button>
+                  )}
+                </div>
               </>
             )}
 
             {error && <p className='text-sm text-destructive'>{error}</p>}
 
-            {!isQuiz && (
-              <div className='rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground'>
-                <p className='font-medium text-foreground/80'>Submit vs Mark complete</p>
-                <p className='mt-1'>
-                  <strong>Submit task</strong> = complete the task and save your response/evidence.{' '}
-                  <strong>Mark complete</strong> = complete the task without adding any response or file link. Both use
-                  the same submit; only the payload (with or without text/URL) differs.
-                </p>
-                <p className='mt-1'>
-                  &quot;Mark complete&quot; is only shown for task types that don&apos;t require mentor review (e.g.
-                  read_material, checklist, video). For mentor_approval, code_assignment, or file_upload you only get
-                  &quot;Submit for review&quot;, and the mentor must approve before the task is fully complete.
-                </p>
-              </div>
-            )}
-
             {isQuiz ? (
               <Button onClick={submitQuiz} disabled={!selectedTask || submitting || quizLocked}>
                 {submitting ? 'Submitting...' : 'Submit quiz'}
               </Button>
-            ) : (
-              <div className='flex flex-wrap gap-2'>
-                <Button onClick={submitTask} disabled={!selectedTask || submitting || taskLocked}>
-                  {submitting ? 'Submitting...' : reviewRequired ? 'Submit for review' : 'Submit task'}
-                </Button>
-                {!reviewRequired && (
-                  <Button
-                    variant='outline'
-                    onClick={() => {
-                      setAnswerText('');
-                      setFileUrl('');
-                      void submitTask();
-                    }}
-                    disabled={!selectedTask || submitting || taskLocked}
-                  >
-                    Mark complete
-                  </Button>
-                )}
-              </div>
-            )}
+            ) : null}
           </CardContent>
         </Card>
       </div>

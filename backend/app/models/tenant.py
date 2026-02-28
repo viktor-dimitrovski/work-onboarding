@@ -1,8 +1,7 @@
 import uuid
-from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
@@ -112,75 +111,6 @@ class GroupMembership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     group: Mapped['Group'] = relationship(back_populates='memberships')
 
 
-class Plan(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = 'plans'
-    __table_args__ = (
-        UniqueConstraint('key', name='uq_plans_key'),
-    )
-
-    key: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    tenant_type_scope: Mapped[str] = mapped_column(String(20), nullable=False, default='all')
-    module_defaults: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    limits_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
-    subscriptions: Mapped[list['Subscription']] = relationship(
-        back_populates='plan', cascade='all, delete-orphan'
-    )
-
-
-class Subscription(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = 'subscriptions'
-    __table_args__ = (
-        CheckConstraint(
-            "status in ('active', 'trialing', 'canceled')",
-            name='subscription_status_values',
-        ),
-    )
-
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False
-    )
-    plan_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('plans.id', ondelete='RESTRICT'), nullable=False
-    )
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default='active')
-    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    tenant: Mapped['Tenant'] = relationship(back_populates='subscriptions')
-    plan: Mapped['Plan'] = relationship(back_populates='subscriptions')
-
-
-class TenantModule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = 'tenant_modules'
-    __table_args__ = (
-        UniqueConstraint('tenant_id', 'module_key', name='uq_tenant_modules'),
-    )
-
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False
-    )
-    module_key: Mapped[str] = mapped_column(String(50), nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    source: Mapped[str] = mapped_column(String(20), nullable=False, default='plan')
-
-    tenant: Mapped['Tenant'] = relationship(back_populates='modules')
-
-
-class UsageEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = 'usage_events'
-
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False, index=True
-    )
-    event_key: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
-    quantity: Mapped[float] = mapped_column(nullable=False, default=1.0)
-    meta_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-
-
 Index('ix_tenants_slug', Tenant.slug)
 Index('ix_tenant_domains_domain', TenantDomain.domain)
 Index('ix_tenant_memberships_tenant', TenantMembership.tenant_id)
@@ -188,7 +118,3 @@ Index('ix_tenant_memberships_user', TenantMembership.user_id)
 Index('ix_groups_tenant', Group.tenant_id)
 Index('ix_group_memberships_group', GroupMembership.group_id)
 Index('ix_group_memberships_user', GroupMembership.user_id)
-Index('ix_plans_key', Plan.key)
-Index('ix_subscriptions_tenant', Subscription.tenant_id)
-Index('ix_tenant_modules_tenant', TenantModule.tenant_id)
-Index('ix_usage_events_tenant', UsageEvent.tenant_id)

@@ -53,4 +53,6 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def set_tenant_id(db: Session, tenant_id: str) -> None:
-    db.execute(text("SET LOCAL app.tenant_id = :tenant_id"), {"tenant_id": tenant_id})
+    # Use set_config() because SET LOCAL doesn't accept bind parameters in PostgreSQL.
+    # The third argument (true) makes it transaction-local (like SET LOCAL).
+    db.execute(text("select set_config('app.tenant_id', :tenant_id, true)"), {"tenant_id": str(tenant_id)})

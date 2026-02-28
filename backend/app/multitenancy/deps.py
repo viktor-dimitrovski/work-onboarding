@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db, set_tenant_id
 from app.models.rbac import User
-from app.models.tenant import Tenant, TenantMembership, TenantModule
+from app.models.tenant import Tenant, TenantMembership
+from app.modules.billing.models import TenantModule
 from app.multitenancy.tenant_resolution import resolve_host
 from app.api.deps import get_current_active_user
 
@@ -51,7 +52,10 @@ def get_tenant_context(
     header_tenant_slug = (
         request.headers.get('x-tenant-slug', '').strip().lower() if settings.APP_ENV != 'production' else ''
     )
-    tenant_slug = resolution.tenant_slug or header_tenant_slug or settings.DEFAULT_TENANT_SLUG
+    # If the request hits the apex domain (no tenant subdomain) and no header was provided,
+    # fall back to a default tenant in non-production. Migration 0008 seeds a `default` tenant.
+    dev_fallback_slug = 'default' if settings.APP_ENV != 'production' else None
+    tenant_slug = resolution.tenant_slug or header_tenant_slug or settings.DEFAULT_TENANT_SLUG or dev_fallback_slug
     if not tenant_slug:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Tenant not resolved')
 
@@ -90,6 +94,11 @@ def require_tenant_membership(ctx: TenantContext = Depends(get_tenant_context)) 
 
 
 def require_product_admin_host(request: Request) -> None:
+    # In local/dev, we allow the admin API to be accessed from the default domain to keep
+    # a single-console workflow. In production, enforce the dedicated admin host.
+    if settings.APP_ENV != 'production':
+        return
+
     host = _get_host(request)
     if not host:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Missing host header')

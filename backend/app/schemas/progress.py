@@ -17,6 +17,12 @@ class TaskSubmissionCreate(BaseModel):
     quiz_answers: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChecklistItemUpdate(BaseModel):
+    item_id: str = Field(min_length=1, max_length=200)
+    checked: bool
+    comment: str | None = Field(default=None, max_length=2000)
+
+
 class TaskSubmissionOut(BaseSchema):
     id: UUID
     assignment_task_id: UUID

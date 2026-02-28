@@ -88,9 +88,12 @@ export interface TrackVersion {
   estimated_duration_days: number;
   tags: string[];
   purpose?: string;
+  track_type?: string;
   is_current: boolean;
   published_at?: string | null;
   phases: TrackPhase[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface TrackTemplate {
@@ -101,8 +104,15 @@ export interface TrackTemplate {
   estimated_duration_days: number;
   tags: string[];
   purpose?: string;
+  track_type?: string;
   is_active: boolean;
   versions: TrackVersion[];
+  created_at?: string;
+  updated_at?: string;
+  created_by?: string | null;
+  updated_by?: string | null;
+  created_by_name?: string | null;
+  updated_by_name?: string | null;
 }
 
 export interface AssignmentTask {
@@ -122,6 +132,7 @@ export interface AssignmentTask {
   metadata: Record<string, unknown>;
   progress_percent: number;
   is_next_recommended: boolean;
+  resources?: TaskResource[];
 }
 
 export interface AssignmentPhase {
@@ -147,6 +158,13 @@ export interface Assignment {
   status: string;
   progress_percent: number;
   phases: AssignmentPhase[];
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+  created_by?: string | null;
+  updated_by?: string | null;
+  created_by_name?: string | null;
+  updated_by_name?: string | null;
 }
 
 export interface QuizAttempt {
@@ -178,13 +196,50 @@ export interface AssessmentCategory {
 
 export interface AssessmentClassificationJob {
   id: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'canceled';
   total: number;
   processed: number;
   error_summary?: string | null;
   report_json?: Record<string, unknown>;
+  mode?: string | null;
+  dry_run?: boolean | null;
+  batch_size?: number | null;
+  scope_json?: Record<string, unknown>;
+  cancel_requested?: boolean | null;
+  pause_requested?: boolean | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  last_heartbeat_at?: string | null;
+  applied_at?: string | null;
+  rolled_back_at?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface AssessmentClassificationJobItem {
+  id: string;
+  job_id: string;
+  question_id: string;
+  old_category_id?: string | null;
+  old_difficulty?: string | null;
+  new_category_name: string;
+  new_category_slug: string;
+  new_category_id?: string | null;
+  new_difficulty: string;
+  applied: boolean;
+  applied_at?: string | null;
+  error_summary?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AssessmentQuestionStats {
+  total: number;
+  unclassified_category: number;
+  unclassified_difficulty: number;
+  by_status: Record<string, number>;
+  by_difficulty: Record<string, number>;
+  by_category: Record<string, number>;
 }
 
 export interface AssessmentQuestion {
@@ -198,6 +253,8 @@ export interface AssessmentQuestion {
   status: string;
   explanation?: string | null;
   options: AssessmentQuestionOption[];
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface AssessmentTestVersionQuestion {
@@ -287,6 +344,7 @@ export interface UserRow {
   is_active: boolean;
   roles: RoleName[];
   tenant_role?: string | null;
+  tenant_status?: string | null;
 }
 
 export interface AdminDashboardReport {
@@ -308,4 +366,71 @@ export interface MentorDashboardReport {
   mentee_count: number;
   pending_reviews: number;
   recent_feedback: number;
+}
+
+export interface BillingOverview {
+  plan?: { id: string; key: string; name: string } | null;
+  subscription?: {
+    id: string;
+    status: string;
+    starts_at: string;
+    ends_at?: string | null;
+    trial_ends_at?: string | null;
+    current_period_start?: string | null;
+    current_period_end?: string | null;
+    billing_interval?: string | null;
+    currency?: string | null;
+    provider?: string | null;
+    cancel_at_period_end: boolean;
+  } | null;
+  current_period_spend: number;
+  currency?: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
+  next_invoice?: {
+    id: string;
+    status: string;
+    total_amount: number;
+    currency: string;
+    issued_at?: string | null;
+    due_at?: string | null;
+    paid_at?: string | null;
+  } | null;
+}
+
+export interface BillingUsageItem {
+  event_key: string;
+  meter_name: string;
+  units: number;
+  amount: number;
+  currency: string;
+}
+
+export interface BillingUsageResponse {
+  from_date?: string | null;
+  to_date?: string | null;
+  items: BillingUsageItem[];
+}
+
+export interface BillingInvoiceLine {
+  id: string;
+  description: string;
+  quantity: number;
+  unit_amount: number;
+  total_amount: number;
+  currency: string;
+}
+
+export interface BillingInvoice {
+  id: string;
+  status: string;
+  currency: string;
+  subtotal_amount: number;
+  total_amount: number;
+  issued_at?: string | null;
+  due_at?: string | null;
+  paid_at?: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
+  lines: BillingInvoiceLine[];
 }

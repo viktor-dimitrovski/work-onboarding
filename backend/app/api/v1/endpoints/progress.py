@@ -10,7 +10,15 @@ from app.models.rbac import User
 from app.multitenancy.deps import TenantContext, require_tenant_membership
 from app.multitenancy.permissions import require_access
 from app.schemas.assignment import AssignmentTaskOut, NextTaskResponse
-from app.schemas.progress import MentorReviewCreate, MentorReviewOut, QuizAttemptOut, TaskSubmissionCreate, TaskSubmissionOut
+from app.schemas.progress import (
+    ChecklistItemUpdate,
+    MentorReviewCreate,
+    MentorReviewOut,
+    QuizAttemptOut,
+    TaskSubmissionCreate,
+    TaskSubmissionOut,
+)
+from app.schemas.track import TaskResourceOut
 from app.models.assignment import QuizAttempt
 from app.services import assignment_service, audit_service, progress_service, usage_service
 
@@ -77,6 +85,50 @@ def submit_task(
         )
     db.commit()
     return TaskSubmissionOut.model_validate(submission)
+
+
+@router.patch('/assignments/{assignment_id}/tasks/{task_id}/checklist', response_model=AssignmentTaskOut)
+def update_checklist_item(
+    assignment_id: UUID,
+    task_id: UUID,
+    payload: ChecklistItemUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assignments', 'assignments:submit')),
+) -> AssignmentTaskOut:
+    assignment = assignment_service.get_assignment_by_id(db, assignment_id)
+    roles = set(ctx.roles)
+    if {'member', 'parent'} & roles and assignment.employee_id != current_user.id and not {'tenant_admin', 'manager'} & roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Employees can only update their own assignments',
+        )
+
+    task = progress_service.update_checklist_item(
+        db,
+        assignment_id=assignment_id,
+        task_id=task_id,
+        employee_id=assignment.employee_id,
+        item_id=payload.item_id,
+        checked=payload.checked,
+        comment=payload.comment,
+    )
+    usage_service.record_event(
+        db,
+        tenant_id=ctx.tenant.id,
+        event_key='assignment.checklist_update',
+        quantity=1.0,
+        actor_user_id=current_user.id,
+        meta={'assignment_id': str(assignment_id), 'task_id': str(task_id), 'item_id': payload.item_id},
+    )
+    db.commit()
+
+    task_out = AssignmentTaskOut.model_validate(task)
+    resources_by_source_id = assignment_service.extract_task_resources(assignment.snapshot_json)
+    raw_resources = resources_by_source_id.get(str(task.source_task_id), [])
+    task_out.resources = [TaskResourceOut.model_validate(resource) for resource in raw_resources]
+    return task_out
 
 
 @router.post('/assignments/{assignment_id}/tasks/{task_id}/review', response_model=MentorReviewOut)

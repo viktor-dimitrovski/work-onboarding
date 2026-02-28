@@ -42,26 +42,14 @@ function updateResource(task: DraftTask, update: Partial<DraftResource>) {
 }
 
 export function TaskDetailsSheet({ open, onOpenChange, task, phase, onUpdateTask }: TaskDetailsSheetProps) {
-  if (!task) {
-    return (
-      <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent side='right' />
-      </Sheet>
-    );
-  }
-
-  const metadata = (task.metadata ?? {}) as Record<string, any>;
-  const quizMeta = (metadata.quiz ?? {}) as Record<string, any>;
-  const fileUploadMeta = (metadata.file_upload ?? {}) as Record<string, any>;
-  const mentorMeta = (metadata.mentor ?? {}) as Record<string, any>;
-  const assessmentMeta = (metadata.assessment ?? {}) as Record<string, any>;
-  const questions = (quizMeta.questions ?? []) as QuizQuestion[];
   const { accessToken } = useAuth();
   const [assessmentTests, setAssessmentTests] = useState<AssessmentTest[]>([]);
 
+  const taskType = task?.task_type ?? null;
+
   useEffect(() => {
     const loadTests = async () => {
-      if (!accessToken || !open || task.task_type !== 'assessment_test') return;
+      if (!accessToken || !open || taskType !== 'assessment_test') return;
       try {
         const response = await api.get<{ items: AssessmentTest[] }>(
           '/assessments/tests?page=1&page_size=100&status=published',
@@ -74,7 +62,24 @@ export function TaskDetailsSheet({ open, onOpenChange, task, phase, onUpdateTask
     };
 
     void loadTests();
-  }, [accessToken, open, task.task_type]);
+  }, [accessToken, open, taskType]);
+
+  if (!task) {
+    return (
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent side='right' />
+      </Sheet>
+    );
+  }
+
+  const metadata = (task.metadata ?? {}) as Record<string, any>;
+  const quizMeta = (metadata.quiz ?? {}) as Record<string, any>;
+  const checklistMeta = (metadata.checklist ?? {}) as Record<string, any>;
+  const fileUploadMeta = (metadata.file_upload ?? {}) as Record<string, any>;
+  const mentorMeta = (metadata.mentor ?? {}) as Record<string, any>;
+  const assessmentMeta = (metadata.assessment ?? {}) as Record<string, any>;
+  const questions = (quizMeta.questions ?? []) as QuizQuestion[];
+  const checklistItems = (checklistMeta.items ?? []) as Array<{ id: string; text: string; required?: boolean }>;
 
   const setMetadata = (next: Record<string, any>) => onUpdateTask({ metadata: next });
 
@@ -93,6 +98,27 @@ export function TaskDetailsSheet({ open, onOpenChange, task, phase, onUpdateTask
       task.task_type === 'video' ? 'video_link' : task.task_type === 'read_material' ? 'external_url' : 'external_url';
     const nextResource = updateResource(task, { ...update, resource_type: resourceType });
     onUpdateTask({ resources: [nextResource] });
+  };
+
+  const updateChecklistItems = (nextItems: Array<{ id: string; text: string; required?: boolean }>) => {
+    setMetadata({
+      ...metadata,
+      checklist: {
+        ...checklistMeta,
+        items: nextItems,
+      },
+    });
+  };
+
+  const addChecklistItem = () => {
+    updateChecklistItems([
+      ...checklistItems,
+      {
+        id: buildId('chk'),
+        text: 'New checklist item',
+        required: true,
+      },
+    ]);
   };
 
   const isResourceTask = ['read_material', 'video', 'external_link', 'code_assignment'].includes(task.task_type);
@@ -197,6 +223,59 @@ export function TaskDetailsSheet({ open, onOpenChange, task, phase, onUpdateTask
                     placeholder='https://...'
                   />
                 </div>
+              </div>
+            )}
+
+            {task.task_type === 'checklist' && (
+              <div className='space-y-3 rounded-md border bg-muted/30 p-3'>
+                <div className='flex items-center justify-between'>
+                  <p className='text-sm font-medium'>Checklist items</p>
+                  <Button type='button' size='sm' variant='outline' onClick={addChecklistItem}>
+                    Add item
+                  </Button>
+                </div>
+
+                {checklistItems.length === 0 ? (
+                  <p className='text-xs text-muted-foreground'>No checklist items yet.</p>
+                ) : (
+                  <div className='space-y-2'>
+                    {checklistItems.map((item, index) => (
+                      <div key={item.id} className='grid gap-2 md:grid-cols-[1fr,120px,auto]'>
+                        <Input
+                          value={item.text}
+                          onChange={(event) => {
+                            const next = [...checklistItems];
+                            next[index] = { ...next[index], text: event.target.value };
+                            updateChecklistItems(next);
+                          }}
+                          placeholder='Checklist item'
+                        />
+                        <label className='flex items-center gap-2 text-sm'>
+                          <input
+                            type='checkbox'
+                            checked={item.required !== false}
+                            onChange={(event) => {
+                              const next = [...checklistItems];
+                              next[index] = { ...next[index], required: event.target.checked };
+                              updateChecklistItems(next);
+                            }}
+                          />
+                          Required
+                        </label>
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='sm'
+                          onClick={() => {
+                            updateChecklistItems(checklistItems.filter((_, idx) => idx !== index));
+                          }}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

@@ -31,11 +31,19 @@ const createUserSchema = z.object({
 
 type CreateUserValues = z.infer<typeof createUserSchema>;
 
+const addExistingSchema = z.object({
+  email: z.string().email(),
+  tenant_role: z.string().min(1, 'Select a tenant role'),
+});
+
+type AddExistingValues = z.infer<typeof addExistingSchema>;
+
 export default function UsersPage() {
   const { accessToken } = useAuth();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showDisabled, setShowDisabled] = useState(false);
 
   const form = useForm<CreateUserValues>({
     resolver: zodResolver(createUserSchema),
@@ -47,12 +55,23 @@ export default function UsersPage() {
     },
   });
 
+  const addExistingForm = useForm<AddExistingValues>({
+    resolver: zodResolver(addExistingSchema),
+    defaultValues: {
+      email: '',
+      tenant_role: 'member',
+    },
+  });
+
   const loadUsers = async () => {
     if (!accessToken) return;
     setLoading(true);
     setError(null);
     try {
-      const response = await api.get<UserListResponse>('/users?page=1&page_size=100', accessToken);
+      const response = await api.get<UserListResponse>(
+        `/users?page=1&page_size=100&include_disabled=${showDisabled ? 'true' : 'false'}`,
+        accessToken,
+      );
       setUsers(response.items);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load users');
@@ -63,7 +82,7 @@ export default function UsersPage() {
 
   useEffect(() => {
     void loadUsers();
-  }, [accessToken]);
+  }, [accessToken, showDisabled]);
 
   const onSubmit = form.handleSubmit(async (values) => {
     if (!accessToken) return;
@@ -82,11 +101,58 @@ export default function UsersPage() {
     }
   });
 
+  const onAddExisting = addExistingForm.handleSubmit(async (values) => {
+    if (!accessToken) return;
+    setError(null);
+    try {
+      await api.post('/users/add-existing', values, accessToken);
+      addExistingForm.reset({ email: '', tenant_role: 'member' });
+      await loadUsers();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Failed to add existing user');
+    }
+  });
+
+  const setMembershipStatus = async (user: UserRow, nextStatus: 'active' | 'disabled') => {
+    if (!accessToken) return;
+    setError(null);
+    try {
+      await api.put(`/users/${user.id}/membership`, { status: nextStatus }, accessToken);
+      await loadUsers();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Failed to update user status');
+    }
+  };
+
+  const removeFromTenant = async (user: UserRow) => {
+    if (!accessToken) return;
+    // eslint-disable-next-line no-alert
+    const ok = window.confirm(`Remove ${user.email} from this tenant?`);
+    if (!ok) return;
+    setError(null);
+    try {
+      await api.delete(`/users/${user.id}/membership`, accessToken);
+      await loadUsers();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Failed to remove user from tenant');
+    }
+  };
+
   if (loading) return <LoadingState label='Loading users...' />;
 
   return (
     <div className='space-y-6'>
-      <h2 className='text-2xl font-semibold'>Users</h2>
+      <div className='flex flex-wrap items-center justify-between gap-3'>
+        <h2 className='text-2xl font-semibold'>Users</h2>
+        <label className='flex items-center gap-2 text-sm text-muted-foreground'>
+          <input
+            type='checkbox'
+            checked={showDisabled}
+            onChange={(e) => setShowDisabled(e.target.checked)}
+          />
+          Show disabled
+        </label>
+      </div>
 
       <Card>
         <CardHeader>
@@ -149,6 +215,50 @@ export default function UsersPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>Add existing user</CardTitle>
+          <CardDescription>
+            If the user already exists in the database (created by another tenant), add them to this tenant.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className='grid gap-4 md:grid-cols-2' onSubmit={onAddExisting}>
+            <div className='space-y-2'>
+              <Label>Email</Label>
+              <Input type='email' {...addExistingForm.register('email')} />
+              {addExistingForm.formState.errors.email && (
+                <p className='text-xs text-destructive'>{addExistingForm.formState.errors.email.message}</p>
+              )}
+            </div>
+            <div className='space-y-2'>
+              <Label>Tenant role</Label>
+              <select
+                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                {...addExistingForm.register('tenant_role')}
+              >
+                {tenantRoleOptions.map((role) => (
+                  <option key={role} value={role}>
+                    {role.replace('_', ' ')}
+                  </option>
+                ))}
+              </select>
+              {addExistingForm.formState.errors.tenant_role && (
+                <p className='text-xs text-destructive'>{addExistingForm.formState.errors.tenant_role.message}</p>
+              )}
+            </div>
+
+            {error && <p className='text-sm text-destructive md:col-span-2'>{error}</p>}
+
+            <div className='flex flex-col gap-3 md:col-span-2 md:flex-row md:items-center md:justify-end'>
+              <Button className='w-full md:w-auto' type='submit' disabled={addExistingForm.formState.isSubmitting}>
+                {addExistingForm.formState.isSubmitting ? 'Adding...' : 'Add to tenant'}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>User directory</CardTitle>
         </CardHeader>
         <CardContent>
@@ -162,8 +272,24 @@ export default function UsersPage() {
                     <p className='font-medium'>{user.full_name}</p>
                     <p className='text-xs text-muted-foreground'>{user.email}</p>
                   </div>
-                  <div className='flex flex-wrap gap-1'>
+                  <div className='flex flex-wrap items-center gap-2'>
                     <StatusChip status={(user.tenant_role || 'member').replace('_', ' ')} />
+                    {user.tenant_status && user.tenant_status !== 'active' && (
+                      <StatusChip status={user.tenant_status} />
+                    )}
+                    <div className='flex items-center gap-2'>
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant='outline'
+                        onClick={() => setMembershipStatus(user, user.tenant_status === 'disabled' ? 'active' : 'disabled')}
+                      >
+                        {user.tenant_status === 'disabled' ? 'Enable' : 'Disable'}
+                      </Button>
+                      <Button type='button' size='sm' variant='outline' onClick={() => removeFromTenant(user)}>
+                        Remove
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))}

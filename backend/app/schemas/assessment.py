@@ -80,6 +80,14 @@ class AssessmentClassificationJobCreate(BaseModel):
     mode: str = Field(default='unclassified_only')
     dry_run: bool = False
     batch_size: int = Field(default=25, ge=5, le=50)
+    scope: str = Field(default='all_matching')  # all_matching | selected
+    question_ids: list[UUID] = Field(default_factory=list)
+    # Optional filters (same as list endpoint). Used when scope=all_matching and caller wants "current filters only".
+    status: str | None = None
+    q: str | None = None
+    tag: str | None = None
+    difficulty: str | None = None
+    category: str | None = None
 
 
 class AssessmentClassificationJobOut(BaseSchema):
@@ -89,8 +97,80 @@ class AssessmentClassificationJobOut(BaseSchema):
     processed: int
     error_summary: str | None
     report_json: dict[str, Any] = Field(default_factory=dict)
+    mode: str | None = None
+    dry_run: bool | None = None
+    batch_size: int | None = None
+    scope_json: dict[str, Any] = Field(default_factory=dict)
+    cancel_requested: bool | None = None
+    pause_requested: bool | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    applied_at: datetime | None = None
+    rolled_back_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class AssessmentClassificationJobItemOut(BaseSchema):
+    id: UUID
+    job_id: UUID
+    question_id: UUID
+    old_category_id: UUID | None = None
+    old_difficulty: str | None = None
+    new_category_name: str
+    new_category_slug: str
+    new_category_id: UUID | None = None
+    new_difficulty: str
+    applied: bool
+    applied_at: datetime | None = None
+    error_summary: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssessmentClassificationJobItemListResponse(BaseModel):
+    items: list[AssessmentClassificationJobItemOut]
+    meta: PaginationMeta
+
+
+class AssessmentQuestionStatsOut(BaseModel):
+    total: int
+    unclassified_category: int
+    unclassified_difficulty: int
+    by_status: dict[str, int] = Field(default_factory=dict)
+    by_difficulty: dict[str, int] = Field(default_factory=dict)
+    by_category: dict[str, int] = Field(default_factory=dict)  # slug -> count; includes 'unclassified'
+
+
+class AssessmentTagSuggestionOut(BaseModel):
+    tag: str
+    count: int
+
+
+class AssessmentTagSuggestionResponse(BaseModel):
+    items: list[AssessmentTagSuggestionOut] = Field(default_factory=list)
+
+
+class AssessmentQuestionsBulkUpdate(BaseModel):
+    scope: str = Field(default='selected')  # selected | all_matching
+    question_ids: list[UUID] = Field(default_factory=list)
+    # Same filter params as list endpoint (used when scope=all_matching)
+    status: str | None = None
+    q: str | None = None
+    tag: str | None = None
+    difficulty: str | None = None
+    category: str | None = None
+
+    action: str  # set_status | set_category | set_difficulty | add_tags | remove_tags | replace_tags
+    status_value: str | None = None
+    category_id: UUID | None = None
+    difficulty_value: str | None = None
+    tags_value: list[str] = Field(default_factory=list)
+
+
+class AssessmentBulkUpdateResult(BaseModel):
+    updated_count: int
 
 
 class AssessmentPdfImportResponse(BaseModel):

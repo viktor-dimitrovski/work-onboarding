@@ -17,6 +17,10 @@ frontend/.next/
 backend/.env
 frontend/.env.local
 
+# Ops
+ops/ops.env
+ops/_backups/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -8,7 +8,7 @@ from app.models.track import TrackTemplate
 
 
 def _set_tenant(db, tenant_id: uuid.UUID) -> None:
-    db.execute(text("SET LOCAL app.tenant_id = :tenant_id"), {"tenant_id": str(tenant_id)})
+    db.execute(text("select set_config('app.tenant_id', :tenant_id, true)"), {"tenant_id": str(tenant_id)})
 
 
 def _enable_rls(db, table: str) -> None:

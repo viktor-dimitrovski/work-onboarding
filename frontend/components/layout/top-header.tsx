@@ -12,7 +12,7 @@ export function TopHeader() {
   return (
     <header className='flex items-center justify-between border-b bg-white/70 px-6 py-3 backdrop-blur'>
       <div>
-        <p className='text-xs uppercase tracking-[0.14em] text-muted-foreground'>Employee Onboarding Platform</p>
+        <p className='text-xs uppercase tracking-[0.14em] text-muted-foreground'>Tracks, assessments, and much more</p>
         <h1 className='text-lg font-semibold'>Welcome, {user?.full_name ?? 'User'}</h1>
       </div>
       <div className='flex items-center gap-3'>
