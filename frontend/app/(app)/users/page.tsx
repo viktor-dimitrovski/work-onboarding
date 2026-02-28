@@ -44,6 +44,8 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showDisabled, setShowDisabled] = useState(false);
+  const [query, setQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
 
   const form = useForm<CreateUserValues>({
     resolver: zodResolver(createUserSchema),
@@ -68,10 +70,14 @@ export default function UsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await api.get<UserListResponse>(
-        `/users?page=1&page_size=100&include_disabled=${showDisabled ? 'true' : 'false'}`,
-        accessToken,
-      );
+      const params = new URLSearchParams();
+      params.set('page', '1');
+      params.set('page_size', '100');
+      params.set('include_disabled', showDisabled ? 'true' : 'false');
+      if (roleFilter) {
+        params.set('role', roleFilter);
+      }
+      const response = await api.get<UserListResponse>(`/users?${params.toString()}`, accessToken);
       setUsers(response.items);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load users');
@@ -82,7 +88,7 @@ export default function UsersPage() {
 
   useEffect(() => {
     void loadUsers();
-  }, [accessToken, showDisabled]);
+  }, [accessToken, showDisabled, roleFilter]);
 
   const onSubmit = form.handleSubmit(async (values) => {
     if (!accessToken) return;
@@ -137,6 +143,14 @@ export default function UsersPage() {
       setError(submitError instanceof Error ? submitError.message : 'Failed to remove user from tenant');
     }
   };
+
+  const filteredUsers = users.filter((user) => {
+    if (!query.trim()) return true;
+    const needle = query.trim().toLowerCase();
+    return (
+      (user.full_name || '').toLowerCase().includes(needle) || user.email.toLowerCase().includes(needle)
+    );
+  });
 
   if (loading) return <LoadingState label='Loading users...' />;
 
@@ -262,11 +276,44 @@ export default function UsersPage() {
           <CardTitle>User directory</CardTitle>
         </CardHeader>
         <CardContent>
-          {users.length === 0 ? (
+          <div className='mb-4 flex flex-wrap items-center gap-2'>
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder='Search by name or email...'
+              className='max-w-sm'
+            />
+            <select
+              className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+              value={roleFilter}
+              onChange={(event) => setRoleFilter(event.target.value)}
+            >
+              <option value=''>All roles</option>
+              {tenantRoleOptions.map((role) => (
+                <option key={role} value={role}>
+                  {role.replace('_', ' ')}
+                </option>
+              ))}
+            </select>
+            {(query || roleFilter) && (
+              <Button
+                type='button'
+                variant='ghost'
+                onClick={() => {
+                  setQuery('');
+                  setRoleFilter('');
+                }}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+
+          {filteredUsers.length === 0 ? (
             <EmptyState title='No users found' description='Create your first user account.' />
           ) : (
             <div className='space-y-2'>
-              {users.map((user) => (
+              {filteredUsers.map((user) => (
                 <div key={user.id} className='flex flex-wrap items-center justify-between rounded-md border p-3'>
                   <div>
                     <p className='font-medium'>{user.full_name}</p>

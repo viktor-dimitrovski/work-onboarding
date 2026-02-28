@@ -1,7 +1,8 @@
 import uuid
+from typing import Any
 
 from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
@@ -22,6 +23,7 @@ class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(63), nullable=False, index=True)
     tenant_type: Mapped[str] = mapped_column(String(20), nullable=False, default='company')
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    settings_json: Mapped[dict[str, Any]] = mapped_column('settings', JSONB, nullable=False, default=dict)
 
     domains: Mapped[list['TenantDomain']] = relationship(
         back_populates='tenant', cascade='all, delete-orphan'

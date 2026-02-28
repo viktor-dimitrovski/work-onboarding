@@ -1,7 +1,7 @@
 "use client";
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
@@ -31,6 +31,7 @@ export default function WorkOrdersPage() {
   const [items, setItems] = useState<WorkOrderSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
+  const [yearFilter, setYearFilter] = useState('');
 
   const canWrite = hasModule('releases') && hasPermission('releases:write');
 
@@ -38,7 +39,9 @@ export default function WorkOrdersPage() {
     if (!accessToken) return;
     setLoading(true);
     try {
-      const qs = q ? `?q=${encodeURIComponent(q)}` : '';
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      const qs = params.toString();
       const response = await api.get<WorkOrderListResponse>(`/work-orders${qs}`, accessToken);
       setItems(response.items);
     } finally {
@@ -49,6 +52,20 @@ export default function WorkOrdersPage() {
   useEffect(() => {
     void load();
   }, [accessToken]);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      void load(query.trim() || undefined);
+    }, 350);
+    return () => clearTimeout(handler);
+  }, [query, accessToken]);
+
+  const yearOptions = useMemo(() => {
+    const values = new Set(items.map((item) => item.year).filter(Boolean));
+    return Array.from(values).sort().reverse();
+  }, [items]);
+
+  const filteredItems = items.filter((item) => (yearFilter ? item.year === yearFilter : true));
 
   if (loading) return <LoadingState label='Loading work orders...' />;
 
@@ -73,28 +90,34 @@ export default function WorkOrdersPage() {
           placeholder='Search WO id, title, or service...'
           className='max-w-sm'
         />
-        <Button
-          type='button'
-          variant='outline'
-          onClick={() => {
-            void load(query.trim());
-          }}
+        <select
+          className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+          value={yearFilter}
+          onChange={(event) => setYearFilter(event.target.value)}
         >
-          Search
-        </Button>
-        <Button
-          type='button'
-          variant='ghost'
-          onClick={() => {
-            setQuery('');
-            void load();
-          }}
-        >
-          Reset
-        </Button>
+          <option value=''>All years</option>
+          {yearOptions.map((year) => (
+            <option key={year} value={year}>
+              {year}
+            </option>
+          ))}
+        </select>
+        {(query || yearFilter) && (
+          <Button
+            type='button'
+            variant='ghost'
+            onClick={() => {
+              setQuery('');
+              setYearFilter('');
+              void load();
+            }}
+          >
+            Clear
+          </Button>
+        )}
       </div>
 
-      {items.length === 0 ? (
+      {filteredItems.length === 0 ? (
         <EmptyState title='No work orders' description='Create the first WO to start tracking delivery scope.' />
       ) : (
         <Card>
@@ -102,7 +125,7 @@ export default function WorkOrdersPage() {
             <CardTitle className='text-base'>Recent Work Orders</CardTitle>
           </CardHeader>
           <CardContent className='space-y-2'>
-            {items.map((item) => (
+            {filteredItems.map((item) => (
               <Link
                 key={item.wo_id}
                 href={`/work-orders/${item.wo_id}`}

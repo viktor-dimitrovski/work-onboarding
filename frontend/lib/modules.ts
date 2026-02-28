@@ -89,20 +89,13 @@ export const MODULES: ModuleDefinition[] = [
     label: 'Assessments',
     description: 'Question bank, tests, deliveries, and results.',
     icon: FileQuestion,
-    defaultHref: '/assessments',
+    defaultHref: '/assessments/questions',
     routeMatchers: ['/assessments'],
     moduleKeys: ['assessments'],
     navItems: [
       {
-        href: '/assessments',
-        label: 'Overview',
-        icon: FileQuestion,
-        moduleKey: 'assessments',
-        permission: 'assessments:read',
-      },
-      {
         href: '/assessments/questions',
-        label: 'Questions',
+        label: 'Question Bank',
         icon: FileText,
         moduleKey: 'assessments',
         permission: 'assessments:read',
@@ -173,7 +166,7 @@ export const MODULES: ModuleDefinition[] = [
     navItems: [
       {
         href: '/billing',
-        label: 'Billing overview',
+        label: 'Billing',
         icon: CreditCard,
         moduleKey: 'billing',
         permission: 'billing:read',
@@ -186,7 +179,7 @@ export const MODULES: ModuleDefinition[] = [
     description: 'User access, tenant settings, and configuration.',
     icon: Settings,
     defaultHref: '/users',
-    routeMatchers: ['/users', '/settings'],
+    routeMatchers: ['/users', '/settings', '/notifications', '/audit'],
     moduleKeys: ['users', 'settings'],
     navItems: [
       {
@@ -200,6 +193,20 @@ export const MODULES: ModuleDefinition[] = [
         href: '/settings',
         label: 'Settings',
         icon: Settings,
+        moduleKey: 'settings',
+        permission: 'settings:manage',
+      },
+      {
+        href: '/notifications',
+        label: 'Notifications',
+        icon: Bell,
+        moduleKey: 'settings',
+        permission: 'settings:manage',
+      },
+      {
+        href: '/audit',
+        label: 'Audit log',
+        icon: FileText,
         moduleKey: 'settings',
         permission: 'settings:manage',
       },
@@ -220,24 +227,6 @@ export const MODULES: ModuleDefinition[] = [
         icon: FileText,
         moduleKey: 'reports',
         permission: 'reports:read',
-      },
-    ],
-  },
-  {
-    id: 'notifications',
-    label: 'Notifications',
-    description: 'Alerts, templates, and delivery preferences.',
-    icon: Bell,
-    defaultHref: '/notifications',
-    routeMatchers: ['/notifications'],
-    moduleKeys: ['notifications', 'settings'],
-    navItems: [
-      {
-        href: '/notifications',
-        label: 'Notification center',
-        icon: Bell,
-        moduleKey: 'settings',
-        permission: 'settings:manage',
       },
     ],
   },

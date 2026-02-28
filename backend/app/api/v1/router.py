@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.v1.endpoints import (
     admin,
+    audit,
     assessments,
     assignments,
     auth,
@@ -11,6 +12,7 @@ from app.api.v1.endpoints import (
     reports,
     release_manifests,
     release_center,
+    settings,
     tracks,
     usage,
     users,
@@ -32,6 +34,8 @@ api_router.include_router(progress.router, dependencies=[Depends(require_tenant_
 api_router.include_router(reports.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(assessments.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(tenants.router, dependencies=[Depends(require_tenant_membership)])
+api_router.include_router(audit.router, dependencies=[Depends(require_tenant_membership)])
+api_router.include_router(settings.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(usage.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(billing.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(work_orders.router, dependencies=[Depends(require_tenant_membership)])

@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 export type TrackPurposeItem = { value: string; label: string };
 
@@ -48,6 +51,7 @@ function saveStoredItems(items: TrackPurposeItem[]): void {
 }
 
 export function useTrackPurposeLabels() {
+  const { accessToken } = useAuth();
   const [items, setItems] = useState<TrackPurposeItem[]>(DEFAULT_ITEMS);
 
   useEffect(() => {
@@ -56,6 +60,27 @@ export function useTrackPurposeLabels() {
     window.addEventListener(LABELS_UPDATED_EVENT, load);
     return () => window.removeEventListener(LABELS_UPDATED_EVENT, load);
   }, []);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let isMounted = true;
+    api
+      .get<{ track_purpose_labels?: TrackPurposeItem[] }>('/settings', accessToken)
+      .then((data) => {
+        if (!isMounted) return;
+        const remote = data?.track_purpose_labels;
+        if (Array.isArray(remote) && remote.length > 0) {
+          setItems(remote);
+          saveStoredItems(remote);
+        }
+      })
+      .catch(() => {
+        // ignore remote fetch failures, keep local data
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [accessToken]);
 
   const options = useMemo(
     () => items.map(({ value, label }) => ({ value, label })),
@@ -73,11 +98,22 @@ export function useTrackPurposeLabels() {
     [items],
   );
 
+  const persistRemote = useCallback(
+    (next: TrackPurposeItem[]) => {
+      if (!accessToken) return;
+      api.put('/settings', { track_purpose_labels: next }, accessToken).catch(() => {
+        // ignore persistence errors for now; local state is still updated
+      });
+    },
+    [accessToken],
+  );
+
   const updateItems = (next: TrackPurposeItem[]) => {
     const valid = next.filter((i) => i.value.trim() && i.label.trim());
     if (valid.length === 0) return;
     setItems(valid);
     saveStoredItems(valid);
+    persistRemote(valid);
   };
 
   const addPurpose = (label: string) => {

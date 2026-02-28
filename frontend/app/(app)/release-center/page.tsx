@@ -49,6 +49,7 @@ export default function ReleaseCenterPage() {
   const [loading, setLoading] = useState(true);
   const [envFilter, setEnvFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [query, setQuery] = useState('');
   const [templates, setTemplates] = useState<ReleaseTemplateOption[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -96,6 +97,16 @@ export default function ReleaseCenterPage() {
   if (!canRead) {
     return <EmptyState title='Access denied' description='You do not have access to Release Center.' />;
   }
+  const filteredItems = items.filter((item) => {
+    if (!query.trim()) return true;
+    const needle = query.trim().toLowerCase();
+    return (
+      item.title.toLowerCase().includes(needle) ||
+      (item.rel_id || '').toLowerCase().includes(needle) ||
+      (item.version_tag || '').toLowerCase().includes(needle)
+    );
+  });
+
   if (loading) return <LoadingState label='Loading releases...' />;
 
   return (
@@ -193,6 +204,12 @@ export default function ReleaseCenterPage() {
 
       <div className='flex flex-wrap items-center gap-2'>
         <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder='Search release id, version, or title...'
+          className='max-w-sm'
+        />
+        <Input
           value={envFilter}
           onChange={(event) => setEnvFilter(event.target.value)}
           placeholder='Filter env (prod/staging)'
@@ -211,6 +228,7 @@ export default function ReleaseCenterPage() {
           type='button'
           variant='ghost'
           onClick={() => {
+            setQuery('');
             setEnvFilter('');
             setStatusFilter('');
           }}
@@ -219,7 +237,7 @@ export default function ReleaseCenterPage() {
         </Button>
       </div>
 
-      {items.length === 0 ? (
+      {filteredItems.length === 0 ? (
         <EmptyState title='No releases' description='Create a release plan from a template to get started.' />
       ) : (
         <Card>
@@ -237,7 +255,7 @@ export default function ReleaseCenterPage() {
               <div>Gates</div>
               <div>Links</div>
             </div>
-            {items.map((item) => (
+            {filteredItems.map((item) => (
               <Link
                 key={item.assignment_id}
                 href={`/release-center/${item.assignment_id}`}

@@ -81,11 +81,18 @@ def list_assignments(
             return None
         return (user.full_name or "").strip() or (user.email or "").strip() or None
 
+    def display_email(user: User | None) -> str | None:
+        if not user:
+            return None
+        return (user.email or "").strip() or None
+
     payload: list[AssignmentOut] = []
     for item in assignments:
         assignment_out = AssignmentOut.model_validate(item)
         assignment_out.created_by_name = display_name(users_by_id.get(item.created_by))
         assignment_out.updated_by_name = display_name(users_by_id.get(item.updated_by))
+        assignment_out.created_by_email = display_email(users_by_id.get(item.created_by))
+        assignment_out.updated_by_email = display_email(users_by_id.get(item.updated_by))
         if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
             assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
         assignment_out = _add_task_resources(assignment_out, item)
@@ -152,11 +159,18 @@ def my_assignments(
             return None
         return (user.full_name or "").strip() or (user.email or "").strip() or None
 
+    def display_email(user: User | None) -> str | None:
+        if not user:
+            return None
+        return (user.email or "").strip() or None
+
     payload: list[AssignmentOut] = []
     for assignment in assignments:
         assignment_out = AssignmentOut.model_validate(assignment)
         assignment_out.created_by_name = display_name(users_by_id.get(assignment.created_by))
         assignment_out.updated_by_name = display_name(users_by_id.get(assignment.updated_by))
+        assignment_out.created_by_email = display_email(users_by_id.get(assignment.created_by))
+        assignment_out.updated_by_email = display_email(users_by_id.get(assignment.updated_by))
         assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
         assignment_out = _add_task_resources(assignment_out, assignment)
         payload.append(assignment_out)
@@ -178,9 +192,11 @@ def get_assignment(
     if assignment.created_by:
         user = db.scalar(select(User).where(User.id == assignment.created_by))
         assignment_out.created_by_name = ((user.full_name or '').strip() or (user.email or '').strip()) if user else None
+        assignment_out.created_by_email = (user.email or '').strip() if user else None
     if assignment.updated_by:
         user = db.scalar(select(User).where(User.id == assignment.updated_by))
         assignment_out.updated_by_name = ((user.full_name or '').strip() or (user.email or '').strip()) if user else None
+        assignment_out.updated_by_email = (user.email or '').strip() if user else None
     if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
         assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
     assignment_out = _add_task_resources(assignment_out, assignment)

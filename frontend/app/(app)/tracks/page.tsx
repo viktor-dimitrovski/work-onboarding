@@ -16,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useTenant } from '@/lib/tenant-context';
@@ -33,21 +34,45 @@ interface TrackListResponse {
 export default function TracksPage() {
   const { accessToken } = useAuth();
   const { hasModule, hasPermission } = useTenant();
-  const { getLabel: getPurposeLabel } = useTrackPurposeLabels();
+  const { getLabel: getPurposeLabel, options: purposeOptions } = useTrackPurposeLabels();
   const [tracks, setTracks] = useState<TrackTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusUpdatingId, setStatusUpdatingId] = useState<string | null>(null);
   const [trackToDelete, setTrackToDelete] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [purposeFilter, setPurposeFilter] = useState('');
 
   const canManageTracks = hasModule('tracks') && hasPermission('tracks:write');
+
+  const filteredTracks = tracks.filter((track) => {
+    if (purposeFilter && track.purpose !== purposeFilter) {
+      return false;
+    }
+    if (!query.trim()) {
+      return true;
+    }
+    const needle = query.trim().toLowerCase();
+    return (
+      track.title.toLowerCase().includes(needle) ||
+      (track.description || '').toLowerCase().includes(needle) ||
+      (track.role_target || '').toLowerCase().includes(needle)
+    );
+  });
 
   const loadTracks = async () => {
     if (!accessToken) return;
     setLoading(true);
     try {
-      const response = await api.get<TrackListResponse>('/tracks?page=1&page_size=100', accessToken);
+      const params = new URLSearchParams();
+      params.set('page', '1');
+      params.set('page_size', '100');
+      if (statusFilter) params.set('status', statusFilter);
+      if (roleFilter) params.set('role_target', roleFilter);
+      const response = await api.get<TrackListResponse>(`/tracks?${params.toString()}`, accessToken);
       setTracks(response.items);
     } finally {
       setLoading(false);
@@ -86,12 +111,8 @@ export default function TracksPage() {
   const getLabel = (value?: string) => getPurposeLabel(value);
 
   useEffect(() => {
-    const run = async () => {
-      await loadTracks();
-    };
-
-    void run();
-  }, [accessToken]);
+    void loadTracks();
+  }, [accessToken, statusFilter, roleFilter]);
 
   if (loading) return <LoadingState label='Loading tracks...' />;
 
@@ -102,16 +123,69 @@ export default function TracksPage() {
           <h2 className='text-2xl font-semibold'>Onboarding tracks</h2>
           <p className='text-sm text-muted-foreground'>Manage track templates and publication lifecycle.</p>
         </div>
-        <Button asChild>
-          <Link href='/tracks/new'>New track</Link>
-        </Button>
+        {canManageTracks && (
+          <Button asChild>
+            <Link href='/tracks/new'>New track</Link>
+          </Button>
+        )}
       </div>
 
-      {tracks.length === 0 ? (
+      <div className='flex flex-wrap items-center gap-2'>
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder='Search tracks by title, role, or description...'
+          className='max-w-sm'
+        />
+        <select
+          className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+        >
+          <option value=''>All statuses</option>
+          <option value='draft'>Draft</option>
+          <option value='published'>Published</option>
+          <option value='archived'>Archived</option>
+        </select>
+        <Input
+          value={roleFilter}
+          onChange={(event) => setRoleFilter(event.target.value)}
+          placeholder='Filter by role target'
+          className='max-w-[200px]'
+        />
+        <select
+          className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+          value={purposeFilter}
+          onChange={(event) => setPurposeFilter(event.target.value)}
+        >
+          <option value=''>All purposes</option>
+          {purposeOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        {(query || statusFilter || roleFilter || purposeFilter) && (
+          <Button
+            type='button'
+            variant='ghost'
+            onClick={() => {
+              setQuery('');
+              setStatusFilter('');
+              setRoleFilter('');
+              setPurposeFilter('');
+            }}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+
+      {filteredTracks.length === 0 ? (
         <EmptyState title='No tracks found' description='Create your first role-specific onboarding track.' />
       ) : (
         <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
-          {tracks.map((track) => {
+          {filteredTracks.map((track) => {
             const currentVersion = track.versions.find((version) => version.is_current) || track.versions[0];
             const hasDraft = track.versions.some((version) => version.status === 'draft');
             const isInactive = !track.is_active;

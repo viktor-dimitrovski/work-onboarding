@@ -76,6 +76,8 @@ class AssignmentOut(BaseSchema):
     updated_by: UUID | None = None
     created_by_name: str | None = None
     updated_by_name: str | None = None
+    created_by_email: str | None = None
+    updated_by_email: str | None = None
 
 
 class AssignmentListResponse(BaseModel):

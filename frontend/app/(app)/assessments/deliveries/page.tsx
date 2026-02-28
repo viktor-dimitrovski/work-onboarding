@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import type { AssessmentDelivery, AssessmentTest } from '@/lib/types';
+import type { AssessmentDelivery, AssessmentTest, UserRow } from '@/lib/types';
 
 interface DeliveryListResponse {
   items: AssessmentDelivery[];
@@ -23,10 +23,16 @@ interface TestListResponse {
   meta: { page: number; page_size: number; total: number };
 }
 
+interface UserListResponse {
+  items: UserRow[];
+  meta: { page: number; page_size: number; total: number };
+}
+
 export default function AssessmentDeliveriesPage() {
   const { accessToken } = useAuth();
   const [deliveries, setDeliveries] = useState<AssessmentDelivery[]>([]);
   const [tests, setTests] = useState<AssessmentTest[]>([]);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
 
@@ -34,6 +40,7 @@ export default function AssessmentDeliveriesPage() {
   const [title, setTitle] = useState('');
   const [audienceType, setAudienceType] = useState('campaign');
   const [participantUserId, setParticipantUserId] = useState('');
+  const [userQuery, setUserQuery] = useState('');
   const [attemptsAllowed, setAttemptsAllowed] = useState(1);
   const [durationMinutes, setDurationMinutes] = useState<number | ''>('');
   const [dueDate, setDueDate] = useState('');
@@ -42,10 +49,21 @@ export default function AssessmentDeliveriesPage() {
     if (!accessToken) return;
     setLoading(true);
     try {
-      const response = await api.get<DeliveryListResponse>('/assessments/deliveries?page=1&page_size=100', accessToken);
-      setDeliveries(response.items);
-      const testsResponse = await api.get<TestListResponse>('/assessments/tests?page=1&page_size=100', accessToken);
+      const [deliveryResponse, testsResponse] = await Promise.all([
+        api.get<DeliveryListResponse>('/assessments/deliveries?page=1&page_size=100', accessToken),
+        api.get<TestListResponse>('/assessments/tests?page=1&page_size=100', accessToken),
+      ]);
+      setDeliveries(deliveryResponse.items);
       setTests(testsResponse.items);
+      try {
+        const usersResponse = await api.get<UserListResponse>(
+          '/users?page=1&page_size=200&include_disabled=false',
+          accessToken,
+        );
+        setUsers(usersResponse.items);
+      } catch {
+        setUsers([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -54,6 +72,21 @@ export default function AssessmentDeliveriesPage() {
   useEffect(() => {
     void load();
   }, [accessToken]);
+
+  useEffect(() => {
+    if (audienceType !== 'assignment') {
+      setParticipantUserId('');
+      setUserQuery('');
+    }
+  }, [audienceType]);
+
+  const filteredUsers = users.filter((user) => {
+    if (!userQuery.trim()) return true;
+    const needle = userQuery.trim().toLowerCase();
+    return (
+      (user.full_name || '').toLowerCase().includes(needle) || user.email.toLowerCase().includes(needle)
+    );
+  });
 
   if (loading) return <LoadingState label='Loading deliveries...' />;
 
@@ -129,14 +162,29 @@ export default function AssessmentDeliveriesPage() {
                 <option value='assignment'>Assignment</option>
               </select>
             </div>
-            <div className='space-y-2'>
-              <Label>Participant user id (optional)</Label>
-              <Input
-                value={participantUserId}
-                onChange={(event) => setParticipantUserId(event.target.value)}
-                placeholder='UUID for a single user'
-              />
-            </div>
+            {audienceType === 'assignment' && (
+              <div className='space-y-2'>
+                <Label>Participant (optional)</Label>
+                <Input
+                  value={userQuery}
+                  onChange={(event) => setUserQuery(event.target.value)}
+                  placeholder='Search by name or email'
+                />
+                <select
+                  className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
+                  value={participantUserId}
+                  onChange={(event) => setParticipantUserId(event.target.value)}
+                >
+                  <option value=''>Select a user</option>
+                  {filteredUsers.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {(user.full_name || user.email).trim()} ({user.email})
+                    </option>
+                  ))}
+                </select>
+                <p className='text-xs text-muted-foreground'>Optional: limit the delivery to a single participant.</p>
+              </div>
+            )}
             <div className='grid gap-3 md:grid-cols-2'>
               <div className='space-y-2'>
                 <Label>Attempts allowed</Label>
@@ -175,7 +223,8 @@ export default function AssessmentDeliveriesPage() {
                     test_version_id: testVersionId,
                     title: title.trim() || null,
                     audience_type: audienceType,
-                    participant_user_id: participantUserId.trim() || null,
+                    participant_user_id:
+                      audienceType === 'assignment' ? participantUserId.trim() || null : null,
                     attempts_allowed: attemptsAllowed,
                     duration_minutes: durationMinutes || null,
                     due_date: dueDate || null,

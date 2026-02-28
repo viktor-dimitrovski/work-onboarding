@@ -174,8 +174,8 @@ export default function DashboardPage() {
                       </p>
                       <p className='mt-0.5 text-xs text-muted-foreground'>
                         Created {formatDateTime(assignment.created_at)} • By{' '}
-                        {assignment.created_by_name || shortId(assignment.created_by)} • Phases{' '}
-                        {assignment.phases?.length ?? 0} • Tasks{' '}
+                        {assignment.created_by_email || assignment.created_by_name || shortId(assignment.created_by)} •
+                        Phases {assignment.phases?.length ?? 0} • Tasks{' '}
                         {assignment.phases?.reduce((sum, phase) => sum + (phase.tasks?.length ?? 0), 0) ?? 0}
                       </p>
                       <div className='mt-2 flex items-center gap-3'>

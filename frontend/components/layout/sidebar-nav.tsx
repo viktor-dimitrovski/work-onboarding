@@ -29,9 +29,6 @@ export function SidebarNav() {
 
   const visibleModules = getVisibleModules(accessContext);
   const activeModule = getActiveModule(pathname);
-  const activeModuleAllowed =
-    activeModule && visibleModules.some((module) => module.id === activeModule.id) ? activeModule : null;
-  const moduleNavItems = activeModuleAllowed ? getModuleNavItems(activeModuleAllowed, accessContext) : [];
 
   return (
     <aside className='flex w-14 flex-col border-r bg-white/80 p-2 backdrop-blur sm:w-16 md:w-64 md:p-4'>
@@ -69,37 +66,54 @@ export function SidebarNav() {
           })}
         </div>
 
-        {activeModuleAllowed && moduleNavItems.length > 0 ? (
-          <div className='space-y-1'>
-            <p className='hidden px-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground md:block'>
-              {activeModuleAllowed.label}
-            </p>
-            {moduleNavItems.map((item) => {
-              const Icon = item.icon;
-              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  title={item.label}
-                  aria-label={item.label}
+        {visibleModules.length > 0 ? (
+          visibleModules.map((module) => {
+            const moduleNavItems = getModuleNavItems(module, accessContext);
+            if (moduleNavItems.length === 0) {
+              return null;
+            }
+            const isActiveModule = activeModule?.id === module.id;
+            const hasMyOnboarding = moduleNavItems.some((item) => item.href === '/my-onboarding');
+            return (
+              <div key={module.id} className='space-y-1'>
+                <p
                   className={cn(
-                    'flex items-center gap-3 rounded-md px-2 py-2 text-sm transition-colors justify-center md:justify-start md:px-3',
-                    active
-                      ? 'bg-primary text-primary-foreground shadow-soft'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    'hidden px-2 text-[10px] font-semibold uppercase tracking-[0.2em] md:block',
+                    isActiveModule ? 'text-foreground' : 'text-muted-foreground',
                   )}
                 >
-                  <Icon className='h-4 w-4' />
-                  <span className='hidden md:inline'>{item.label}</span>
-                </Link>
-              );
-            })}
-          </div>
+                  {module.label}
+                </p>
+                {moduleNavItems.map((item) => {
+                  const Icon = item.icon;
+                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  const displayLabel =
+                    module.id === 'onboarding' && item.href === '/assignments' && hasMyOnboarding
+                      ? 'All Assignments'
+                      : item.label;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      title={displayLabel}
+                      aria-label={displayLabel}
+                      className={cn(
+                        'flex items-center gap-3 rounded-md px-2 py-2 text-sm transition-colors justify-center md:justify-start md:px-3',
+                        active
+                          ? 'bg-primary text-primary-foreground shadow-soft'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                      )}
+                    >
+                      <Icon className='h-4 w-4' />
+                      <span className='hidden md:inline'>{displayLabel}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            );
+          })
         ) : (
-          <p className='hidden px-2 text-xs text-muted-foreground md:block'>
-            Select a module to see its menu.
-          </p>
+          <p className='hidden px-2 text-xs text-muted-foreground md:block'>No modules enabled.</p>
         )}
       </nav>
     </aside>

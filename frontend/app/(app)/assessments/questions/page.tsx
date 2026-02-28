@@ -7,6 +7,7 @@ import { QuestionEditorSheet } from '@/components/assessments/question-editor-sh
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -122,7 +123,17 @@ const getImportSource = (tags: string[]) => {
   return value || null;
 };
 
-function QuestionActionsMenu({ onEdit }: { onEdit: () => void }) {
+function QuestionActionsMenu({
+  onEdit,
+  onPreview,
+  onDuplicate,
+  onArchive,
+}: {
+  onEdit: () => void;
+  onPreview: () => void;
+  onDuplicate: () => void;
+  onArchive: () => void;
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -132,11 +143,11 @@ function QuestionActionsMenu({ onEdit }: { onEdit: () => void }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align='end'>
         <DropdownMenuItem onSelect={onEdit}>Edit</DropdownMenuItem>
-        <DropdownMenuItem disabled>Preview</DropdownMenuItem>
-        <DropdownMenuItem disabled>Duplicate</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onPreview}>Preview</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onDuplicate}>Duplicate</DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem disabled className='text-destructive'>
-          Delete
+        <DropdownMenuItem onSelect={onArchive} className='text-destructive focus:text-destructive'>
+          Archive
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -269,8 +280,10 @@ export default function AssessmentQuestionsPage() {
   const [classifyDryRun, setClassifyDryRun] = useState(false);
   const [classifyBatchSize, setClassifyBatchSize] = useState(25);
   const [classifyScope, setClassifyScope] = useState<'all_matching' | 'selected'>('all_matching');
-
-  const selectedQuestionIds = useMemo(() => [], []);
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
+  const [previewQuestion, setPreviewQuestion] = useState<AssessmentQuestion | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<{ ids: string[]; label: string } | null>(null);
+  const [archiving, setArchiving] = useState(false);
 
   const loadCategories = async () => {
     if (!accessToken) return;
@@ -379,6 +392,10 @@ export default function AssessmentQuestionsPage() {
     setPage(1);
   }, [query, selectedStatuses, selectedDifficulties, selectedTags, selectedCategories]);
 
+  useEffect(() => {
+    setSelectedQuestionIds((prev) => prev.filter((id) => questions.some((question) => question.id === id)));
+  }, [questions]);
+
   const availableTags = useMemo(() => {
     const tags = new Set<string>();
     questions.forEach((question) => {
@@ -470,6 +487,61 @@ export default function AssessmentQuestionsPage() {
     }
     return next;
   }, [questions, sort]);
+
+  const visibleQuestionIds = useMemo(() => sortedQuestions.map((question) => question.id), [sortedQuestions]);
+  const allVisibleSelected =
+    visibleQuestionIds.length > 0 && visibleQuestionIds.every((id) => selectedQuestionIds.includes(id));
+
+  const toggleSelect = (questionId: string) => {
+    setSelectedQuestionIds((prev) =>
+      prev.includes(questionId) ? prev.filter((id) => id !== questionId) : [...prev, questionId],
+    );
+  };
+
+  const toggleSelectAll = (checked: boolean) => {
+    setSelectedQuestionIds(checked ? visibleQuestionIds : []);
+  };
+
+  const archiveQuestions = async (ids: string[]) => {
+    if (!accessToken || ids.length === 0) return;
+    setArchiving(true);
+    try {
+      await api.post(
+        '/assessments/questions/bulk-update',
+        {
+          scope: 'selected',
+          question_ids: ids,
+          action: 'set_status',
+          status_value: 'archived',
+        },
+        accessToken,
+      );
+      setSelectedQuestionIds((prev) => prev.filter((id) => !ids.includes(id)));
+      await load();
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  const duplicateQuestion = async (question: AssessmentQuestion) => {
+    if (!accessToken) return;
+    const payload = {
+      prompt: `${question.prompt} (Copy)`,
+      question_type: question.question_type,
+      difficulty: question.difficulty,
+      category_id: question.category_id,
+      tags: question.tags,
+      status: 'draft',
+      explanation: question.explanation,
+      options: question.options.map((option) => ({
+        option_text: option.option_text,
+        is_correct: option.is_correct,
+        order_index: option.order_index,
+      })),
+    };
+    await api.post('/assessments/questions', payload, accessToken);
+    await load();
+  };
 
   const classifyReport = (classifyJob?.report_json as Record<string, unknown> | undefined) ?? undefined;
   const classifyUpdated = Number(classifyReport?.updated ?? 0);
@@ -679,9 +751,33 @@ export default function AssessmentQuestionsPage() {
                     Clear filters
                   </Button>
                 )}
+                <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                  <input
+                    type='checkbox'
+                    className='h-4 w-4 rounded border-input'
+                    checked={allVisibleSelected}
+                    onChange={(event) => toggleSelectAll(event.target.checked)}
+                    aria-label='Select all questions on page'
+                  />
+                  Select page
+                </label>
                 <span className='text-sm font-medium text-muted-foreground'>{resultsLabel}</span>
                 {selectedCount > 0 && (
                   <span className='text-xs text-muted-foreground'>{selectedCount} selected</span>
+                )}
+                {selectedCount > 0 && (
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    onClick={() =>
+                      setArchiveTarget({
+                        ids: selectedQuestionIds,
+                        label: `${selectedCount} question${selectedCount === 1 ? '' : 's'}`,
+                      })
+                    }
+                  >
+                    Archive selected
+                  </Button>
                 )}
                 {isRefreshing && <span className='text-xs text-muted-foreground'>Updating…</span>}
                 <select
@@ -823,14 +919,26 @@ export default function AssessmentQuestionsPage() {
                 <Card key={question.id} className='flex h-full flex-col transition-colors hover:border-primary/40'>
                   <CardHeader className='space-y-2 pb-2'>
                     <div className='flex items-start justify-between gap-2'>
-                      <CardTitle className='text-base font-semibold leading-snug line-clamp-2'>
-                        {question.prompt}
-                      </CardTitle>
+                      <div className='flex items-start gap-2'>
+                        <input
+                          type='checkbox'
+                          className='mt-1 h-4 w-4 rounded border-input'
+                          checked={selectedQuestionIds.includes(question.id)}
+                          onChange={() => toggleSelect(question.id)}
+                          aria-label='Select question'
+                        />
+                        <CardTitle className='text-base font-semibold leading-snug line-clamp-2'>
+                          {question.prompt}
+                        </CardTitle>
+                      </div>
                       <QuestionActionsMenu
                         onEdit={() => {
                           setEditing(question);
                           setEditorOpen(true);
                         }}
+                        onPreview={() => setPreviewQuestion(question)}
+                        onDuplicate={() => void duplicateQuestion(question)}
+                        onArchive={() => setArchiveTarget({ ids: [question.id], label: 'this question' })}
                       />
                     </div>
                     <QuestionMetaBadges question={question} />
@@ -846,16 +954,28 @@ export default function AssessmentQuestionsPage() {
               {sortedQuestions.map((question) => (
                 <Card key={question.id} className='transition-colors hover:border-primary/40'>
                   <CardContent className='flex items-start justify-between gap-4 py-3'>
-                    <div className='min-w-0 flex-1 space-y-2'>
-                      <p className='text-sm font-semibold leading-snug line-clamp-2'>{question.prompt}</p>
-                      <QuestionMetaBadges question={question} />
-                      <QuestionFooterMeta question={question} />
+                    <div className='flex min-w-0 flex-1 items-start gap-3'>
+                      <input
+                        type='checkbox'
+                        className='mt-1 h-4 w-4 rounded border-input'
+                        checked={selectedQuestionIds.includes(question.id)}
+                        onChange={() => toggleSelect(question.id)}
+                        aria-label='Select question'
+                      />
+                      <div className='min-w-0 flex-1 space-y-2'>
+                        <p className='text-sm font-semibold leading-snug line-clamp-2'>{question.prompt}</p>
+                        <QuestionMetaBadges question={question} />
+                        <QuestionFooterMeta question={question} />
+                      </div>
                     </div>
                     <QuestionActionsMenu
                       onEdit={() => {
                         setEditing(question);
                         setEditorOpen(true);
                       }}
+                      onPreview={() => setPreviewQuestion(question)}
+                      onDuplicate={() => void duplicateQuestion(question)}
+                      onArchive={() => setArchiveTarget({ ids: [question.id], label: 'this question' })}
                     />
                   </CardContent>
                 </Card>
@@ -902,6 +1022,73 @@ export default function AssessmentQuestionsPage() {
           await load();
         }}
       />
+
+      <Sheet
+        open={!!previewQuestion}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreviewQuestion(null);
+          }
+        }}
+      >
+        <SheetContent side='right' className='w-full sm:max-w-lg'>
+          <SheetHeader>
+            <SheetTitle className='text-lg font-semibold'>Question preview</SheetTitle>
+            <p className='text-sm text-muted-foreground'>Read-only view of the selected question.</p>
+          </SheetHeader>
+          {previewQuestion && (
+            <div className='mt-4 space-y-4'>
+              <div className='space-y-2'>
+                <p className='text-sm font-medium'>Prompt</p>
+                <p className='whitespace-pre-wrap text-sm text-muted-foreground'>{previewQuestion.prompt}</p>
+              </div>
+
+              <QuestionMetaBadges question={previewQuestion} />
+
+              <div className='space-y-2'>
+                <p className='text-sm font-medium'>Options</p>
+                <ul className='space-y-2 text-sm'>
+                  {previewQuestion.options.map((option, idx) => (
+                    <li key={option.id} className='flex items-start gap-2'>
+                      <span className='mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px]'>
+                        {idx + 1}
+                      </span>
+                      <span className={option.is_correct ? 'font-medium text-foreground' : 'text-muted-foreground'}>
+                        {option.option_text}
+                      </span>
+                      {option.is_correct && (
+                        <Badge variant='outline' className='ml-auto text-[10px]'>
+                          Correct
+                        </Badge>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {previewQuestion.explanation && (
+                <div className='space-y-2'>
+                  <p className='text-sm font-medium'>Explanation</p>
+                  <p className='whitespace-pre-wrap text-sm text-muted-foreground'>{previewQuestion.explanation}</p>
+                </div>
+              )}
+
+              {previewQuestion.tags.length > 0 && (
+                <div className='space-y-2'>
+                  <p className='text-sm font-medium'>Tags</p>
+                  <div className='flex flex-wrap gap-1'>
+                    {previewQuestion.tags.map((tag) => (
+                      <Badge key={tag} variant='secondary' className='text-[10px]'>
+                        {tagLabel(tag)}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
 
       <Sheet
         open={classifyOpen}
@@ -972,9 +1159,9 @@ export default function AssessmentQuestionsPage() {
                 onChange={(event) => setClassifyScope(event.target.value as 'all_matching' | 'selected')}
               >
                 <option value='all_matching'>Current filters (recommended)</option>
-                <option value='selected' disabled>
-                  Selected questions (coming next)
-                </option>
+                  <option value='selected' disabled={selectedCount === 0}>
+                    Selected questions ({selectedCount || 0})
+                  </option>
               </select>
               <p className='text-xs text-muted-foreground'>
                 Current filters uses your search + Status/Difficulty/Tags/Category filters.
@@ -1072,6 +1259,20 @@ export default function AssessmentQuestionsPage() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      <ConfirmDialog
+        title='Archive questions?'
+        description={`This will move ${archiveTarget?.label ?? 'the selected questions'} to archived status.`}
+        confirmText={archiving ? 'Archiving…' : 'Archive'}
+        open={!!archiveTarget}
+        onOpenChange={(open) => !open && setArchiveTarget(null)}
+        onConfirm={() => {
+          if (!archiveTarget) return;
+          const ids = archiveTarget.ids;
+          setArchiveTarget(null);
+          void archiveQuestions(ids);
+        }}
+      />
 
       <Sheet
         open={importOpen}

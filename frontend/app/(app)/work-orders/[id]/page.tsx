@@ -109,6 +109,32 @@ function extractHeadings(markdown: string): string[] {
   return headings;
 }
 
+function upsertSection(markdown: string, heading: string, content: string): string {
+  const lines = (markdown || '').split('\n');
+  const headingLine = `## ${heading}`;
+  const startIndex = lines.findIndex((line) => line.trim().toLowerCase() === headingLine.toLowerCase());
+  if (startIndex === -1) {
+    const trimmed = (markdown || '').trim();
+    return trimmed ? `${headingLine}\n${content}\n\n${trimmed}\n` : `${headingLine}\n${content}\n`;
+  }
+
+  let endIndex = lines.length;
+  for (let i = startIndex + 1; i < lines.length; i += 1) {
+    if (lines[i].trim().startsWith('## ')) {
+      endIndex = i;
+      break;
+    }
+  }
+
+  const newLines = [
+    ...lines.slice(0, startIndex + 1),
+    content,
+    '',
+    ...lines.slice(endIndex),
+  ];
+  return newLines.join('\n');
+}
+
 function defaultWoId() {
   const year = new Date().getFullYear();
   const suffix = String(Date.now()).slice(-4);
@@ -142,6 +168,8 @@ const DEFAULT_BODY_TEMPLATE = `## Summary
 ## Rollback considerations
 - 
 `;
+
+const DEFAULT_SECTION_HEADINGS = extractHeadings(DEFAULT_BODY_TEMPLATE);
 
 const typeOptions = ['project', 'cds', 'hotfix', 'maintenance'] as const;
 const statusOptions = ['draft', 'in_progress', 'ready_for_release', 'released', 'cancelled'] as const;
@@ -293,6 +321,33 @@ export default function WorkOrderEditorPage() {
   );
 
   const headings = useMemo(() => extractHeadings(bodyMarkdown), [bodyMarkdown]);
+  const missingSections = useMemo(
+    () => DEFAULT_SECTION_HEADINGS.filter((heading) => !headings.includes(heading)),
+    [headings],
+  );
+
+  const applySummaryAssist = () => {
+    const serviceLines =
+      services.length > 0
+        ? services.map((service) => {
+            const label = service.service_id || service.repo || 'service';
+            const change = service.change_type ? ` (${service.change_type})` : '';
+            return `- ${label}${change}`;
+          })
+        : ['- Summary pending'];
+    const riskLine = risk ? `- Risk: ${risk}` : null;
+    const summaryContent = [...serviceLines, riskLine].filter(Boolean).join('\n');
+    setBodyMarkdown((prev) => upsertSection(prev, 'Summary', summaryContent));
+  };
+
+  const insertMissingSections = () => {
+    if (missingSections.length === 0) return;
+    setBodyMarkdown((prev) => {
+      const trimmed = prev.trim();
+      const additions = missingSections.map((section) => `## ${section}\n- `).join('\n\n');
+      return trimmed ? `${trimmed}\n\n${additions}\n` : `${additions}\n`;
+    });
+  };
 
   const jumpTo = (target: React.RefObject<HTMLElement | null>) => {
     target.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -631,6 +686,34 @@ export default function WorkOrderEditorPage() {
               <Button type='button' variant='ghost' className='w-full justify-start' onClick={() => jumpTo(tabsRef)}>
                 Preview / Diff / PR
               </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className='pb-3'>
+              <CardTitle className='text-sm'>AI assist (beta)</CardTitle>
+            </CardHeader>
+            <CardContent className='space-y-2 text-xs text-muted-foreground'>
+              <p>Generate quick summaries and fill missing sections.</p>
+              <Button type='button' size='sm' variant='outline' className='w-full' onClick={applySummaryAssist}>
+                Draft summary from services
+              </Button>
+              <Button
+                type='button'
+                size='sm'
+                variant='outline'
+                className='w-full'
+                onClick={insertMissingSections}
+                disabled={missingSections.length === 0}
+              >
+                Insert missing sections
+              </Button>
+              {missingSections.length > 0 && (
+                <p className='text-[11px] text-muted-foreground'>
+                  Missing: {missingSections.slice(0, 3).join(', ')}
+                  {missingSections.length > 3 ? '…' : ''}
+                </p>
+              )}
             </CardContent>
           </Card>
 

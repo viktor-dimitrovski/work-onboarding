@@ -5,10 +5,11 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { api } from '@/lib/api';
 import { useTrackPurposeLabels } from '@/lib/track-purpose';
 import { useAuth } from '@/lib/auth-context';
 import { useTenant } from '@/lib/tenant-context';
@@ -16,16 +17,70 @@ import { Plus, Trash2 } from 'lucide-react';
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { isLoading } = useAuth();
+  const { isLoading, accessToken } = useAuth();
   const { hasModule, hasPermission, isLoading: tenantLoading } = useTenant();
   const { items, addPurpose, removePurpose, updateLabel, resetItems } = useTrackPurposeLabels();
   const [newLabel, setNewLabel] = useState('');
+  const [defaultTargetDays, setDefaultTargetDays] = useState<number | ''>(45);
+  const [escalationEmail, setEscalationEmail] = useState('onboarding-ops@example.com');
+  const [policyNotes, setPolicyNotes] = useState(
+    'MVP placeholder. TODO: Connect Slack/Jira/GitHub webhooks and SSO provisioning events.',
+  );
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isLoading && !tenantLoading && !(hasModule('settings') && hasPermission('settings:manage'))) {
       router.replace('/dashboard');
     }
   }, [hasModule, hasPermission, isLoading, router, tenantLoading]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let isMounted = true;
+    setLoadError(null);
+    api
+      .get<{
+        default_onboarding_target_days: number;
+        escalation_email?: string | null;
+        notification_policy_notes?: string | null;
+      }>('/settings', accessToken)
+      .then((data) => {
+        if (!isMounted) return;
+        setDefaultTargetDays(data.default_onboarding_target_days);
+        setEscalationEmail(data.escalation_email ?? '');
+        setPolicyNotes(data.notification_policy_notes ?? '');
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        setLoadError(err instanceof Error ? err.message : 'Failed to load settings');
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [accessToken]);
+
+  const saveSettings = async () => {
+    if (!accessToken) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api.put(
+        '/settings',
+        {
+          default_onboarding_target_days: defaultTargetDays === '' ? null : Number(defaultTargetDays),
+          escalation_email: escalationEmail.trim() || null,
+          notification_policy_notes: policyNotes.trim() || null,
+        },
+        accessToken,
+      );
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className='space-y-6'>
@@ -37,25 +92,34 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Organization defaults</CardTitle>
-          <CardDescription>Basic settings stored client-side for MVP review.</CardDescription>
+          <CardDescription>Default values applied to new onboarding assignments and alerts.</CardDescription>
         </CardHeader>
         <CardContent className='grid gap-4 md:grid-cols-2'>
           <div className='space-y-2'>
             <Label>Default onboarding target (days)</Label>
-            <Input defaultValue='45' />
+            <Input
+              type='number'
+              min={1}
+              value={defaultTargetDays}
+              onChange={(e) => setDefaultTargetDays(e.target.value ? Number(e.target.value) : '')}
+            />
           </div>
           <div className='space-y-2'>
             <Label>Escalation email alias</Label>
-            <Input defaultValue='onboarding-ops@example.com' />
+            <Input value={escalationEmail} onChange={(e) => setEscalationEmail(e.target.value)} />
           </div>
           <div className='space-y-2 md:col-span-2'>
             <Label>Notification policy notes</Label>
-            <Textarea
-              rows={5}
-              defaultValue='MVP placeholder. TODO: Connect Slack/Jira/GitHub webhooks and SSO provisioning events.'
-            />
+            <Textarea rows={5} value={policyNotes} onChange={(e) => setPolicyNotes(e.target.value)} />
           </div>
+          {loadError && <p className='text-sm text-destructive md:col-span-2'>{loadError}</p>}
+          {saveError && <p className='text-sm text-destructive md:col-span-2'>{saveError}</p>}
         </CardContent>
+        <CardFooter className='justify-end'>
+          <Button type='button' onClick={saveSettings} disabled={saving || defaultTargetDays === ''}>
+            {saving ? 'Saving…' : 'Save settings'}
+          </Button>
+        </CardFooter>
       </Card>
 
       <Card>

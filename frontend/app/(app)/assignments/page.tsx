@@ -8,6 +8,7 @@ import { LoadingState } from '@/components/common/loading-state';
 import { StatusChip } from '@/components/common/status-chip';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { api } from '@/lib/api';
 import { formatDateTime, formatPercent, shortId } from '@/lib/constants';
@@ -26,14 +27,37 @@ export default function AssignmentsPage() {
   const { hasModule, hasPermission } = useTenant();
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const canCreateAssignment = hasModule('assignments') && hasPermission('assignments:write');
+
+  const filteredAssignments = assignments.filter((assignment) => {
+    if (statusFilter && assignment.status !== statusFilter) {
+      return false;
+    }
+    if (!query.trim()) {
+      return true;
+    }
+    const needle = query.trim().toLowerCase();
+    return (
+      assignment.title.toLowerCase().includes(needle) ||
+      (assignment.created_by_name || '').toLowerCase().includes(needle) ||
+      (assignment.purpose || '').toLowerCase().includes(needle)
+    );
+  });
 
   useEffect(() => {
     const run = async () => {
       if (!accessToken) return;
       setLoading(true);
       try {
-        const response = await api.get<AssignmentListResponse>('/assignments?page=1&page_size=100', accessToken);
+        const params = new URLSearchParams();
+        params.set('page', '1');
+        params.set('page_size', '100');
+        if (statusFilter) {
+          params.set('status', statusFilter);
+        }
+        const response = await api.get<AssignmentListResponse>(`/assignments?${params.toString()}`, accessToken);
         setAssignments(response.items);
       } finally {
         setLoading(false);
@@ -41,7 +65,7 @@ export default function AssignmentsPage() {
     };
 
     void run();
-  }, [accessToken]);
+  }, [accessToken, statusFilter]);
 
   if (loading) return <LoadingState label='Loading assignments...' />;
 
@@ -59,13 +83,47 @@ export default function AssignmentsPage() {
         )}
       </div>
 
-      {assignments.length === 0 ? (
+      <div className='flex flex-wrap items-center gap-2'>
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder='Search by assignment, purpose, or creator...'
+          className='max-w-sm'
+        />
+        <select
+          className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+        >
+          <option value=''>All statuses</option>
+          <option value='not_started'>Not started</option>
+          <option value='in_progress'>In progress</option>
+          <option value='blocked'>Blocked</option>
+          <option value='overdue'>Overdue</option>
+          <option value='completed'>Completed</option>
+          <option value='archived'>Archived</option>
+        </select>
+        {(query || statusFilter) && (
+          <Button
+            type='button'
+            variant='ghost'
+            onClick={() => {
+              setQuery('');
+              setStatusFilter('');
+            }}
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+
+      {filteredAssignments.length === 0 ? (
         <EmptyState title='No assignments' description='Assign a published track to an employee to start onboarding.' />
       ) : (
         <Card className='overflow-hidden'>
           <CardContent className='p-0'>
             <div className='divide-y'>
-              {assignments.map((assignment) => {
+              {filteredAssignments.map((assignment) => {
                 const isCompleted = assignment.status === 'completed';
                 return (
                   <div
@@ -88,8 +146,8 @@ export default function AssignmentsPage() {
                       </p>
                       <p className='mt-0.5 text-xs text-muted-foreground'>
                         Created {formatDateTime(assignment.created_at)} • By{' '}
-                        {assignment.created_by_name || shortId(assignment.created_by)} • Phases{' '}
-                        {assignment.phases?.length ?? 0} • Tasks{' '}
+                        {assignment.created_by_email || assignment.created_by_name || shortId(assignment.created_by)} •
+                        Phases {assignment.phases?.length ?? 0} • Tasks{' '}
                         {assignment.phases?.reduce((sum, phase) => sum + (phase.tasks?.length ?? 0), 0) ?? 0}
                       </p>
                       <div className='mt-2 flex items-center gap-3'>

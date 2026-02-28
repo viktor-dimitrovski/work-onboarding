@@ -113,6 +113,8 @@ export interface TrackTemplate {
   updated_by?: string | null;
   created_by_name?: string | null;
   updated_by_name?: string | null;
+  created_by_email?: string | null;
+  updated_by_email?: string | null;
 }
 
 export interface AssignmentTask {

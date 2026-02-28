@@ -571,8 +571,19 @@ export default function TrackDetailPage() {
 
                     <TabsContent value='ai'>
                       <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
-                        <div className='rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground'>
-                          AI drafting is available on the create track screen.
+                        <div className='rounded-md border bg-muted/30 p-4'>
+                          <p className='text-sm font-medium'>AI assistant</p>
+                          <p className='mt-1 text-xs text-muted-foreground'>
+                            Generate draft phases and tasks from onboarding notes, then merge them into your track.
+                          </p>
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            className='mt-3'
+                            onClick={() => router.push('/tracks/new')}
+                          >
+                            Open AI draft
+                          </Button>
                         </div>
                       </ScrollArea>
                     </TabsContent>

@@ -43,7 +43,7 @@ type TenantModule = {
   source: string;
 };
 
-const MODULE_KEYS = ['tracks', 'assignments', 'assessments', 'reports', 'users', 'settings', 'billing'];
+const MODULE_KEYS = ['tracks', 'assignments', 'assessments', 'reports', 'users', 'settings', 'billing', 'releases'];
 
 function resolveBaseDomain(hostname: string): string {
   const raw = process.env.NEXT_PUBLIC_BASE_DOMAINS || process.env.BASE_DOMAINS || '';
