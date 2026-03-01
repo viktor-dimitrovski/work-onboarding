@@ -20,6 +20,7 @@ frontend/.env.local
 # Ops
 ops/ops.env
 ops/_backups/
+ops/_keys/
 
 # OS
 .DS_Store
