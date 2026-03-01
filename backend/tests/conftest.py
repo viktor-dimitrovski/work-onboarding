@@ -3,7 +3,7 @@ from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 TEST_DATABASE_URL = os.getenv('TEST_DATABASE_URL')
@@ -36,6 +36,10 @@ TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=Fals
 @pytest.fixture(autouse=True)
 def setup_database() -> Generator[None, None, None]:
     Base.metadata.drop_all(bind=engine)
+    with engine.connect() as conn:
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS billing"))
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS release_mgmt"))
+        conn.commit()
     Base.metadata.create_all(bind=engine)
 
     db = TestingSessionLocal()

@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     GITHUB_REPO_NAME: str | None = None
     GITHUB_BASE_BRANCH: str = 'main'
 
+    # GitHub App (recommended) for automated commits/PRs.
+    # - Configure the App globally in backend env
+    # - Configure per-tenant repo/folder/installation_id in /settings
+    GITHUB_APP_ID: int | None = None
+    GITHUB_APP_PRIVATE_KEY: str | None = None
+    GITHUB_APP_PRIVATE_KEY_FILE: str | None = None
+    GITHUB_COMMITTER_NAME: str = 'Onboarding Hub'
+    GITHUB_COMMITTER_EMAIL: str = 'onboarding-hub@users.noreply.github.com'
+
     BASE_DOMAINS: str = 'app.com'
     RESERVED_SUBDOMAINS: str = 'admin,billing,docs,status,api'
     DEFAULT_TENANT_SLUG: str | None = None

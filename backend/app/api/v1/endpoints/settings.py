@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.models.rbac import User
 from app.multitenancy.deps import TenantContext, require_tenant_membership
 from app.multitenancy.permissions import require_access
-from app.schemas.settings import TenantSettingsOut, TenantSettingsUpdate, TrackPurposeLabel
+from app.schemas.settings import TenantSettingsOut, TenantSettingsUpdate, WorkOrdersGitHubSettings
 
 router = APIRouter(prefix='/settings', tags=['settings'])
 
@@ -25,6 +25,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         'MVP placeholder. TODO: Connect Slack/Jira/GitHub webhooks and SSO provisioning events.'
     ),
     'track_purpose_labels': DEFAULT_TRACK_PURPOSE_LABELS,
+    'work_orders_github': {
+        'enabled': False,
+        'repo_full_name': None,
+        'folder_path': 'work-orders',
+        'release_manifests_folder_path': 'releases',
+        'base_branch': None,
+        'installation_id': None,
+        'sync_on_save': True,
+    },
 }
 
 
@@ -52,12 +61,15 @@ def _normalize_track_purposes(items: Any) -> list[dict[str, str]]:
 
 def _settings_response(raw: dict[str, Any]) -> TenantSettingsOut:
     default_target = raw.get('default_onboarding_target_days') or DEFAULT_SETTINGS['default_onboarding_target_days']
+    wo_git_raw = raw.get('work_orders_github') if isinstance(raw.get('work_orders_github'), dict) else {}
+    merged = {**(DEFAULT_SETTINGS.get('work_orders_github') or {}), **(wo_git_raw or {})}
     return TenantSettingsOut(
         default_onboarding_target_days=int(default_target),
         escalation_email=raw.get('escalation_email') or DEFAULT_SETTINGS['escalation_email'],
         notification_policy_notes=raw.get('notification_policy_notes')
         or DEFAULT_SETTINGS['notification_policy_notes'],
         track_purpose_labels=_normalize_track_purposes(raw.get('track_purpose_labels')),
+        work_orders_github=WorkOrdersGitHubSettings(**merged),
     )
 
 
@@ -88,6 +100,8 @@ def update_settings(
         raw['notification_policy_notes'] = payload.notification_policy_notes
     if payload.track_purpose_labels is not None:
         raw['track_purpose_labels'] = _normalize_track_purposes(payload.track_purpose_labels)
+    if payload.work_orders_github is not None:
+        raw['work_orders_github'] = payload.work_orders_github.model_dump()
 
     ctx.tenant.settings_json = raw
     db.add(ctx.tenant)

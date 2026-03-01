@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -19,6 +20,9 @@ type WorkOrderSummary = {
   year: string;
   services_count: number;
   deploy_count: number;
+  sync_status?: string | null;
+  pr_url?: string | null;
+  branch?: string | null;
 };
 
 type WorkOrderListResponse = {
@@ -32,6 +36,8 @@ export default function WorkOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [yearFilter, setYearFilter] = useState('');
+  const [bulkSyncing, setBulkSyncing] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const canWrite = hasModule('releases') && hasPermission('releases:write');
 
@@ -44,8 +50,24 @@ export default function WorkOrdersPage() {
       const qs = params.toString();
       const response = await api.get<WorkOrderListResponse>(`/work-orders${qs}`, accessToken);
       setItems(response.items);
+      setBulkError(null);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const bulkSync = async (status?: string) => {
+    if (!accessToken || !canWrite) return;
+    setBulkSyncing(true);
+    setBulkError(null);
+    try {
+      const params = status ? `?sync_status=${encodeURIComponent(status)}` : '';
+      await api.post(`/work-orders/sync${params}`, {}, accessToken);
+      await load(query.trim() || undefined);
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'Failed to queue bulk sync');
+    } finally {
+      setBulkSyncing(false);
     }
   };
 
@@ -67,6 +89,21 @@ export default function WorkOrdersPage() {
 
   const filteredItems = items.filter((item) => (yearFilter ? item.year === yearFilter : true));
 
+  const syncBadgeClass = (status?: string | null) => {
+    switch (status) {
+      case 'synced':
+        return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+      case 'pending':
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+      case 'failed':
+        return 'border-red-200 bg-red-50 text-red-700';
+      case 'disabled':
+        return 'border-muted text-muted-foreground';
+      default:
+        return 'border-muted text-muted-foreground';
+    }
+  };
+
   if (loading) return <LoadingState label='Loading work orders...' />;
 
   return (
@@ -76,12 +113,26 @@ export default function WorkOrdersPage() {
           <h2 className='text-2xl font-semibold'>Work Orders</h2>
           <p className='text-sm text-muted-foreground'>Track development scope, touched services, and release readiness.</p>
         </div>
-        {canWrite && (
-          <Button asChild>
-            <Link href='/work-orders/new'>New WO</Link>
-          </Button>
-        )}
+        <div className='flex flex-wrap items-center gap-2'>
+          {canWrite && (
+            <>
+              <Button type='button' variant='outline' onClick={() => bulkSync()} disabled={bulkSyncing}>
+                {bulkSyncing ? 'Syncing…' : 'Sync all'}
+              </Button>
+              <Button type='button' variant='outline' onClick={() => bulkSync('failed')} disabled={bulkSyncing}>
+                Sync failed
+              </Button>
+            </>
+          )}
+          {canWrite && (
+            <Button asChild>
+              <Link href='/work-orders/new'>New WO</Link>
+            </Button>
+          )}
+        </div>
       </div>
+
+      {bulkError && <p className='text-sm text-destructive'>{bulkError}</p>}
 
       <div className='flex flex-wrap items-center gap-2'>
         <Input
@@ -139,6 +190,9 @@ export default function WorkOrdersPage() {
                   <span>Services: {item.services_count}</span>
                   <span>Deploys: {item.deploy_count}</span>
                   <span>{item.year}</span>
+                  <Badge variant='outline' className={syncBadgeClass(item.sync_status)}>
+                    {item.sync_status || 'unknown'}
+                  </Badge>
                 </div>
               </Link>
             ))}

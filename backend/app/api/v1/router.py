@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     auth,
     billing,
     health,
+    keybindings,
     progress,
     reports,
     release_manifests,
@@ -27,6 +28,7 @@ api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(admin.router)
 api_router.include_router(billing.webhook_router)
+api_router.include_router(keybindings.router)
 api_router.include_router(users.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(tracks.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(assignments.router, dependencies=[Depends(require_tenant_membership)])

@@ -17,6 +17,7 @@ from app.models.audit import AuditLog
 from app.models.comment import Comment
 from app.models.rbac import Role, User, UserRole
 from app.models.tenant import Group, GroupMembership, Tenant, TenantDomain, TenantMembership
+from app.models.release_mgmt import ReleaseManifest, ReleasePlan, ReleaseWorkOrder, ReleaseWorkOrderService
 from app.modules.billing.models import (
     CreditGrant,
     CreditPack,
@@ -59,6 +60,10 @@ __all__ = [
     'QuizAttempt',
     'RefreshToken',
     'Role',
+    'ReleaseManifest',
+    'ReleasePlan',
+    'ReleaseWorkOrder',
+    'ReleaseWorkOrderService',
     'TaskResource',
     'TaskSubmission',
     'TrackPhase',

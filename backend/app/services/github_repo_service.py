@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import time
 from typing import Any
 
 import httpx
 from fastapi import HTTPException, status
+from jose import jwt
 
 from app.core.config import settings
 
@@ -32,6 +34,76 @@ def _build_headers(token: str) -> dict[str, str]:
     }
 
 
+def _github_app_private_key_pem() -> str | None:
+    raw = (settings.GITHUB_APP_PRIVATE_KEY or "").strip()
+    if raw:
+        # Allow env var with literal \n
+        return raw.replace("\\n", "\n")
+    keyfile = (settings.GITHUB_APP_PRIVATE_KEY_FILE or "").strip()
+    if not keyfile:
+        return None
+    try:
+        with open(keyfile, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _build_app_headers(app_jwt: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {app_jwt}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "User-Agent": "onboarding-hub",
+    }
+
+
+def get_installation_token(installation_id: int) -> str:
+    app_id = settings.GITHUB_APP_ID
+    pem = _github_app_private_key_pem()
+    if not app_id or not pem:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="GitHub App integration is not configured (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY).",
+        )
+
+    now = int(time.time())
+    app_jwt = jwt.encode({"iat": now - 30, "exp": now + 9 * 60, "iss": str(app_id)}, pem, algorithm="RS256")
+    url = f"{GITHUB_API_BASE}/app/installations/{installation_id}/access_tokens"
+    with httpx.Client(timeout=20.0) as client:
+        resp = client.post(url, headers=_build_app_headers(app_jwt), json={})
+    if not resp.is_success:
+        _handle_error(resp, context="GitHub App installation token")
+    token = (resp.json() or {}).get("token")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GitHub App access token response returned no token.",
+        )
+    return str(token)
+
+
+def _request_repo(
+    method: str,
+    *,
+    owner: str,
+    repo: str,
+    token: str,
+    path: str,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+) -> Any:
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}{path}"
+    headers = _build_headers(token)
+    with httpx.Client(timeout=20.0) as client:
+        resp = client.request(method, url, headers=headers, params=params, json=json)
+    if not resp.is_success:
+        _handle_error(resp, context=f"GitHub API {method} {path}")
+    if resp.status_code == 204:
+        return None
+    return resp.json()
+
+
 def _handle_error(resp: httpx.Response, context: str) -> None:
     detail = resp.text[:2000]
     if resp.status_code == 404:
@@ -52,15 +124,7 @@ def _handle_error(resp: httpx.Response, context: str) -> None:
 
 def _request(method: str, path: str, *, params: dict[str, Any] | None = None, json: Any | None = None) -> Any:
     token, owner, repo = _require_github_config()
-    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}{path}"
-    headers = _build_headers(token)
-    with httpx.Client(timeout=20.0) as client:
-        resp = client.request(method, url, headers=headers, params=params, json=json)
-    if not resp.is_success:
-        _handle_error(resp, context=f"GitHub API {method} {path}")
-    if resp.status_code == 204:
-        return None
-    return resp.json()
+    return _request_repo(method, owner=owner, repo=repo, token=token, path=path, params=params, json=json)
 
 
 def get_ref_sha(branch: str) -> str:
@@ -110,6 +174,8 @@ def upsert_file(
     branch: str,
     message: str,
     sha: str | None = None,
+    author: dict[str, str] | None = None,
+    committer: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "message": message,
@@ -118,6 +184,10 @@ def upsert_file(
     }
     if sha:
         payload["sha"] = sha
+    if author:
+        payload["author"] = author
+    if committer:
+        payload["committer"] = committer
     data = _request("PUT", f"/contents/{path}", json=payload)
     return {"content": data.get("content"), "commit": data.get("commit")}
 
@@ -131,8 +201,114 @@ def create_pr(*, title: str, head: str, base: str, body: str) -> dict[str, Any]:
     return {"url": data.get("html_url"), "number": data.get("number")}
 
 
+def list_prs(*, head: str, base: str) -> list[dict[str, Any]]:
+    data = _request("GET", "/pulls", params={"state": "open", "head": head, "base": base})
+    if not isinstance(data, list):
+        return []
+    return data
+
+
+# Tenant-scoped helpers (GitHub App installation token)
+
+
+def get_ref_sha_tenant(*, owner: str, repo: str, token: str, branch: str) -> str:
+    data = _request_repo("GET", owner=owner, repo=repo, token=token, path=f"/git/ref/heads/{branch}")
+    sha = data.get("object", {}).get("sha")
+    if not sha:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="GitHub ref returned no sha.")
+    return str(sha)
+
+
+def create_branch_tenant(*, owner: str, repo: str, token: str, new_branch: str, from_branch: str) -> str:
+    base_sha = get_ref_sha_tenant(owner=owner, repo=repo, token=token, branch=from_branch)
+    try:
+        _request_repo(
+            "POST",
+            owner=owner,
+            repo=repo,
+            token=token,
+            path="/git/refs",
+            json={"ref": f"refs/heads/{new_branch}", "sha": base_sha},
+        )
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
+            return get_ref_sha_tenant(owner=owner, repo=repo, token=token, branch=new_branch)
+        raise
+    return base_sha
+
+
+def get_file_tenant(*, owner: str, repo: str, token: str, path: str, ref: str) -> dict[str, Any]:
+    data = _request_repo("GET", owner=owner, repo=repo, token=token, path=f"/contents/{path}", params={"ref": ref})
+    if isinstance(data, list):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Requested path is a directory.")
+    content_b64 = data.get("content") or ""
+    sha = data.get("sha")
+    try:
+        decoded = base64.b64decode(content_b64).decode("utf-8")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to decode GitHub file content.",
+        ) from exc
+    return {"content": decoded, "sha": sha, "path": data.get("path")}
+
+
+def upsert_file_tenant(
+    *,
+    owner: str,
+    repo: str,
+    token: str,
+    path: str,
+    content: str,
+    branch: str,
+    message: str,
+    sha: str | None = None,
+    author: dict[str, str] | None = None,
+    committer: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "message": message,
+        "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
+        "branch": branch,
+    }
+    if sha:
+        payload["sha"] = sha
+    if author:
+        payload["author"] = author
+    if committer:
+        payload["committer"] = committer
+    data = _request_repo("PUT", owner=owner, repo=repo, token=token, path=f"/contents/{path}", json=payload)
+    return {"content": data.get("content"), "commit": data.get("commit")}
+
+
+def create_pr_tenant(*, owner: str, repo: str, token: str, title: str, head: str, base: str, body: str) -> dict[str, Any]:
+    data = _request_repo(
+        "POST",
+        owner=owner,
+        repo=repo,
+        token=token,
+        path="/pulls",
+        json={"title": title, "head": head, "base": base, "body": body},
+    )
+    return {"url": data.get("html_url"), "number": data.get("number")}
+
+
+def list_prs_tenant(*, owner: str, repo: str, token: str, head: str, base: str) -> list[dict[str, Any]]:
+    data = _request_repo("GET", owner=owner, repo=repo, token=token, path="/pulls", params={"state": "open", "head": head, "base": base})
+    if not isinstance(data, list):
+        return []
+    return data
+
+
 def list_dir(path: str, *, ref: str) -> list[dict[str, Any]]:
     data = _request("GET", f"/contents/{path}", params={"ref": ref})
+    if not isinstance(data, list):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Requested path is not a directory.")
+    return data
+
+
+def list_dir_tenant(*, owner: str, repo: str, token: str, path: str, ref: str) -> list[dict[str, Any]]:
+    data = _request_repo("GET", owner=owner, repo=repo, token=token, path=f"/contents/{path}", params={"ref": ref})
     if not isinstance(data, list):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Requested path is not a directory.")
     return data

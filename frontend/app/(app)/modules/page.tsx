@@ -45,7 +45,7 @@ export default function ModulesPage() {
             const href = getModuleDefaultHref(module, accessContext);
             return (
               <Link key={module.id} href={href} className='group block'>
-                <Card className='flex h-full flex-col transition hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-soft'>
+                <Card className='flex h-full flex-col transition-colors hover:border-primary/60'>
                   <CardHeader className='flex flex-row items-start gap-3'>
                     <div className='rounded-md bg-primary/10 p-2 text-primary'>
                       <Icon className='h-5 w-5' />

@@ -63,6 +63,7 @@ export default function NewReleaseManifestPage() {
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [createdRelId, setCreatedRelId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -112,7 +113,8 @@ export default function NewReleaseManifestPage() {
     setSaving(true);
     setError(null);
     try {
-      await api.post('/release-manifests', previewPayload, accessToken);
+      const response = await api.post<{ rel_id: string }>('/release-manifests', previewPayload, accessToken);
+      setCreatedRelId(response.rel_id);
       setStep(4);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create release manifest');
@@ -130,7 +132,7 @@ export default function NewReleaseManifestPage() {
     <div className='space-y-6'>
       <div>
         <h2 className='text-2xl font-semibold'>New Release Manifest</h2>
-        <p className='text-sm text-muted-foreground'>Select WOs → preview → create REL PR.</p>
+        <p className='text-sm text-muted-foreground'>Select WOs → preview → create REL.</p>
       </div>
 
       {error && <p className='text-sm text-destructive'>{error}</p>}
@@ -247,7 +249,7 @@ export default function NewReleaseManifestPage() {
               Back
             </Button>
             <Button type='button' onClick={createRel} disabled={saving}>
-              {saving ? 'Creating…' : 'Create REL PR'}
+              {saving ? 'Creating…' : 'Create REL'}
             </Button>
           </div>
         </div>
@@ -256,8 +258,14 @@ export default function NewReleaseManifestPage() {
       {step === 4 && (
         <Card>
           <CardContent className='pt-6 text-sm'>
-            <p>Release manifest PR has been created.</p>
-            <p className='text-muted-foreground'>Check your GitHub repo for the rel/* branch and PR.</p>
+            <p>Release manifest saved.</p>
+            {createdRelId ? (
+              <p className='text-muted-foreground'>
+                REL {createdRelId} is ready. Use the Release Manifests list to sync and create a PR when ready.
+              </p>
+            ) : (
+              <p className='text-muted-foreground'>Use the Release Manifests list to sync and create a PR when ready.</p>
+            )}
           </CardContent>
         </Card>
       )}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -52,6 +54,9 @@ class WorkOrderSummary(BaseModel):
     year: str
     services_count: int = 0
     deploy_count: int = 0
+    sync_status: str | None = None
+    pr_url: str | None = None
+    branch: str | None = None
 
 
 class WorkOrderOut(BaseModel):
@@ -62,6 +67,15 @@ class WorkOrderOut(BaseModel):
     parsed: WorkOrderParsed
     pr_url: str | None = None
     branch: str | None = None
+    sync_status: str | None = None
+    last_sync_at: datetime | None = None
+    last_sync_error: str | None = None
+    sync_requested_at: datetime | None = None
+    git_repo_full_name: str | None = None
+    git_folder_path: str | None = None
+    git_path: str | None = None
+    git_branch: str | None = None
+    git_sha: str | None = None
 
 
 class WorkOrderListResponse(BaseModel):

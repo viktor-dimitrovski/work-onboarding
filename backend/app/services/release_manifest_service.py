@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import uuid
 from dataclasses import dataclass
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.schemas.release_manifests import ReleaseManifestDeployItem
 from app.schemas.work_orders import ServiceTouchedItem
+from app.models.release_mgmt import ReleaseWorkOrder, ReleaseWorkOrderService
 from app.services import github_repo_service, work_order_service
 
 
@@ -72,6 +76,51 @@ def load_work_orders_from_repo(wo_ids: list[str], *, ref: str | None = None) -> 
                 title=data.title,
                 path=path,
                 services=data.services_touched,
+            )
+        )
+    return parsed
+
+
+def load_work_orders_from_db(db: Session, wo_ids: list[str]) -> list[ParsedWorkOrder]:
+    if not wo_ids:
+        return []
+    items = db.scalars(select(ReleaseWorkOrder).where(ReleaseWorkOrder.wo_id.in_(wo_ids))).all()
+    by_id = {item.wo_id: item for item in items}
+    missing = [wo_id for wo_id in wo_ids if wo_id not in by_id]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work orders not found in DB: {', '.join(missing)}",
+        )
+    wo_db_ids = [item.id for item in items]
+    services = db.scalars(
+        select(ReleaseWorkOrderService).where(ReleaseWorkOrderService.work_order_id.in_(wo_db_ids))
+    ).all()
+    services_by_wo: dict[uuid.UUID, list[ReleaseWorkOrderService]] = {}
+    for svc in services:
+        services_by_wo.setdefault(svc.work_order_id, []).append(svc)
+
+    parsed: list[ParsedWorkOrder] = []
+    for wo_id in wo_ids:
+        item = by_id[wo_id]
+        svc_items = services_by_wo.get(item.id, [])
+        parsed.append(
+            ParsedWorkOrder(
+                wo_id=item.wo_id,
+                title=item.title,
+                path=item.git_path or "",
+                services=[
+                    ServiceTouchedItem(
+                        service_id=svc.service_id,
+                        repo=svc.repo,
+                        requires_deploy=svc.requires_deploy,
+                        requires_db_migration=svc.requires_db_migration,
+                        requires_config_change=svc.requires_config_change,
+                        feature_flags=list(svc.feature_flags or []),
+                        release_notes_ref=svc.release_notes_ref,
+                    )
+                    for svc in svc_items
+                ],
             )
         )
     return parsed

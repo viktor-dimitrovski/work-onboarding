@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_active_user
 from app.db.session import get_db
+from app.models.release_mgmt import ReleasePlan
 from app.models.rbac import User
 from app.models.track import TrackVersion
 from app.multitenancy.permissions import require_access
@@ -24,6 +25,28 @@ from app.services import assignment_service, track_service
 
 
 router = APIRouter(prefix="/release-center", tags=["release-center"])
+
+
+def _parse_release_manager_id(value: object) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _metadata_from_plan(plan: ReleasePlan | None, fallback: dict) -> dict:
+    if not plan:
+        return fallback
+    return {
+        **(fallback or {}),
+        "environment": plan.environment,
+        "version_tag": plan.version_tag,
+        "release_manager_user_id": str(plan.release_manager_user_id) if plan.release_manager_user_id else None,
+        "rel_id": plan.rel_id,
+        "links": plan.links_json or {},
+    }
 
 
 @router.get("/templates", response_model=list[ReleaseTemplateOption])
@@ -67,6 +90,14 @@ def list_release_center(
         target_to=target_to,
     )
 
+    assignment_ids = [assignment.id for assignment in assignments]
+    plans = (
+        db.scalars(select(ReleasePlan).where(ReleasePlan.assignment_id.in_(assignment_ids))).all()
+        if assignment_ids
+        else []
+    )
+    plan_by_assignment = {plan.assignment_id: plan for plan in plans}
+
     items: list[ReleaseCenterSummary] = []
     for assignment in assignments:
         tasks = [task for phase in assignment.phases for task in phase.tasks]
@@ -78,11 +109,9 @@ def list_release_center(
         gates_passed = len([task for task in gate_tasks if task.status == "completed"])
 
         meta = assignment.metadata_json if isinstance(assignment.metadata_json, dict) else {}
-        manager_id = meta.get("release_manager_user_id")
-        try:
-            manager_uuid = UUID(str(manager_id)) if manager_id else None
-        except ValueError:
-            manager_uuid = None
+        plan = plan_by_assignment.get(assignment.id)
+        merged_meta = _metadata_from_plan(plan, meta)
+        manager_uuid = _parse_release_manager_id(merged_meta.get("release_manager_user_id"))
 
         items.append(
             ReleaseCenterSummary(
@@ -95,11 +124,11 @@ def list_release_center(
                 blockers_count=blockers,
                 gates_passed=gates_passed,
                 gates_total=gates_total,
-                environment=meta.get("environment"),
-                version_tag=meta.get("version_tag"),
+                environment=merged_meta.get("environment"),
+                version_tag=merged_meta.get("version_tag"),
                 release_manager_user_id=manager_uuid,
-                rel_id=meta.get("rel_id"),
-                links=meta.get("links") if isinstance(meta.get("links"), dict) else {},
+                rel_id=merged_meta.get("rel_id"),
+                links=merged_meta.get("links") if isinstance(merged_meta.get("links"), dict) else {},
             )
         )
     return ReleaseCenterListResponse(items=items)
@@ -127,6 +156,20 @@ def create_release_plan(
     )
     assignment.metadata_json = {**assignment.metadata_json, **payload.metadata}
     assignment.updated_by = current_user.id
+
+    meta = assignment.metadata_json if isinstance(assignment.metadata_json, dict) else {}
+    plan = ReleasePlan(
+        tenant_id=assignment.tenant_id,
+        assignment_id=assignment.id,
+        environment=meta.get("environment"),
+        version_tag=meta.get("version_tag"),
+        release_manager_user_id=_parse_release_manager_id(meta.get("release_manager_user_id")),
+        rel_id=meta.get("rel_id"),
+        links_json=meta.get("links") if isinstance(meta.get("links"), dict) else {},
+        created_by=current_user.id,
+        updated_by=current_user.id,
+    )
+    db.add(plan)
     db.commit()
 
     return ReleaseMetadataOut(assignment_id=assignment.id, metadata=assignment.metadata_json)
@@ -140,7 +183,9 @@ def get_release_metadata(
     __: object = Depends(require_access("releases", "releases:read")),
 ) -> ReleaseMetadataOut:
     assignment = assignment_service.get_assignment_by_id(db, assignment_id)
-    return ReleaseMetadataOut(assignment_id=assignment.id, metadata=assignment.metadata_json)
+    meta = assignment.metadata_json if isinstance(assignment.metadata_json, dict) else {}
+    plan = db.scalar(select(ReleasePlan).where(ReleasePlan.assignment_id == assignment.id))
+    return ReleaseMetadataOut(assignment_id=assignment.id, metadata=_metadata_from_plan(plan, meta))
 
 
 @router.put("/{assignment_id}/metadata", response_model=ReleaseMetadataOut)
@@ -155,5 +200,21 @@ def update_release_metadata(
     existing = assignment.metadata_json if isinstance(assignment.metadata_json, dict) else {}
     assignment.metadata_json = {**existing, **payload.metadata}
     assignment.updated_by = current_user.id
+
+    meta = assignment.metadata_json if isinstance(assignment.metadata_json, dict) else {}
+    plan = db.scalar(select(ReleasePlan).where(ReleasePlan.assignment_id == assignment.id))
+    if not plan:
+        plan = ReleasePlan(
+            tenant_id=assignment.tenant_id,
+            assignment_id=assignment.id,
+            created_by=current_user.id,
+        )
+        db.add(plan)
+    plan.environment = meta.get("environment")
+    plan.version_tag = meta.get("version_tag")
+    plan.release_manager_user_id = _parse_release_manager_id(meta.get("release_manager_user_id"))
+    plan.rel_id = meta.get("rel_id")
+    plan.links_json = meta.get("links") if isinstance(meta.get("links"), dict) else {}
+    plan.updated_by = current_user.id
     db.commit()
     return ReleaseMetadataOut(assignment_id=assignment.id, metadata=assignment.metadata_json)

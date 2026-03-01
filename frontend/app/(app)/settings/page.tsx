@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -26,6 +27,13 @@ export default function SettingsPage() {
   const [policyNotes, setPolicyNotes] = useState(
     'MVP placeholder. TODO: Connect Slack/Jira/GitHub webhooks and SSO provisioning events.',
   );
+  const [woGitEnabled, setWoGitEnabled] = useState(false);
+  const [woGitRepo, setWoGitRepo] = useState('');
+  const [woGitFolder, setWoGitFolder] = useState('work-orders');
+  const [woGitReleaseFolder, setWoGitReleaseFolder] = useState('releases');
+  const [woGitBaseBranch, setWoGitBaseBranch] = useState('');
+  const [woGitInstallationId, setWoGitInstallationId] = useState('');
+  const [woGitSyncOnSave, setWoGitSyncOnSave] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -45,12 +53,29 @@ export default function SettingsPage() {
         default_onboarding_target_days: number;
         escalation_email?: string | null;
         notification_policy_notes?: string | null;
+        work_orders_github?: {
+          enabled?: boolean;
+          repo_full_name?: string | null;
+          folder_path?: string | null;
+          release_manifests_folder_path?: string | null;
+          base_branch?: string | null;
+          installation_id?: number | null;
+          sync_on_save?: boolean;
+        };
       }>('/settings', accessToken)
       .then((data) => {
         if (!isMounted) return;
         setDefaultTargetDays(data.default_onboarding_target_days);
         setEscalationEmail(data.escalation_email ?? '');
         setPolicyNotes(data.notification_policy_notes ?? '');
+        const wo = data.work_orders_github || {};
+        setWoGitEnabled(Boolean(wo.enabled));
+        setWoGitRepo(wo.repo_full_name ?? '');
+        setWoGitFolder(wo.folder_path ?? 'work-orders');
+        setWoGitReleaseFolder(wo.release_manifests_folder_path ?? 'releases');
+        setWoGitBaseBranch(wo.base_branch ?? '');
+        setWoGitInstallationId(wo.installation_id ? String(wo.installation_id) : '');
+        setWoGitSyncOnSave(wo.sync_on_save !== false);
       })
       .catch((err) => {
         if (!isMounted) return;
@@ -72,6 +97,15 @@ export default function SettingsPage() {
           default_onboarding_target_days: defaultTargetDays === '' ? null : Number(defaultTargetDays),
           escalation_email: escalationEmail.trim() || null,
           notification_policy_notes: policyNotes.trim() || null,
+          work_orders_github: {
+            enabled: woGitEnabled,
+            repo_full_name: woGitRepo.trim() || null,
+            folder_path: woGitFolder.trim() || 'work-orders',
+            release_manifests_folder_path: woGitReleaseFolder.trim() || 'releases',
+            base_branch: woGitBaseBranch.trim() || null,
+            installation_id: woGitInstallationId.trim() ? Number(woGitInstallationId.trim()) : null,
+            sync_on_save: woGitSyncOnSave,
+          },
         },
         accessToken,
       );
@@ -86,50 +120,107 @@ export default function SettingsPage() {
     <div className='space-y-6'>
       <div>
         <h2 className='text-2xl font-semibold'>Settings</h2>
-        <p className='text-sm text-muted-foreground'>MVP settings and integration placeholders.</p>
+        <p className='text-sm text-muted-foreground'>Tenant-level configuration.</p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Organization defaults</CardTitle>
-          <CardDescription>Default values applied to new onboarding assignments and alerts.</CardDescription>
-        </CardHeader>
-        <CardContent className='grid gap-4 md:grid-cols-2'>
-          <div className='space-y-2'>
-            <Label>Default onboarding target (days)</Label>
-            <Input
-              type='number'
-              min={1}
-              value={defaultTargetDays}
-              onChange={(e) => setDefaultTargetDays(e.target.value ? Number(e.target.value) : '')}
-            />
-          </div>
-          <div className='space-y-2'>
-            <Label>Escalation email alias</Label>
-            <Input value={escalationEmail} onChange={(e) => setEscalationEmail(e.target.value)} />
-          </div>
-          <div className='space-y-2 md:col-span-2'>
-            <Label>Notification policy notes</Label>
-            <Textarea rows={5} value={policyNotes} onChange={(e) => setPolicyNotes(e.target.value)} />
-          </div>
-          {loadError && <p className='text-sm text-destructive md:col-span-2'>{loadError}</p>}
-          {saveError && <p className='text-sm text-destructive md:col-span-2'>{saveError}</p>}
-        </CardContent>
-        <CardFooter className='justify-end'>
-          <Button type='button' onClick={saveSettings} disabled={saving || defaultTargetDays === ''}>
-            {saving ? 'Saving…' : 'Save settings'}
-          </Button>
-        </CardFooter>
-      </Card>
+      <Card className='overflow-hidden'>
+        <CardContent className='p-0'>
+          <Accordion type='multiple' defaultValue={['org-defaults', 'wo-github', 'track-purposes']}>
+            <AccordionItem value='org-defaults' className='border-b px-4'>
+              <AccordionTrigger className='py-3'>Organization defaults</AccordionTrigger>
+              <AccordionContent className='pb-4'>
+                <div className='grid gap-4 md:grid-cols-2'>
+                  <div className='space-y-2'>
+                    <Label>Default onboarding target (days)</Label>
+                    <Input
+                      type='number'
+                      min={1}
+                      value={defaultTargetDays}
+                      onChange={(e) => setDefaultTargetDays(e.target.value ? Number(e.target.value) : '')}
+                    />
+                  </div>
+                  <div className='space-y-2'>
+                    <Label>Escalation email alias</Label>
+                    <Input value={escalationEmail} onChange={(e) => setEscalationEmail(e.target.value)} />
+                  </div>
+                  <div className='space-y-2 md:col-span-2'>
+                    <Label>Notification policy notes</Label>
+                    <Textarea rows={4} value={policyNotes} onChange={(e) => setPolicyNotes(e.target.value)} />
+                  </div>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Track purpose labels</CardTitle>
-          <CardDescription>
-            These options power the “Purpose” dropdowns. They’re stored per-tenant in Settings (and cached locally).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className='space-y-3'>
+            <AccordionItem value='wo-github' className='border-b px-4'>
+              <AccordionTrigger className='py-3'>Work Orders GitHub</AccordionTrigger>
+              <AccordionContent className='pb-4'>
+                <div className='grid gap-4 md:grid-cols-2'>
+                  <div className='flex items-center gap-2'>
+                    <input
+                      id='wo-git-enabled'
+                      type='checkbox'
+                      checked={woGitEnabled}
+                      onChange={(e) => setWoGitEnabled(e.target.checked)}
+                    />
+                    <Label htmlFor='wo-git-enabled'>Enable GitHub sync</Label>
+                  </div>
+                  <div className='flex items-center gap-2'>
+                    <input
+                      id='wo-git-sync'
+                      type='checkbox'
+                      checked={woGitSyncOnSave}
+                      onChange={(e) => setWoGitSyncOnSave(e.target.checked)}
+                    />
+                    <Label htmlFor='wo-git-sync'>Commit on Save</Label>
+                  </div>
+                  <div className='space-y-2'>
+                    <Label>Repo (owner/name)</Label>
+                    <Input value={woGitRepo} onChange={(e) => setWoGitRepo(e.target.value)} placeholder='org/repo' />
+                  </div>
+                  <div className='space-y-2'>
+                    <Label>Folder path</Label>
+                    <Input
+                      value={woGitFolder}
+                      onChange={(e) => setWoGitFolder(e.target.value)}
+                      placeholder='work-orders'
+                    />
+                  </div>
+                  <div className='space-y-2'>
+                    <Label>Release manifests folder</Label>
+                    <Input
+                      value={woGitReleaseFolder}
+                      onChange={(e) => setWoGitReleaseFolder(e.target.value)}
+                      placeholder='releases'
+                    />
+                  </div>
+                  <div className='space-y-2'>
+                    <Label>Base branch</Label>
+                    <Input
+                      value={woGitBaseBranch}
+                      onChange={(e) => setWoGitBaseBranch(e.target.value)}
+                      placeholder='main'
+                    />
+                  </div>
+                  <div className='space-y-2'>
+                    <Label>GitHub App installation id</Label>
+                    <Input
+                      inputMode='numeric'
+                      value={woGitInstallationId}
+                      onChange={(e) => setWoGitInstallationId(e.target.value)}
+                      placeholder='12345678'
+                    />
+                  </div>
+                  <p className='text-xs text-muted-foreground md:col-span-2'>
+                    Note: Backend must be configured with GitHub App credentials (GITHUB_APP_ID + private key).
+                  </p>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            <AccordionItem value='track-purposes' className='px-4'>
+              <AccordionTrigger className='py-3'>Track purpose labels</AccordionTrigger>
+              <AccordionContent className='pb-4'>
+                <div className='space-y-3'>
           <div className='space-y-2'>
             {items.map((item) => (
               <div
@@ -197,19 +288,20 @@ export default function SettingsPage() {
               Reset defaults
             </Button>
           </div>
-        </CardContent>
-      </Card>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Integration roadmap</CardTitle>
-          <CardDescription>Planned modules for next increment.</CardDescription>
-        </CardHeader>
-        <CardContent className='space-y-2 text-sm text-muted-foreground'>
-          <p>- Slack workflow notifications (assignment and review events)</p>
-          <p>- Jira ticket linking for onboarding tasks and blocker resolution</p>
-          <p>- GitHub repo access readiness checks for engineering tracks</p>
-          <p>- Enterprise SSO + SCIM user lifecycle sync</p>
+          <div className='flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3'>
+            <div className='min-h-[20px] text-sm'>
+              {loadError && <span className='text-destructive'>{loadError}</span>}
+              {!loadError && saveError && <span className='text-destructive'>{saveError}</span>}
+            </div>
+            <Button type='button' onClick={saveSettings} disabled={saving || defaultTargetDays === ''}>
+              {saving ? 'Saving…' : 'Save settings'}
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>

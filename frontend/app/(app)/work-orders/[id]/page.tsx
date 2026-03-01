@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
 import { EmptyState } from '@/components/common/empty-state';
@@ -8,8 +8,10 @@ import { LoadingState } from '@/components/common/loading-state';
 import { MarkdownRenderer } from '@/components/common/markdown-renderer';
 import { RiskChip } from '@/components/common/risk-chip';
 import { StatusChip } from '@/components/common/status-chip';
-import { LexicalMarkdownEditor } from '@/components/editor/lexical-markdown-editor';
 import { ServicesTouchedGrid, type ServiceTouchedItem } from '@/components/work-orders/services-touched-grid';
+import { WorkOrderContentTab } from '@/components/work-orders/WorkOrderContentTab';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -17,6 +19,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import {
+  buildLocalDraftKey,
+  clearLocalDraft,
+  readLocalDraft,
+  writeLocalDraft,
+  type LocalDraftPayload,
+} from '@/lib/localDraft';
 import { useTenant } from '@/lib/tenant-context';
 import { cn } from '@/lib/utils';
 import { Plus } from 'lucide-react';
@@ -41,6 +50,30 @@ type WorkOrderOut = {
   };
   pr_url?: string | null;
   branch?: string | null;
+  sync_status?: string | null;
+  last_sync_at?: string | null;
+  last_sync_error?: string | null;
+  sync_requested_at?: string | null;
+  git_repo_full_name?: string | null;
+  git_folder_path?: string | null;
+  git_path?: string | null;
+  git_branch?: string | null;
+  git_sha?: string | null;
+};
+
+type WorkOrderLocalDraft = {
+  woId: string;
+  title: string;
+  type: string;
+  status: string;
+  risk: string;
+  owner: string;
+  requestedBy: string;
+  tenantsImpacted: string[];
+  targetEnvs: string[];
+  postmanTestingRef: string;
+  services: ServiceTouchedItem[];
+  bodyMarkdown: string;
 };
 
 function toInlineList(items: string[]) {
@@ -241,6 +274,14 @@ function parseInlineList(value: string): string[] {
     .filter(Boolean);
 }
 
+function stripInlineYamlComment(value: string): string {
+  const raw = value ?? '';
+  if (!raw) return '';
+  // Keep URLs intact (may contain # anchors).
+  if (/https?:\/\//i.test(raw)) return raw.trim();
+  return raw.replace(/\s+#.*$/, '').trim();
+}
+
 function parseOverviewYaml(text: string): Partial<{
   wo_id: string;
   title: string;
@@ -259,9 +300,10 @@ function parseOverviewYaml(text: string): Partial<{
     .map((l) => l.trim())
     .filter(Boolean)
     .forEach((line) => {
+      if (line.startsWith('#')) return;
       const m = /^([a-zA-Z_]+)\s*:\s*(.*)$/.exec(line);
       if (!m?.[1]) return;
-      out[m[1]] = m[2] ?? '';
+      out[m[1]] = stripInlineYamlComment(m[2] ?? '');
     });
   return {
     wo_id: out.id?.trim(),
@@ -304,6 +346,7 @@ function parseServicesYaml(text: string): ServiceTouchedItem[] {
   for (const rawLine of lines) {
     const line = rawLine.replace(/\t/g, '  ');
     if (!line.trim()) continue;
+    if (line.trim().startsWith('#')) continue;
     if (line.trim() === 'services_touched: []') return [];
     if (line.trim() === 'services_touched:') continue;
 
@@ -311,7 +354,7 @@ function parseServicesYaml(text: string): ServiceTouchedItem[] {
     if (startMatch) {
       if (current) items.push(current);
       current = {
-        service_id: (startMatch[1] || '').trim(),
+        service_id: stripInlineYamlComment((startMatch[1] || '').trim()),
         repo: '',
         change_type: '',
         requires_deploy: false,
@@ -326,7 +369,7 @@ function parseServicesYaml(text: string): ServiceTouchedItem[] {
     const kv = /^\s*([a-zA-Z_]+)\s*:\s*(.*)$/.exec(line);
     if (!kv?.[1] || !current) continue;
     const key = kv[1];
-    const value = (kv[2] ?? '').trim();
+    const value = stripInlineYamlComment((kv[2] ?? '').trim());
     if (key === 'repo') current.repo = value;
     if (key === 'change_type') current.change_type = value;
     if (key === 'requires_deploy') current.requires_deploy = value === 'true';
@@ -337,6 +380,41 @@ function parseServicesYaml(text: string): ServiceTouchedItem[] {
   }
   if (current) items.push(current);
   return items;
+}
+
+function splitFrontMatterBlocks(frontMatter: string): { overviewText: string; servicesText: string } {
+  const lines = (frontMatter || '').split('\n');
+  if (lines.length < 2) return { overviewText: '', servicesText: '' };
+  const inner = lines.filter((_, idx) => idx !== 0 && idx !== lines.length - 1); // remove --- wrappers
+  const servicesIdx = inner.findIndex((l) => l.trim().startsWith('services_touched:'));
+  if (servicesIdx === -1) {
+    return { overviewText: inner.join('\n'), servicesText: '' };
+  }
+  return {
+    overviewText: inner.slice(0, servicesIdx).join('\n'),
+    servicesText: inner.slice(servicesIdx).join('\n'),
+  };
+}
+
+function normalizeImportedBody(body: string): string {
+  const lines = (body || '').split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const m = /^##\s+(.+)\s*$/.exec(line);
+    if (!m?.[1]) {
+      out.push(line);
+      continue;
+    }
+    const heading = m[1].trim();
+    if (/^versions used/i.test(heading) && heading !== 'Versions used during testing') {
+      out.push('## Versions used during testing');
+      out.push(`Context: ${heading}`);
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
 }
 
 function extractHeadings(markdown: string): string[] {
@@ -380,30 +458,6 @@ function upsertSection(markdown: string, heading: string, content: string): stri
     ...lines.slice(endIndex),
   ];
   return newLines.join('\n');
-}
-
-function readSection(markdown: string, heading: string): string {
-  const lines = (markdown || '').split('\n');
-  const headingLine = `## ${heading}`.toLowerCase();
-  const startIndex = lines.findIndex((line) => line.trim().toLowerCase() === headingLine);
-  if (startIndex === -1) return '';
-  let endIndex = lines.length;
-  for (let i = startIndex + 1; i < lines.length; i += 1) {
-    if (lines[i].trim().startsWith('## ')) {
-      endIndex = i;
-      break;
-    }
-  }
-  const contentLines = lines.slice(startIndex + 1, endIndex);
-  // trim leading/trailing empty lines
-  while (contentLines.length && !contentLines[0].trim()) contentLines.shift();
-  while (contentLines.length && !contentLines[contentLines.length - 1].trim()) contentLines.pop();
-  return contentLines.join('\n');
-}
-
-function writeSection(markdown: string, heading: string, content: string): string {
-  const normalized = content.trim() ? content : '- ';
-  return upsertSection(markdown, heading, normalized);
 }
 
 function defaultWoId() {
@@ -495,8 +549,23 @@ export default function WorkOrderEditorPage() {
   const { accessToken } = useAuth();
   const { hasPermission, hasModule } = useTenant();
   const canWrite = hasModule('releases') && hasPermission('releases:write');
+  const syncBadgeClass = (status?: string | null) => {
+    switch (status) {
+      case 'synced':
+        return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+      case 'pending':
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+      case 'failed':
+        return 'border-red-200 bg-red-50 text-red-700';
+      case 'disabled':
+        return 'border-muted text-muted-foreground';
+      default:
+        return 'border-muted text-muted-foreground';
+    }
+  };
 
   const previewRef = useRef<HTMLDivElement | null>(null);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -518,18 +587,26 @@ export default function WorkOrderEditorPage() {
   const [sha, setSha] = useState<string | null>(null);
   const [branch, setBranch] = useState<string | null>(null);
   const [prUrl, setPrUrl] = useState<string | null>(null);
+  const [prWorking, setPrWorking] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [syncWorking, setSyncWorking] = useState(false);
   const [lastSavedMarkdown, setLastSavedMarkdown] = useState('');
   const [tab, setTab] = useState<'overview' | 'services' | 'content' | 'preview' | 'diff' | 'pr'>('overview');
   const [overviewView, setOverviewView] = useState<'form' | 'markdown'>('form');
   const [servicesView, setServicesView] = useState<'form' | 'markdown'>('form');
-  const [contentView, setContentView] = useState<'form' | 'markdown'>('form');
   const [overviewDraft, setOverviewDraft] = useState('');
   const [servicesDraft, setServicesDraft] = useState('');
 
   const [localDraftStatus, setLocalDraftStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [lastLocalSavedAt, setLastLocalSavedAt] = useState<number | null>(null);
+  const [localDraftBanner, setLocalDraftBanner] = useState<LocalDraftPayload<WorkOrderLocalDraft> | null>(null);
+  const [lastServerSavedAt, setLastServerSavedAt] = useState<number>(0);
   const isNew = id === 'new';
-  const localDraftKey = useMemo(() => `wo:draft:${isNew ? 'new' : id}`, [id, isNew]);
+  const localDraftKey = useMemo(() => buildLocalDraftKey('wo:draft', isNew ? 'new' : id), [id, isNew]);
+  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
+  const [pendingImportText, setPendingImportText] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -546,6 +623,14 @@ export default function WorkOrderEditorPage() {
       setTargetEnvs([]);
       setPostmanTestingRef('');
       setBodyMarkdown(DEFAULT_BODY_TEMPLATE);
+      setSha(null);
+      setBranch(null);
+      setPrUrl(null);
+      setSyncStatus(null);
+      setSyncError(null);
+      setLastSyncAt(null);
+      setLastSavedMarkdown('');
+      setLastServerSavedAt(0);
       setLoading(false);
       return;
     }
@@ -568,13 +653,72 @@ export default function WorkOrderEditorPage() {
         setSha(response.sha || null);
         setBranch(response.branch || null);
         setPrUrl(response.pr_url || null);
+        setSyncStatus(response.sync_status || null);
+        setSyncError(response.last_sync_error || null);
+        setLastSyncAt(response.last_sync_at || null);
         setLastSavedMarkdown(response.raw_markdown);
+        setLastServerSavedAt(Date.now());
       } finally {
         setLoading(false);
       }
     };
     void run();
   }, [accessToken, id, isNew]);
+
+  const applyImportedWorkOrderText = useCallback(
+    (text: string) => {
+      const { frontMatter, body } = splitFrontMatter(text);
+      const normalizedBody = normalizeImportedBody(body);
+
+      if (frontMatter) {
+        const { overviewText, servicesText } = splitFrontMatterBlocks(frontMatter);
+        const parsedOverview = parseOverviewYaml(overviewText);
+        const parsedServices = servicesText ? parseServicesYaml(servicesText) : [];
+
+        if (parsedOverview.wo_id && isNew) setWoId(parsedOverview.wo_id);
+        if (typeof parsedOverview.title === 'string') setTitle(parsedOverview.title);
+        if (parsedOverview.type) setType(parsedOverview.type);
+        if (parsedOverview.status) setStatus(parsedOverview.status);
+        if (parsedOverview.risk) setRisk(parsedOverview.risk);
+        if (typeof parsedOverview.owner === 'string') setOwner(parsedOverview.owner);
+        if (typeof parsedOverview.requested_by === 'string') setRequestedBy(parsedOverview.requested_by);
+        if (parsedOverview.tenants_impacted) setTenantsImpacted(parsedOverview.tenants_impacted);
+        if (parsedOverview.target_envs) setTargetEnvs(parsedOverview.target_envs);
+        if (typeof parsedOverview.postman_testing_ref === 'string') setPostmanTestingRef(parsedOverview.postman_testing_ref);
+        if (parsedServices.length) setServices(parsedServices);
+
+        if (overviewView === 'markdown') setOverviewDraft(overviewText.trim() ? `${overviewText.trim()}\n` : '');
+        if (servicesView === 'markdown') setServicesDraft(servicesText.trim() ? `${servicesText.trim()}\n` : '');
+      }
+
+      setBodyMarkdown(normalizedBody);
+      setError(null);
+      setConflict(null);
+      setTab('overview');
+    },
+    [isNew, overviewView, servicesView],
+  );
+
+  const startImportFile = useCallback(
+    async (file: File) => {
+      try {
+        const text = await file.text();
+        if (!text.trim()) {
+          setError('Selected file is empty.');
+          return;
+        }
+        if (hasUnsavedChanges) {
+          setPendingImportText(text);
+          setImportConfirmOpen(true);
+          return;
+        }
+        applyImportedWorkOrderText(text);
+      } catch {
+        setError('Failed to read file.');
+      }
+    },
+    [applyImportedWorkOrderText, hasUnsavedChanges],
+  );
 
   const previewMarkdown = useMemo(
     () =>
@@ -600,6 +744,17 @@ export default function WorkOrderEditorPage() {
     () => DEFAULT_SECTION_HEADINGS.filter((heading) => !headings.includes(heading)),
     [headings],
   );
+  const hasUnsavedChanges = useMemo(
+    () => previewMarkdown.trim() !== (lastSavedMarkdown || '').trim(),
+    [lastSavedMarkdown, previewMarkdown],
+  );
+  const saveLabel = saving ? 'Saving…' : hasUnsavedChanges ? 'Unsaved changes' : 'Saved';
+  const localDraftLabel =
+    localDraftStatus === 'saving'
+      ? 'Saving locally…'
+      : localDraftStatus === 'saved' && lastLocalSavedAt
+        ? `Saved locally ${new Date(lastLocalSavedAt).toLocaleTimeString()}`
+        : null;
 
   // Keep YAML views in sync with form state.
   const overviewGenerated = useMemo(
@@ -631,44 +786,46 @@ export default function WorkOrderEditorPage() {
     setServicesDraft(servicesGenerated);
   }, [servicesGenerated, servicesView]);
 
-  // Local draft: restore on load, autosave 5s after changes.
-  useEffect(() => {
-    if (loading) return;
-    try {
-      const raw = window.localStorage.getItem(localDraftKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as any;
-      if (!parsed || typeof parsed !== 'object') return;
-      // Basic restore (best-effort)
-      if (typeof parsed.woId === 'string') setWoId(parsed.woId);
-      if (typeof parsed.title === 'string') setTitle(parsed.title);
-      if (typeof parsed.type === 'string') setType(parsed.type);
-      if (typeof parsed.status === 'string') setStatus(parsed.status);
-      if (typeof parsed.risk === 'string') setRisk(parsed.risk);
-      if (typeof parsed.owner === 'string') setOwner(parsed.owner);
-      if (typeof parsed.requestedBy === 'string') setRequestedBy(parsed.requestedBy);
-      if (Array.isArray(parsed.tenantsImpacted)) setTenantsImpacted(parsed.tenantsImpacted);
-      if (Array.isArray(parsed.targetEnvs)) setTargetEnvs(parsed.targetEnvs);
-      if (typeof parsed.postmanTestingRef === 'string') setPostmanTestingRef(parsed.postmanTestingRef);
-      if (Array.isArray(parsed.services)) setServices(parsed.services);
-      if (typeof parsed.bodyMarkdown === 'string') setBodyMarkdown(parsed.bodyMarkdown);
-      if (typeof parsed.updatedAt === 'number') setLastLocalSavedAt(parsed.updatedAt);
+  const applyLocalDraft = useCallback(
+    (draft: LocalDraftPayload<WorkOrderLocalDraft>) => {
+      const data = draft.data;
+      if (typeof data.woId === 'string') setWoId(data.woId);
+      if (typeof data.title === 'string') setTitle(data.title);
+      if (typeof data.type === 'string') setType(data.type);
+      if (typeof data.status === 'string') setStatus(data.status);
+      if (typeof data.risk === 'string') setRisk(data.risk);
+      if (typeof data.owner === 'string') setOwner(data.owner);
+      if (typeof data.requestedBy === 'string') setRequestedBy(data.requestedBy);
+      if (Array.isArray(data.tenantsImpacted)) setTenantsImpacted(data.tenantsImpacted);
+      if (Array.isArray(data.targetEnvs)) setTargetEnvs(data.targetEnvs);
+      if (typeof data.postmanTestingRef === 'string') setPostmanTestingRef(data.postmanTestingRef);
+      if (Array.isArray(data.services)) setServices(data.services);
+      if (typeof data.bodyMarkdown === 'string') setBodyMarkdown(data.bodyMarkdown);
+      setLastLocalSavedAt(draft.updatedAt);
       setLocalDraftStatus('saved');
-    } catch {
-      // ignore
-    }
-    // only once per key
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localDraftKey, loading]);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (loading) return;
+    const draft = readLocalDraft<WorkOrderLocalDraft>(localDraftKey);
+    if (!draft) return;
+    const baseline = isNew ? 0 : lastServerSavedAt;
+    if (draft.updatedAt > baseline) {
+      setLocalDraftBanner(draft);
+    }
+  }, [isNew, lastServerSavedAt, localDraftKey, loading]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (localDraftBanner) return;
     setLocalDraftStatus('saving');
     const handle = window.setTimeout(() => {
-      try {
-        const payload = {
-          version: 1,
-          updatedAt: Date.now(),
+      const payload: LocalDraftPayload<WorkOrderLocalDraft> = {
+        version: 1,
+        updatedAt: Date.now(),
+        data: {
           woId,
           title,
           type,
@@ -681,18 +838,21 @@ export default function WorkOrderEditorPage() {
           postmanTestingRef,
           services,
           bodyMarkdown,
-        };
-        window.localStorage.setItem(localDraftKey, JSON.stringify(payload));
+        },
+      };
+      try {
+        writeLocalDraft(localDraftKey, payload);
         setLastLocalSavedAt(payload.updatedAt);
         setLocalDraftStatus('saved');
       } catch {
         setLocalDraftStatus('idle');
       }
-    }, 5000);
+    }, 1500);
     return () => window.clearTimeout(handle);
   }, [
     bodyMarkdown,
     loading,
+    localDraftBanner,
     localDraftKey,
     owner,
     postmanTestingRef,
@@ -706,6 +866,18 @@ export default function WorkOrderEditorPage() {
     type,
     woId,
   ]);
+
+  const restoreLocalDraft = () => {
+    if (!localDraftBanner) return;
+    applyLocalDraft(localDraftBanner);
+    setLocalDraftBanner(null);
+  };
+
+  const discardLocalDraft = () => {
+    clearLocalDraft(localDraftKey);
+    setLocalDraftBanner(null);
+    setLocalDraftStatus('idle');
+  };
 
   const applyOverviewDraftToForm = () => {
     const parsed = parseOverviewYaml(overviewDraft);
@@ -728,7 +900,6 @@ export default function WorkOrderEditorPage() {
 
   const applySummaryAssist = () => {
     setTab('content');
-    setContentView('form');
     const serviceLines =
       services.length > 0
         ? services.map((service) => {
@@ -744,7 +915,6 @@ export default function WorkOrderEditorPage() {
 
   const insertMissingSections = () => {
     setTab('content');
-    setContentView('form');
     if (missingSections.length === 0) return;
     setBodyMarkdown((prev) => {
       const trimmed = prev.trim();
@@ -766,6 +936,10 @@ export default function WorkOrderEditorPage() {
 
   const save = async (overrideSha?: string | null) => {
     if (!accessToken || !canWrite) return;
+    if (!title.trim()) {
+      setError('Title is required.');
+      return;
+    }
     setSaving(true);
     setError(null);
     setConflict(null);
@@ -792,18 +966,30 @@ export default function WorkOrderEditorPage() {
       setSha(response.sha || null);
       setBranch(response.branch || null);
       setPrUrl(response.pr_url || null);
+      setSyncStatus(response.sync_status || null);
+      setSyncError(response.last_sync_error || null);
+      setLastSyncAt(response.last_sync_at || null);
       setLastSavedMarkdown(response.raw_markdown);
+      setLastServerSavedAt(Date.now());
       if (isNew) {
         router.replace(`/work-orders/${response.wo_id}`);
       }
-      try {
-        window.localStorage.removeItem(localDraftKey);
-      } catch {
-        // ignore
-      }
+      clearLocalDraft(localDraftKey);
+      setLocalDraftBanner(null);
       setLocalDraftStatus('idle');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to save work order';
+      let message = err instanceof Error ? err.message : 'Failed to save work order';
+      try {
+        const parsed = JSON.parse(message) as any;
+        const detail = parsed?.detail;
+        if (Array.isArray(detail) && detail[0]?.msg) {
+          message = String(detail[0].msg);
+        } else if (typeof detail === 'string') {
+          message = detail;
+        }
+      } catch {
+        // ignore JSON parse
+      }
       if (message.includes('409') || message.toLowerCase().includes('conflict')) {
         setConflict('This work order was updated remotely. Reload the latest version or force overwrite.');
       } else {
@@ -817,12 +1003,16 @@ export default function WorkOrderEditorPage() {
   const reloadLatest = async () => {
     if (!accessToken || !woId) return;
     try {
-      const response = await api.get<WorkOrderOut>(`/work-orders/${woId}?ref=${branch ?? ''}`, accessToken);
+      const response = await api.get<WorkOrderOut>(`/work-orders/${woId}`, accessToken);
       setTitle(response.parsed.title);
       setServices(response.parsed.services_touched);
       setBodyMarkdown(response.parsed.body_markdown);
       setSha(response.sha || null);
+      setSyncStatus(response.sync_status || null);
+      setSyncError(response.last_sync_error || null);
+      setLastSyncAt(response.last_sync_at || null);
       setLastSavedMarkdown(response.raw_markdown);
+      setLastServerSavedAt(Date.now());
       setConflict(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reload latest work order');
@@ -832,7 +1022,7 @@ export default function WorkOrderEditorPage() {
   const forceOverwrite = async () => {
     if (!accessToken || !woId) return;
     try {
-      const response = await api.get<WorkOrderOut>(`/work-orders/${woId}?ref=${branch ?? ''}`, accessToken);
+      const response = await api.get<WorkOrderOut>(`/work-orders/${woId}`, accessToken);
       const latestSha = response.sha || null;
       setSha(latestSha);
       await save(latestSha);
@@ -842,25 +1032,41 @@ export default function WorkOrderEditorPage() {
     }
   };
 
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-        event.preventDefault();
-        void save();
-      }
-      if (event.key === 'F6') {
-        event.preventDefault();
-        const targets = ['wo-title', 'wo-service-first', 'wo-editor-content', 'wo-preview-tab'];
-        const activeId = (document.activeElement as HTMLElement | null)?.id;
-        const idx = Math.max(0, targets.indexOf(activeId || ''));
-        const nextId = targets[(idx + 1) % targets.length];
-        const nextEl = document.getElementById(nextId);
-        if (nextEl) nextEl.focus();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [save]);
+  const createOrGetPr = async () => {
+    if (!accessToken || !woId || !canWrite) return;
+    setPrWorking(true);
+    setError(null);
+    try {
+      const response = await api.post<WorkOrderOut>(`/work-orders/${woId}/pr`, {}, accessToken);
+      setPrUrl(response.pr_url || null);
+      setBranch(response.branch || branch || null);
+      setSha(response.sha || sha || null);
+      setSyncStatus(response.sync_status || null);
+      setSyncError(response.last_sync_error || null);
+      setLastSyncAt(response.last_sync_at || null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create PR');
+    } finally {
+      setPrWorking(false);
+    }
+  };
+
+  const syncNow = async () => {
+    if (!accessToken || !woId || !canWrite) return;
+    setSyncWorking(true);
+    setError(null);
+    try {
+      const response = await api.post<WorkOrderOut>(`/work-orders/${woId}/sync`, {}, accessToken);
+      setSyncStatus(response.sync_status || null);
+      setSyncError(response.last_sync_error || null);
+      setLastSyncAt(response.last_sync_at || null);
+      setBranch(response.branch || branch || null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to queue sync');
+    } finally {
+      setSyncWorking(false);
+    }
+  };
 
   if (loading) return <LoadingState label='Loading work order...' />;
   if (!canWrite && isNew) {
@@ -868,8 +1074,8 @@ export default function WorkOrderEditorPage() {
   }
 
   return (
-    <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px]'>
-      <div className='space-y-6'>
+    <div className='grid h-full min-h-0 gap-6 lg:grid-cols-[minmax(0,1fr)_280px]'>
+      <div className='flex min-h-0 flex-col gap-6'>
         <div className='flex flex-wrap items-center justify-between gap-3'>
           <div>
             <h2 className='text-2xl font-semibold'>{isNew ? 'New work order' : woId}</h2>
@@ -877,17 +1083,39 @@ export default function WorkOrderEditorPage() {
               <StatusChip status={status} />
               <span className='rounded-md border bg-muted/30 px-2 py-0.5 text-xs text-muted-foreground'>{type}</span>
               <RiskChip risk={risk} />
-              <span className='text-xs text-muted-foreground'>Ctrl+S to save · / for sections</span>
+              <Badge variant='outline' className={syncBadgeClass(syncStatus)}>
+                Sync: {syncStatus || 'unknown'}
+              </Badge>
+              <span className='text-xs text-muted-foreground'>Ctrl+K for commands · Alt+1..7 for sections</span>
             </div>
           </div>
           <div className='flex items-center gap-2'>
-          <div className='hidden text-xs text-muted-foreground sm:block'>
-            {localDraftStatus === 'saving'
-              ? 'Saving locally…'
-              : localDraftStatus === 'saved' && lastLocalSavedAt
-                ? `Saved locally ${new Date(lastLocalSavedAt).toLocaleTimeString()}`
-                : null}
-          </div>
+            <input
+              ref={importFileRef}
+              type='file'
+              accept='.md,.markdown,.txt'
+              className='hidden'
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                // allow re-importing same file
+                event.currentTarget.value = '';
+                if (!file) return;
+                void startImportFile(file);
+              }}
+            />
+            <ConfirmDialog
+              title='Import work order file?'
+              description='This will overwrite your current edits in this work order editor.'
+              confirmText='Import'
+              open={importConfirmOpen}
+              onOpenChange={setImportConfirmOpen}
+              onConfirm={() => {
+                const text = pendingImportText;
+                setPendingImportText(null);
+                if (text) applyImportedWorkOrderText(text);
+              }}
+            />
+            <div className='hidden text-xs text-muted-foreground sm:block'>{localDraftLabel}</div>
             {prUrl && (
               <Button variant='outline' asChild>
                 <a href={prUrl} target='_blank' rel='noreferrer'>
@@ -895,11 +1123,38 @@ export default function WorkOrderEditorPage() {
                 </a>
               </Button>
             )}
+            <Button
+              type='button'
+              variant='outline'
+              onClick={() => importFileRef.current?.click()}
+              disabled={saving || !canWrite}
+            >
+              Import
+            </Button>
             <Button onClick={save} disabled={saving || !canWrite}>
               {saving ? 'Saving…' : 'Save'}
             </Button>
           </div>
         </div>
+
+        {localDraftBanner ? (
+          <Card className='border-amber-200 bg-amber-50/40'>
+            <CardContent className='flex flex-wrap items-center justify-between gap-3 pt-4 text-sm text-amber-900'>
+              <span>
+                Draft found from {new Date(localDraftBanner.updatedAt).toLocaleString()}.
+                Restore it or discard to keep the server copy.
+              </span>
+              <div className='flex gap-2'>
+                <Button type='button' variant='outline' onClick={restoreLocalDraft}>
+                  Restore
+                </Button>
+                <Button type='button' variant='ghost' onClick={discardLocalDraft}>
+                  Discard
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         {error && <p className='text-sm text-destructive'>{error}</p>}
         {conflict && (
@@ -918,7 +1173,7 @@ export default function WorkOrderEditorPage() {
           </Card>
         )}
 
-        <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
+        <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)} className='flex min-h-0 flex-1 flex-col'>
           <TabsList className='grid w-full grid-cols-3 md:grid-cols-6'>
             <TabsTrigger value='overview' id='wo-overview-tab'>
               Overview
@@ -932,7 +1187,7 @@ export default function WorkOrderEditorPage() {
             <TabsTrigger value='pr'>PR</TabsTrigger>
           </TabsList>
 
-          <TabsContent value='overview'>
+          <TabsContent value='overview' className='min-h-0'>
             <Card>
               <CardHeader className='flex flex-row items-center justify-between gap-3'>
                 <CardTitle className='text-base'>Overview</CardTitle>
@@ -1061,7 +1316,7 @@ export default function WorkOrderEditorPage() {
             </Card>
           </TabsContent>
 
-          <TabsContent value='services'>
+          <TabsContent value='services' className='min-h-0'>
             <Card>
               <CardHeader className='flex flex-row items-center justify-between gap-3'>
                 <CardTitle className='text-base'>Services touched</CardTitle>
@@ -1133,72 +1388,17 @@ export default function WorkOrderEditorPage() {
             </Card>
           </TabsContent>
 
-          <TabsContent value='content'>
-            <Card>
-              <CardHeader className='flex flex-row items-center justify-between gap-3'>
-                <CardTitle className='text-base'>Work order content</CardTitle>
-                <div className='flex items-center gap-1 rounded-md border bg-white p-1'>
-                  <Button
-                    type='button'
-                    size='sm'
-                    variant={contentView === 'form' ? 'secondary' : 'ghost'}
-                    onClick={() => setContentView('form')}
-                  >
-                    Form
-                  </Button>
-                  <Button
-                    type='button'
-                    size='sm'
-                    variant={contentView === 'markdown' ? 'secondary' : 'ghost'}
-                    onClick={() => setContentView('markdown')}
-                  >
-                    Markdown
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {contentView === 'form' ? (
-                  <div className='grid gap-4'>
-                    {[
-                      { heading: 'Summary', placeholder: '- ' },
-                      { heading: 'Acceptance / checks', placeholder: '- ' },
-                      { heading: 'Versions used during testing', placeholder: '| Component | Version |\n|---|---|\n|  |  |' },
-                      { heading: 'Implementation notes', placeholder: '- ' },
-                      { heading: 'Risks and mitigations', placeholder: '- Risk:\n  - \n- Mitigation:\n  - ' },
-                      { heading: 'Rollback considerations', placeholder: '- ' },
-                    ].map((section) => (
-                      <div key={section.heading} className='space-y-2'>
-                        <p className='text-sm font-medium'>{section.heading}</p>
-                        <Textarea
-                          value={readSection(bodyMarkdown, section.heading) || section.placeholder}
-                          onChange={(e) =>
-                            setBodyMarkdown((prev) => writeSection(prev, section.heading, e.target.value))
-                          }
-                          rows={section.heading === 'Versions used during testing' ? 6 : 4}
-                          className='text-sm'
-                        />
-                      </div>
-                    ))}
-                    {missingSections.length > 0 ? (
-                      <div className='rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground'>
-                        Missing sections: {missingSections.slice(0, 6).join(', ')}
-                        {missingSections.length > 6 ? '…' : ''}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <LexicalMarkdownEditor
-                    value={bodyMarkdown}
-                    onChange={setBodyMarkdown}
-                    contentEditableId='wo-editor-content'
-                    placeholder='Write the work order here… Use / to insert sections.'
-                  />
-                )}
-              </CardContent>
-            </Card>
+          <TabsContent value='content' className='min-h-0 flex-1'>
+            <WorkOrderContentTab
+              bodyMarkdown={bodyMarkdown}
+              onBodyMarkdownChange={setBodyMarkdown}
+              onSave={save}
+              saveLabel={saveLabel}
+              localDraftLabel={localDraftLabel}
+            />
           </TabsContent>
 
-          <TabsContent value='preview'>
+          <TabsContent value='preview' className='min-h-0'>
             <Card>
               <CardContent className='pt-4'>
                 {(() => {
@@ -1227,7 +1427,7 @@ export default function WorkOrderEditorPage() {
             </Card>
           </TabsContent>
 
-          <TabsContent value='diff'>
+          <TabsContent value='diff' className='min-h-0'>
             <Card>
               <CardContent className='pt-4'>
                 <p className='text-xs text-muted-foreground'>Unified diff</p>
@@ -1252,15 +1452,47 @@ export default function WorkOrderEditorPage() {
             </Card>
           </TabsContent>
 
-          <TabsContent value='pr'>
+          <TabsContent value='pr' className='min-h-0'>
             <Card>
               <CardContent className='pt-4 text-sm'>
+                <div className='mb-4 space-y-2'>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <Badge variant='outline' className={syncBadgeClass(syncStatus)}>
+                      Sync: {syncStatus || 'unknown'}
+                    </Badge>
+                    {lastSyncAt && (
+                      <span className='text-xs text-muted-foreground'>Last sync: {new Date(lastSyncAt).toLocaleString()}</span>
+                    )}
+                  </div>
+                  {syncStatus === 'failed' && syncError ? (
+                    <p className='text-xs text-red-600'>Sync failed: {syncError}</p>
+                  ) : null}
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={syncNow}
+                    disabled={syncWorking || saving || !canWrite || !woId}
+                  >
+                    {syncWorking ? 'Syncing…' : 'Sync now'}
+                  </Button>
+                </div>
                 {prUrl ? (
                   <a className='text-primary underline' href={prUrl} target='_blank' rel='noreferrer'>
                     {prUrl}
                   </a>
                 ) : (
-                  <p className='text-muted-foreground'>No PR yet. Press Ctrl+S or Save to create one.</p>
+                  <div className='space-y-3'>
+                    <p className='text-muted-foreground'>No PR yet. Create one when the work order is ready for review.</p>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      onClick={createOrGetPr}
+                      disabled={prWorking || saving || !canWrite || !woId}
+                    >
+                      {prWorking ? 'Creating…' : 'Create PR'}
+                    </Button>
+                  </div>
                 )}
                 {branch && <p className='mt-2 text-xs text-muted-foreground'>Branch: {branch}</p>}
               </CardContent>
@@ -1269,7 +1501,7 @@ export default function WorkOrderEditorPage() {
         </Tabs>
       </div>
 
-      <div className='hidden lg:block'>
+      <div className='hidden min-h-0 lg:block'>
         <div className='sticky top-20 space-y-3'>
           <Card>
             <CardHeader className='pb-3'>

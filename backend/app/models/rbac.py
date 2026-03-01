@@ -1,9 +1,9 @@
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base
@@ -27,6 +27,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     oauth_provider_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    preferences_json: Mapped[dict[str, Any]] = mapped_column('preferences', JSONB, nullable=False, default=dict)
 
     user_roles: Mapped[list['UserRole']] = relationship(back_populates='user', cascade='all, delete-orphan')
     refresh_tokens: Mapped[list['RefreshToken']] = relationship(back_populates='user', cascade='all, delete-orphan')
