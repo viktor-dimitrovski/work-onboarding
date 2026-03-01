@@ -28,14 +28,19 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 
-def _normalize_track_purposes(items: list[TrackPurposeLabel] | None) -> list[dict[str, str]]:
-    if not items:
+def _normalize_track_purposes(items: Any) -> list[dict[str, str]]:
+    if not items or not isinstance(items, list):
         return DEFAULT_TRACK_PURPOSE_LABELS
     seen: set[str] = set()
     normalized: list[dict[str, str]] = []
     for item in items:
-        value = (item.value or '').strip()
-        label = (item.label or '').strip()
+        if isinstance(item, dict):
+            value = (item.get('value') or '').strip()
+            label = (item.get('label') or '').strip()
+        else:
+            # Pydantic model instance (TrackPurposeLabel) or similar
+            value = (getattr(item, 'value', '') or '').strip()
+            label = (getattr(item, 'label', '') or '').strip()
         if not value or not label:
             continue
         if value in seen:

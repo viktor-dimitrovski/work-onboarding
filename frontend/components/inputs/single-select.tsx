@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Plus, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -135,13 +134,11 @@ export function SingleSelect({
         <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
 
-      {open && menuStyle
-        ? createPortal(
+      {open && menuStyle ? (
         <div
           ref={menuRef}
           className='fixed z-[80] overflow-hidden rounded-md border bg-white shadow-soft'
           style={{ top: menuStyle.top, left: menuStyle.left, width: menuStyle.width }}
-          onMouseDown={(e) => e.preventDefault()}
         >
           <div className='flex items-center justify-between border-b bg-muted/20 px-2 py-2'>
             <p className='text-xs font-medium text-muted-foreground'>Select</p>
@@ -238,10 +235,8 @@ export function SingleSelect({
               </p>
             </div>
           )}
-        </div>,
-        document.body,
-          )
-        : null}
+        </div>
+      ) : null}
     </div>
   );
 }

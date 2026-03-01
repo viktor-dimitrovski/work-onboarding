@@ -14,6 +14,10 @@ const DEFAULT_ITEMS: TrackPurposeItem[] = [
   { value: 'both', label: 'Onboarding + Assessment' },
 ];
 
+// Deduplicate /settings calls in dev (React StrictMode) and across components.
+const purposeLabelsCacheByToken = new Map<string, TrackPurposeItem[]>();
+const purposeLabelsInflightByToken = new Map<string, Promise<TrackPurposeItem[]>>();
+
 function slugify(str: string): string {
   return str
     .toLowerCase()
@@ -64,18 +68,39 @@ export function useTrackPurposeLabels() {
   useEffect(() => {
     if (!accessToken) return;
     let isMounted = true;
-    api
-      .get<{ track_purpose_labels?: TrackPurposeItem[] }>('/settings', accessToken)
-      .then((data) => {
-        if (!isMounted) return;
+
+    const cached = purposeLabelsCacheByToken.get(accessToken);
+    if (cached && cached.length > 0) {
+      setItems(cached);
+      saveStoredItems(cached);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const existing = purposeLabelsInflightByToken.get(accessToken);
+    const promise =
+      existing ??
+      api.get<{ track_purpose_labels?: TrackPurposeItem[] }>('/settings', accessToken).then((data) => {
         const remote = data?.track_purpose_labels;
-        if (Array.isArray(remote) && remote.length > 0) {
+        return Array.isArray(remote) && remote.length > 0 ? remote : [];
+      });
+    if (!existing) purposeLabelsInflightByToken.set(accessToken, promise);
+
+    promise
+      .then((remote) => {
+        if (!isMounted) return;
+        if (remote.length > 0) {
           setItems(remote);
           saveStoredItems(remote);
+          purposeLabelsCacheByToken.set(accessToken, remote);
         }
       })
       .catch(() => {
         // ignore remote fetch failures, keep local data
+      })
+      .finally(() => {
+        purposeLabelsInflightByToken.delete(accessToken);
       });
     return () => {
       isMounted = false;

@@ -335,7 +335,11 @@ export default function AssessmentQuestionsPage() {
       const response = await api.get<QuestionListResponse>(`/assessments/questions?${params.toString()}`, accessToken);
       setQuestions(response.items);
       setTotal(response.meta.total ?? 0);
-      setStats(await api.get<QuestionStatsResponse>(`/assessments/questions/stats?${params.toString()}`, accessToken));
+      // Facet counts should not collapse to zero when a category filter is active.
+      // We compute stats for the current query/status/tag/difficulty, but exclude the category filter itself.
+      const statsParams = new URLSearchParams(params);
+      statsParams.delete('category');
+      setStats(await api.get<QuestionStatsResponse>(`/assessments/questions/stats?${statsParams.toString()}`, accessToken));
     } finally {
       setLoading(false);
     }
@@ -558,9 +562,9 @@ export default function AssessmentQuestionsPage() {
   const totalPages = Math.max(1, Math.ceil((total || 0) / pageSize));
   const fromRow = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const toRow = Math.min(total, page * pageSize);
-  const totalCount = stats?.total ?? total;
-  const resultsLabel = totalCount === 1 ? '1 question' : `${totalCount} questions`;
+  const resultsLabel = total === 1 ? '1 question' : `${total} questions`;
   const selectedCount = selectedQuestionIds.length;
+  const allCategoriesCount = stats?.total ?? total;
 
   return (
     <div className='space-y-6'>
@@ -658,7 +662,7 @@ export default function AssessmentQuestionsPage() {
               onClick={() => setSelectedCategories([])}
             >
               <span>All categories</span>
-              <span className='text-xs text-muted-foreground'>{totalCount}</span>
+              <span className='text-xs text-muted-foreground'>{allCategoriesCount}</span>
             </Button>
             <Button
               type='button'
@@ -745,70 +749,82 @@ export default function AssessmentQuestionsPage() {
                   <RefreshCw className='h-4 w-4' />
                 </Button>
               </div>
-              <div className='flex flex-wrap items-center gap-2 lg:ml-auto'>
+              <div className='flex flex-wrap items-center gap-2 lg:ml-auto lg:flex-nowrap'>
                 {hasActiveFilters && (
                   <Button variant='ghost' size='sm' onClick={clearFilters}>
                     <X className='mr-1 h-3 w-3' />
                     Clear filters
                   </Button>
                 )}
-                <label className='flex items-center gap-2 text-xs text-muted-foreground'>
-                  <input
-                    type='checkbox'
-                    className='h-4 w-4 rounded border-input'
-                    checked={allVisibleSelected}
-                    onChange={(event) => toggleSelectAll(event.target.checked)}
-                    aria-label='Select all questions on page'
-                  />
-                  Select page
-                </label>
-                <span className='text-sm font-medium text-muted-foreground'>{resultsLabel}</span>
-                {selectedCount > 0 && (
-                  <span className='text-xs text-muted-foreground'>{selectedCount} selected</span>
-                )}
-                {selectedCount > 0 && (
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    onClick={() =>
-                      setArchiveTarget({
-                        ids: selectedQuestionIds,
-                        label: `${selectedCount} question${selectedCount === 1 ? '' : 's'}`,
-                      })
-                    }
+                <div className='flex items-center gap-3'>
+                  <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                    <input
+                      type='checkbox'
+                      className='h-4 w-4 rounded border-input'
+                      checked={allVisibleSelected}
+                      onChange={(event) => toggleSelectAll(event.target.checked)}
+                      aria-label='Select all questions on page'
+                    />
+                    Select page
+                  </label>
+                  <span className='text-xs font-medium text-muted-foreground'>{resultsLabel}</span>
+                  <span
+                    className={cn(
+                      'min-w-[92px] text-xs text-muted-foreground tabular-nums',
+                      selectedCount === 0 && 'invisible',
+                    )}
                   >
-                    Archive selected
-                  </Button>
-                )}
-                {isRefreshing && <span className='text-xs text-muted-foreground'>Updating…</span>}
-                <select
-                  className='h-9 rounded-md border border-input bg-background px-2 text-xs'
-                  value={pageSize}
-                  onChange={(e) => setPageSize(Number(e.target.value || 24))}
+                    {selectedCount} selected
+                  </span>
+                </div>
+
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className={cn(selectedCount === 0 && 'invisible pointer-events-none')}
+                  tabIndex={selectedCount === 0 ? -1 : 0}
+                  aria-hidden={selectedCount === 0}
+                  onClick={() =>
+                    setArchiveTarget({
+                      ids: selectedQuestionIds,
+                      label: `${selectedCount} question${selectedCount === 1 ? '' : 's'}`,
+                    })
+                  }
                 >
-                  <option value={12}>12 / page</option>
-                  <option value={24}>24 / page</option>
-                  <option value={48}>48 / page</option>
-                </select>
-                <div className='flex items-center gap-1 rounded-md border p-1'>
-                  <Button
-                    type='button'
-                    size='sm'
-                    variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
-                    onClick={() => setViewMode('grid')}
-                    aria-label='Grid view'
+                  Archive selected
+                </Button>
+
+                <div className='flex items-center gap-2'>
+                  {isRefreshing && <span className='text-xs text-muted-foreground'>Updating…</span>}
+                  <select
+                    className='h-9 rounded-md border border-input bg-background px-2 text-xs'
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value || 24))}
                   >
-                    <LayoutGrid className='h-4 w-4' />
-                  </Button>
-                  <Button
-                    type='button'
-                    size='sm'
-                    variant={viewMode === 'list' ? 'secondary' : 'ghost'}
-                    onClick={() => setViewMode('list')}
-                    aria-label='List view'
-                  >
-                    <List className='h-4 w-4' />
-                  </Button>
+                    <option value={12}>12 / page</option>
+                    <option value={24}>24 / page</option>
+                    <option value={48}>48 / page</option>
+                  </select>
+                  <div className='flex items-center gap-1 rounded-md border p-1'>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+                      onClick={() => setViewMode('grid')}
+                      aria-label='Grid view'
+                    >
+                      <LayoutGrid className='h-4 w-4' />
+                    </Button>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+                      onClick={() => setViewMode('list')}
+                      aria-label='List view'
+                    >
+                      <List className='h-4 w-4' />
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>

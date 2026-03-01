@@ -15,6 +15,10 @@ interface TenantContextState {
 
 const TenantContext = createContext<TenantContextState | undefined>(undefined);
 
+// Deduplicate calls in dev (React StrictMode) and across components.
+const tenantContextCacheByToken = new Map<string, TenantContextPayload>();
+const tenantContextInflightByToken = new Map<string, Promise<TenantContextPayload>>();
+
 export function TenantProvider({ children }: { children: React.ReactNode }) {
   const { accessToken, isAuthenticated } = useAuth();
   const [context, setContext] = useState<TenantContextPayload | null>(null);
@@ -28,13 +32,31 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     }
 
     let isMounted = true;
+    const cached = tenantContextCacheByToken.get(accessToken);
+    if (cached) {
+      setContext(cached);
+      setIsLoading(false);
+      return () => {
+        isMounted = false;
+      };
+    }
+
     setIsLoading(true);
 
-    api
-      .getTenantContext(accessToken)
+    const existing = tenantContextInflightByToken.get(accessToken);
+    const promise =
+      existing ??
+      api.getTenantContext(accessToken).then((data) => {
+        const payload = data as TenantContextPayload;
+        tenantContextCacheByToken.set(accessToken, payload);
+        return payload;
+      });
+    if (!existing) tenantContextInflightByToken.set(accessToken, promise);
+
+    promise
       .then((data) => {
         if (isMounted) {
-          setContext(data as TenantContextPayload);
+          setContext(data);
         }
       })
       .catch(() => {
@@ -43,6 +65,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         }
       })
       .finally(() => {
+        tenantContextInflightByToken.delete(accessToken);
         if (isMounted) {
           setIsLoading(false);
         }
