@@ -124,6 +124,7 @@ export function useTrackPurposeLabels() {
       value = `${base}-${++n}`;
     }
     updateItems([...items, { value, label: label.trim() || value }]);
+    return value;
   };
 
   const removePurpose = (value: string) => {

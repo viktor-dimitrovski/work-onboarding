@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
@@ -25,6 +26,9 @@ interface AssignmentListResponse {
 export default function AssignmentsPage() {
   const { accessToken } = useAuth();
   const { hasModule, hasPermission } = useTenant();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const templateId = searchParams.get('template_id');
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -32,6 +36,9 @@ export default function AssignmentsPage() {
   const canCreateAssignment = hasModule('assignments') && hasPermission('assignments:write');
 
   const filteredAssignments = assignments.filter((assignment) => {
+    if (templateId && assignment.template_id !== templateId) {
+      return false;
+    }
     if (statusFilter && assignment.status !== statusFilter) {
       return false;
     }
@@ -45,6 +52,8 @@ export default function AssignmentsPage() {
       (assignment.purpose || '').toLowerCase().includes(needle)
     );
   });
+
+  const templateFilterLabel = useMemo(() => (templateId ? shortId(templateId) : null), [templateId]);
 
   useEffect(() => {
     const run = async () => {
@@ -90,6 +99,21 @@ export default function AssignmentsPage() {
           placeholder='Search by assignment, purpose, or creator...'
           className='max-w-sm'
         />
+        {templateId ? (
+          <div className='flex items-center gap-2 rounded-md border bg-white px-3 py-2 text-sm'>
+            <span className='text-xs text-muted-foreground'>Track:</span>
+            <span className='text-xs font-medium'>{templateFilterLabel}</span>
+            <Button
+              type='button'
+              size='sm'
+              variant='ghost'
+              onClick={() => router.push('/assignments')}
+              className='h-7 px-2'
+            >
+              Clear
+            </Button>
+          </div>
+        ) : null}
         <select
           className='h-10 rounded-md border border-input bg-white px-3 text-sm'
           value={statusFilter}

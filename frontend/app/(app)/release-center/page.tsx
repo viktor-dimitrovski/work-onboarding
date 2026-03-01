@@ -49,7 +49,7 @@ export default function ReleaseCenterPage() {
   const [loading, setLoading] = useState(true);
   const [envFilter, setEnvFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [query, setQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [templates, setTemplates] = useState<ReleaseTemplateOption[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -62,7 +62,7 @@ export default function ReleaseCenterPage() {
   const canRead = hasModule('releases') && hasPermission('releases:read');
   const canWrite = hasModule('releases') && hasPermission('releases:write');
 
-  const query = useMemo(() => {
+  const listQuery = useMemo(() => {
     const params = new URLSearchParams();
     if (envFilter) params.set('environment', envFilter);
     if (statusFilter) params.set('status', statusFilter);
@@ -74,7 +74,7 @@ export default function ReleaseCenterPage() {
     if (!accessToken || !canRead) return;
     setLoading(true);
     try {
-      const response = await api.get<ReleaseCenterListResponse>(`/release-center${query}`, accessToken);
+      const response = await api.get<ReleaseCenterListResponse>(`/release-center${listQuery}`, accessToken);
       setItems(response.items);
     } finally {
       setLoading(false);
@@ -83,7 +83,7 @@ export default function ReleaseCenterPage() {
 
   useEffect(() => {
     void load();
-  }, [accessToken, query, canRead]);
+  }, [accessToken, listQuery, canRead]);
 
   useEffect(() => {
     if (!accessToken || !canRead) return;
@@ -98,8 +98,8 @@ export default function ReleaseCenterPage() {
     return <EmptyState title='Access denied' description='You do not have access to Release Center.' />;
   }
   const filteredItems = items.filter((item) => {
-    if (!query.trim()) return true;
-    const needle = query.trim().toLowerCase();
+    if (!searchQuery.trim()) return true;
+    const needle = searchQuery.trim().toLowerCase();
     return (
       item.title.toLowerCase().includes(needle) ||
       (item.rel_id || '').toLowerCase().includes(needle) ||
@@ -204,8 +204,8 @@ export default function ReleaseCenterPage() {
 
       <div className='flex flex-wrap items-center gap-2'>
         <Input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
           placeholder='Search release id, version, or title...'
           className='max-w-sm'
         />
@@ -228,7 +228,7 @@ export default function ReleaseCenterPage() {
           type='button'
           variant='ghost'
           onClick={() => {
-            setQuery('');
+            setSearchQuery('');
             setEnvFilter('');
             setStatusFilter('');
           }}

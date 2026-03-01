@@ -23,6 +23,7 @@ import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/com
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { AssessmentCategory, AssessmentClassificationJob, AssessmentQuestion } from '@/lib/types';
+import { cn } from '@/lib/utils';
 import { LayoutGrid, List, MoreVertical, RefreshCw, Search, Sparkles, X } from 'lucide-react';
 
 interface QuestionListResponse {
@@ -1050,17 +1051,19 @@ export default function AssessmentQuestionsPage() {
                 <ul className='space-y-2 text-sm'>
                   {previewQuestion.options.map((option, idx) => (
                     <li key={option.id} className='flex items-start gap-2'>
-                      <span className='mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px]'>
+                      <span
+                        className={cn(
+                          'mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px]',
+                          option.is_correct
+                            ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-900'
+                            : 'text-muted-foreground',
+                        )}
+                      >
                         {idx + 1}
                       </span>
                       <span className={option.is_correct ? 'font-medium text-foreground' : 'text-muted-foreground'}>
                         {option.option_text}
                       </span>
-                      {option.is_correct && (
-                        <Badge variant='outline' className='ml-auto text-[10px]'>
-                          Correct
-                        </Badge>
-                      )}
                     </li>
                   ))}
                 </ul>

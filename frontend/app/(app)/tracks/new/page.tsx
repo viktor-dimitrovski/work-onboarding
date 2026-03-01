@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { BuilderShell } from '@/components/layout/builder-shell';
 import { TrackBuilder, type DraftPhase, type DraftTask } from '@/components/tracks/track-builder';
+import { SingleSelect } from '@/components/inputs/single-select';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useTrackPurposeLabels } from '@/lib/track-purpose';
@@ -70,7 +71,7 @@ function wrapPhaseForBuilder(phase: DraftPhase, index: number): DraftPhase {
 export default function NewTrackPage() {
   const { accessToken } = useAuth();
   const router = useRouter();
-  const { options: trackPurposeOptions, getLabel: getPurposeLabel } = useTrackPurposeLabels();
+  const { options: trackPurposeOptions, getLabel: getPurposeLabel, addPurpose } = useTrackPurposeLabels();
   const defaultPurpose = trackPurposeOptions[0]?.value ?? 'onboarding';
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +128,16 @@ export default function NewTrackPage() {
   });
 
   const estimatedDays = form.watch('estimated_duration_days');
+
+  const trackTypeOptions = useMemo(
+    () => [
+      { value: 'GENERAL', label: 'General' },
+      { value: 'RELEASE', label: 'Release template' },
+      { value: 'TENANT_CREATION', label: 'Tenant creation' },
+      { value: 'WORK_ORDER', label: 'Work order' },
+    ],
+    [],
+  );
 
   useEffect(() => {
     if (!aiTargetPhaseId && phases[0]) {
@@ -844,7 +855,9 @@ export default function NewTrackPage() {
             </SheetHeader>
 
             <div className='mt-4 flex-1 overflow-auto pr-1'>
-              <div className='grid gap-4 md:grid-cols-2'>
+              <div className='rounded-xl border bg-muted/10 p-4'>
+                <p className='text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground'>Basics</p>
+                <div className='mt-3 grid gap-4 md:grid-cols-2'>
                 <div className='space-y-2'>
                   <Label htmlFor='title'>Title</Label>
                   <Input id='title' {...form.register('title')} />
@@ -875,34 +888,33 @@ export default function NewTrackPage() {
 
                 <div className='space-y-2'>
                   <Label htmlFor='purpose'>Track purpose</Label>
-                  <select
-                    id='purpose'
-                    className='h-10 rounded-md border border-input bg-white px-3 text-sm'
-                    {...form.register('purpose')}
-                  >
-                    {trackPurposeOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  <SingleSelect
+                    value={form.watch('purpose')}
+                    onChange={(next) => form.setValue('purpose', next, { shouldDirty: true })}
+                    options={trackPurposeOptions}
+                    placeholder='Select purpose…'
+                    creatable={{
+                      enabled: true,
+                      onCreate: async (label) => {
+                        const createdValue = addPurpose(label);
+                        form.setValue('purpose', createdValue, { shouldDirty: true });
+                      },
+                    }}
+                  />
                 </div>
 
                 <div className='space-y-2'>
                   <Label htmlFor='track_type'>Track type</Label>
-                  <select
-                    id='track_type'
-                    className='h-10 rounded-md border border-input bg-white px-3 text-sm'
-                    {...form.register('track_type')}
-                  >
-                    <option value='GENERAL'>GENERAL</option>
-                    <option value='RELEASE'>RELEASE</option>
-                    <option value='TENANT_CREATION'>TENANT_CREATION</option>
-                    <option value='WORK_ORDER'>WORK_ORDER</option>
-                  </select>
+                  <SingleSelect
+                    value={form.watch('track_type')}
+                    onChange={(next) => form.setValue('track_type', next, { shouldDirty: true })}
+                    options={trackTypeOptions}
+                    placeholder='Select type…'
+                  />
                   <p className='text-xs text-muted-foreground'>
                     Use <span className='font-medium'>RELEASE</span> to make templates appear in Release Center.
                   </p>
+                </div>
                 </div>
               </div>
             </div>

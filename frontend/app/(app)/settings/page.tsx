@@ -19,7 +19,7 @@ export default function SettingsPage() {
   const router = useRouter();
   const { isLoading, accessToken } = useAuth();
   const { hasModule, hasPermission, isLoading: tenantLoading } = useTenant();
-  const { items, addPurpose, removePurpose, updateLabel, resetItems } = useTrackPurposeLabels();
+  const { items, addPurpose, removePurpose, updateLabel, updateValue, resetItems } = useTrackPurposeLabels();
   const [newLabel, setNewLabel] = useState('');
   const [defaultTargetDays, setDefaultTargetDays] = useState<number | ''>(45);
   const [escalationEmail, setEscalationEmail] = useState('onboarding-ops@example.com');
@@ -126,7 +126,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle>Track purpose labels</CardTitle>
           <CardDescription>
-            Add or remove purpose options shown in track forms. Value (slug) is stored; label is displayed.
+            These options power the “Purpose” dropdowns. They’re stored per-tenant in Settings (and cached locally).
           </CardDescription>
         </CardHeader>
         <CardContent className='space-y-3'>
@@ -137,7 +137,12 @@ export default function SettingsPage() {
                 className='flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2'
               >
                 <div className='min-w-0 flex-1 space-y-1 sm:flex sm:flex-1 sm:items-center sm:gap-2'>
-                  <span className='text-xs font-medium text-muted-foreground'>{item.value}</span>
+                  <Input
+                    className='h-8 w-[160px] text-xs font-medium'
+                    value={item.value}
+                    onChange={(e) => updateValue(item.value, e.target.value)}
+                    placeholder='value (slug)'
+                  />
                   <Input
                     className='h-8 flex-1 text-sm'
                     value={item.label}

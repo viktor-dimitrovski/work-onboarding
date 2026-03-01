@@ -38,6 +38,8 @@ export default function MyOnboardingPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openPhaseIds, setOpenPhaseIds] = useState<string[]>([]);
+  const [phaseView, setPhaseView] = useState<'list' | 'wizard'>('list');
+  const [wizardPhaseId, setWizardPhaseId] = useState<string | null>(null);
   const [commentOpen, setCommentOpen] = useState(false);
   const [checklistUpdatingId, setChecklistUpdatingId] = useState<string | null>(null);
   const selectedTaskIdRef = useRef<string | null>(null);
@@ -47,6 +49,16 @@ export default function MyOnboardingPage() {
     () => assignment?.phases.flatMap((phase) => phase.tasks).find((task) => task.is_next_recommended) || null,
     [assignment],
   );
+
+  const orderedPhases = useMemo(() => {
+    if (!assignment) return [];
+    return assignment.phases.slice().sort((a, b) => a.order_index - b.order_index);
+  }, [assignment]);
+
+  const selectedPhaseId = useMemo(() => {
+    if (!assignment || !selectedTask) return null;
+    return assignment.phases.find((phase) => phase.tasks.some((task) => task.id === selectedTask.id))?.id ?? null;
+  }, [assignment, selectedTask]);
 
   const load = async ({ silent } = { silent: false }) => {
     if (!accessToken || !assignmentId) return;
@@ -119,6 +131,18 @@ export default function MyOnboardingPage() {
   useEffect(() => {
     selectedTaskIdRef.current = selectedTask?.id ?? null;
   }, [selectedTask?.id]);
+
+  useEffect(() => {
+    if (!orderedPhases.length) return;
+    if (selectedPhaseId) {
+      setWizardPhaseId(selectedPhaseId);
+      return;
+    }
+    if (!wizardPhaseId) {
+      const inProgress = orderedPhases.find((phase) => phase.status === 'in_progress')?.id ?? orderedPhases[0]?.id ?? null;
+      setWizardPhaseId(inProgress);
+    }
+  }, [orderedPhases, selectedPhaseId, wizardPhaseId]);
 
   useEffect(() => {
     if (!assignmentId) return;
@@ -314,39 +338,59 @@ export default function MyOnboardingPage() {
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{assignment.title}</CardTitle>
-          <CardDescription>
-            Follow phases in order. Mentor approvals will appear in your review queue automatically.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <Card className='bg-muted/10'>
+        <CardContent className='flex flex-wrap items-center justify-between gap-3 py-3'>
+          <div className='min-w-0'>
+            <p className='truncate text-sm font-semibold'>{assignment.title}</p>
+            <p className='text-xs text-muted-foreground'>
+              Follow phases in order. Mentor approvals will appear in your review queue automatically.
+            </p>
+          </div>
           {nextTask ? (
-            <div className='flex items-center justify-between rounded-md border bg-muted/30 p-3'>
+            <div className='flex items-center gap-3 rounded-md border bg-white/70 px-3 py-2'>
               <div>
-                <p className='font-medium'>Next recommended task</p>
-                <p className='text-sm'>{nextTask.title}</p>
+                <p className='text-[11px] uppercase tracking-wide text-muted-foreground'>Next task</p>
+                <p className='text-sm font-medium'>{nextTask.title}</p>
               </div>
               <StatusChip status={nextTask.status} />
             </div>
           ) : (
-            <EmptyState title='No next task' description='All required tasks may be completed.' />
+            <div className='rounded-md border bg-white/70 px-3 py-2 text-xs text-muted-foreground'>
+              No next task
+            </div>
           )}
         </CardContent>
       </Card>
 
-      <div className='grid gap-6 lg:grid-cols-[1.2fr,1fr] lg:items-start'>
+      <div className='grid gap-6 lg:grid-cols-[1.6fr,1fr] lg:items-start'>
         <Card>
           <CardHeader>
-            <CardTitle>Phase timeline</CardTitle>
+            <div className='flex flex-wrap items-center justify-between gap-2'>
+              <CardTitle>Phase timeline</CardTitle>
+              <div className='flex items-center gap-2'>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant={phaseView === 'list' ? 'secondary' : 'ghost'}
+                  onClick={() => setPhaseView('list')}
+                >
+                  List
+                </Button>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant={phaseView === 'wizard' ? 'secondary' : 'ghost'}
+                  onClick={() => setPhaseView('wizard')}
+                >
+                  Wizard
+                </Button>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className='pr-2'>
-            <Accordion type='multiple' className='space-y-2' value={openPhaseIds} onValueChange={setOpenPhaseIds}>
-              {assignment.phases
-                .slice()
-                .sort((a, b) => a.order_index - b.order_index)
-                .map((phase) => (
+            {phaseView === 'list' ? (
+              <Accordion type='multiple' className='space-y-2' value={openPhaseIds} onValueChange={setOpenPhaseIds}>
+                {orderedPhases.map((phase) => (
                   <AccordionItem key={phase.id} value={phase.id} className='rounded-md border px-3'>
                     <AccordionTrigger>
                       <div className='flex w-full flex-wrap items-center justify-between gap-3'>
@@ -405,7 +449,107 @@ export default function MyOnboardingPage() {
                     </AccordionContent>
                   </AccordionItem>
                 ))}
-            </Accordion>
+              </Accordion>
+            ) : (
+              (() => {
+                const currentIndex = orderedPhases.findIndex((phase) => phase.id === wizardPhaseId);
+                const phase = currentIndex >= 0 ? orderedPhases[currentIndex] : orderedPhases[0];
+                if (!phase) {
+                  return (
+                    <div className='rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground'>
+                      No phases available.
+                    </div>
+                  );
+                }
+                const tasks = phase.tasks
+                  .filter((task) => !task.metadata?.archived_from_republish)
+                  .slice()
+                  .sort((a, b) => a.order_index - b.order_index);
+                const goToPhase = (index: number) => {
+                  const next = orderedPhases[index];
+                  if (!next) return;
+                  setWizardPhaseId(next.id);
+                  setOpenPhaseIds([next.id]);
+                  const nextTask = next.tasks
+                    .filter((task) => !task.metadata?.archived_from_republish)
+                    .slice()
+                    .sort((a, b) => a.order_index - b.order_index)[0];
+                  if (nextTask) {
+                    setSelectedTask(nextTask);
+                  }
+                };
+                return (
+                  <div className='space-y-3'>
+                    <div className='flex flex-wrap items-center justify-between gap-2'>
+                      <div>
+                        <p className='text-sm font-semibold'>{phase.title}</p>
+                        <p className='text-xs text-muted-foreground'>
+                          Phase {currentIndex + 1} of {orderedPhases.length} • {tasks.length} tasks •{' '}
+                          {Math.round(phase.progress_percent)}%
+                        </p>
+                      </div>
+                      <div className='flex items-center gap-2'>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          onClick={() => goToPhase(currentIndex - 1)}
+                          disabled={currentIndex <= 0}
+                        >
+                          Prev
+                        </Button>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          onClick={() => goToPhase(currentIndex + 1)}
+                          disabled={currentIndex >= orderedPhases.length - 1}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    </div>
+                    <Progress value={phase.progress_percent} className='h-2' />
+                    <div className='space-y-2'>
+                      {tasks.map((task) => (
+                        <button
+                          key={task.id}
+                          className={`w-full rounded-md border px-3 py-2 text-left transition ${
+                            selectedTask?.id === task.id
+                              ? 'border-primary bg-secondary/70'
+                              : 'bg-muted/30 hover:border-primary/40'
+                          }`}
+                          onClick={() => {
+                            setSelectedTask(task);
+                            setOpenPhaseIds([phase.id]);
+                          }}
+                        >
+                          <div className='flex items-start justify-between gap-3'>
+                            <div className='flex min-w-0 items-start gap-2'>
+                              <span className='mt-0.5 rounded-md border bg-white p-1 text-muted-foreground'>
+                                {(() => {
+                                  const Icon = getTaskTypeIcon(task.task_type);
+                                  return <Icon className='h-3.5 w-3.5' />;
+                                })()}
+                              </span>
+                              <div className='min-w-0'>
+                                <p className='truncate text-sm font-medium'>{task.title}</p>
+                                <p className='mt-0.5 text-xs text-muted-foreground'>
+                                  {getTaskTypeLabel(task.task_type)}
+                                  {task.estimated_minutes ? ` • ${task.estimated_minutes}m` : ''}
+                                  {task.due_date ? ` • due ${task.due_date}` : ''}
+                                </p>
+                              </div>
+                            </div>
+                            <StatusChip status={task.status} />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()
+            )}
           </CardContent>
         </Card>
 

@@ -3,16 +3,20 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 
 from app.api.deps import get_current_active_user
 from app.db.session import get_db
+from app.models.assignment import OnboardingAssignment
 from app.models.rbac import User
 from app.multitenancy.permissions import require_access
 from app.schemas.common import PaginationMeta
 from app.schemas.track import (
     DuplicateTrackResponse,
     PublishTrackResponse,
+    TrackCascadeDeletePreview,
+    TrackCascadeDeleteRequest,
+    TrackCascadeDeleteResponse,
     TrackListResponse,
     TrackTemplateCreate,
     TrackTemplateOut,
@@ -60,11 +64,18 @@ def list_tracks(
             return None
         return (user.full_name or "").strip() or (user.email or "").strip() or None
 
+    def display_email(user: User | None) -> str | None:
+        if not user:
+            return None
+        return (user.email or "").strip() or None
+
     items: list[TrackTemplateOut] = []
     for track in tracks:
         out = TrackTemplateOut.model_validate(track)
         out.created_by_name = display_name(users_by_id.get(track.created_by))
         out.updated_by_name = display_name(users_by_id.get(track.updated_by))
+        out.created_by_email = display_email(users_by_id.get(track.created_by))
+        out.updated_by_email = display_email(users_by_id.get(track.updated_by))
         items.append(out)
 
     return TrackListResponse(items=items, meta=PaginationMeta(page=page, page_size=page_size, total=total))
@@ -231,6 +242,82 @@ def delete_track(
             detail='Track cannot be deleted because it is referenced by existing assignments.',
         ) from err
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get('/{template_id}/delete-preview', response_model=TrackCascadeDeletePreview)
+def delete_track_preview(
+    template_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
+) -> TrackCascadeDeletePreview:
+    track = track_service.get_track_template(db, template_id)
+    assignments = db.scalars(
+        select(OnboardingAssignment)
+        .where(OnboardingAssignment.template_id == template_id)
+        .order_by(OnboardingAssignment.created_at.desc())
+        .limit(25)
+    ).all()
+    total = db.scalar(
+        select(func.count())
+        .select_from(OnboardingAssignment)
+        .where(OnboardingAssignment.template_id == template_id)
+    )
+    confirm_phrase = f'DELETE {template_id}'
+    return TrackCascadeDeletePreview(
+        template_id=track.id,
+        title=track.title,
+        assignment_count=int(total or 0),
+        assignments=assignments,
+        confirm_phrase=confirm_phrase,
+    )
+
+
+@router.post('/{template_id}/cascade-delete', response_model=TrackCascadeDeleteResponse)
+def cascade_delete_track(
+    template_id: UUID,
+    payload: TrackCascadeDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
+) -> TrackCascadeDeleteResponse:
+    expected = f'DELETE {template_id}'
+    if (payload.confirm_phrase or '').strip() != expected:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid confirmation phrase')
+
+    track = track_service.get_track_template(db, template_id)
+
+    deleted_assignments = int(
+        db.scalar(
+            select(func.count())
+            .select_from(OnboardingAssignment)
+            .where(OnboardingAssignment.template_id == template_id)
+        )
+        or 0
+    )
+
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='track_cascade_delete_previewed',
+        entity_type='track_template',
+        entity_id=track.id,
+        details={'title': track.title, 'assignment_count': deleted_assignments},
+    )
+
+    db.execute(delete(OnboardingAssignment).where(OnboardingAssignment.template_id == template_id))
+    db.delete(track)
+
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='track_cascade_delete',
+        entity_type='track_template',
+        entity_id=track.id,
+        details={'title': track.title, 'deleted_assignments': deleted_assignments},
+    )
+    db.commit()
+    return TrackCascadeDeleteResponse(template_id=template_id, deleted_assignments=deleted_assignments)
 
 
 @router.post('/{template_id}/publish/{version_id}', response_model=PublishTrackResponse)

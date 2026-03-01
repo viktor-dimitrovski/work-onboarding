@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -123,6 +123,8 @@ class TrackTemplateOut(BaseSchema):
     updated_by: UUID | None = None
     created_by_name: str | None = None
     updated_by_name: str | None = None
+    created_by_email: str | None = None
+    updated_by_email: str | None = None
 
 
 class TrackTemplateUpdate(BaseModel):
@@ -152,3 +154,31 @@ class PublishTrackResponse(BaseModel):
     version_id: UUID
     status: str
     published_at: datetime
+
+
+class TrackCascadeDeletePreviewAssignment(BaseSchema):
+    id: UUID
+    title: str
+    status: str
+    employee_id: UUID
+    mentor_id: UUID | None = None
+    start_date: date
+    target_date: date
+    progress_percent: float
+
+
+class TrackCascadeDeletePreview(BaseSchema):
+    template_id: UUID
+    title: str
+    assignment_count: int
+    assignments: list[TrackCascadeDeletePreviewAssignment]
+    confirm_phrase: str
+
+
+class TrackCascadeDeleteRequest(BaseModel):
+    confirm_phrase: str
+
+
+class TrackCascadeDeleteResponse(BaseModel):
+    template_id: UUID
+    deleted_assignments: int
