@@ -14,9 +14,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useTenant } from '@/lib/tenant-context';
+import { cn } from '@/lib/utils';
+import { Plus } from 'lucide-react';
 
 type WorkOrderOut = {
   wo_id: string;
@@ -92,6 +95,250 @@ function buildMarkdown(input: {
   return trimmed ? `${lines.join('\n')}\n\n${trimmed}\n` : `${lines.join('\n')}\n`;
 }
 
+function splitFrontMatter(markdown: string): { frontMatter: string; body: string } {
+  const text = markdown || '';
+  if (!text.trim().startsWith('---')) return { frontMatter: '', body: text };
+  const lines = text.split('\n');
+  let second = -1;
+  for (let i = 1; i < lines.length; i += 1) {
+    if (lines[i].trim() === '---') {
+      second = i;
+      break;
+    }
+  }
+  if (second === -1) return { frontMatter: text, body: '' };
+  return {
+    frontMatter: lines.slice(0, second + 1).join('\n'),
+    body: lines.slice(second + 1).join('\n').replace(/^\n+/, ''),
+  };
+}
+
+function renderYamlLikeLine(line: string) {
+  const trimmed = line.replace(/\t/g, '  ');
+  if (!trimmed.trim()) return <span className='text-muted-foreground'>{line}</span>;
+  if (trimmed.trim() === '---') return <span className='text-muted-foreground'>{trimmed}</span>;
+  if (/^\s*-\s+/.test(trimmed)) {
+    return (
+      <>
+        <span className='text-muted-foreground'>{trimmed.match(/^\s*-\s+/)?.[0] ?? ''}</span>
+        <span className='text-foreground'>{trimmed.replace(/^\s*-\s+/, '')}</span>
+      </>
+    );
+  }
+  const m = /^(\s*)([a-zA-Z0-9_]+)(\s*:\s*)(.*)$/.exec(trimmed);
+  if (!m) return <span className='text-foreground'>{trimmed}</span>;
+  return (
+    <>
+      <span className='text-muted-foreground'>{m[1]}</span>
+      <span className='text-sky-700'>{m[2]}</span>
+      <span className='text-muted-foreground'>{m[3]}</span>
+      <span className='text-foreground'>{m[4]}</span>
+    </>
+  );
+}
+
+type DiffOp = { type: 'equal' | 'insert' | 'delete'; line: string };
+
+function diffLines(oldText: string, newText: string): DiffOp[] {
+  const a = (oldText || '').split('\n');
+  const b = (newText || '').split('\n');
+  const n = a.length;
+  const m = b.length;
+  const max = n + m;
+  const v = new Map<number, number>();
+  v.set(1, 0);
+  const traces: Map<number, number>[] = [];
+
+  const getV = (k: number) => v.get(k) ?? -Infinity;
+
+  for (let d = 0; d <= max; d += 1) {
+    const vNext = new Map<number, number>();
+    for (let k = -d; k <= d; k += 2) {
+      let x: number;
+      if (k === -d || (k !== d && getV(k - 1) < getV(k + 1))) {
+        x = getV(k + 1);
+      } else {
+        x = getV(k - 1) + 1;
+      }
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x += 1;
+        y += 1;
+      }
+      vNext.set(k, x);
+      if (x >= n && y >= m) {
+        traces.push(vNext);
+        // backtrack
+        const ops: DiffOp[] = [];
+        let x2 = n;
+        let y2 = m;
+        for (let d2 = traces.length - 1; d2 >= 0; d2 -= 1) {
+          const vv = traces[d2];
+          const k2 = x2 - y2;
+          const prevK =
+            k2 === -d2 || (k2 !== d2 && (vv.get(k2 - 1) ?? -Infinity) < (vv.get(k2 + 1) ?? -Infinity))
+              ? k2 + 1
+              : k2 - 1;
+          const prevX = vv.get(prevK) ?? 0;
+          const prevY = prevX - prevK;
+          while (x2 > prevX && y2 > prevY) {
+            ops.push({ type: 'equal', line: a[x2 - 1] });
+            x2 -= 1;
+            y2 -= 1;
+          }
+          if (d2 === 0) break;
+          if (x2 === prevX) {
+            ops.push({ type: 'insert', line: b[y2 - 1] });
+            y2 -= 1;
+          } else {
+            ops.push({ type: 'delete', line: a[x2 - 1] });
+            x2 -= 1;
+          }
+        }
+        return ops.reverse();
+      }
+    }
+    traces.push(vNext);
+    v.clear();
+    vNext.forEach((val, key) => v.set(key, val));
+  }
+  return a.map((line) => ({ type: 'equal', line }));
+}
+
+function buildOverviewYaml(input: {
+  wo_id: string;
+  title: string;
+  type: string;
+  status: string;
+  risk: string;
+  owner: string;
+  requested_by: string;
+  tenants_impacted: string[];
+  target_envs: string[];
+  postman_testing_ref: string;
+}) {
+  const lines: string[] = [];
+  lines.push(`id: ${input.wo_id}`);
+  lines.push(`title: ${input.title}`);
+  lines.push(`type: ${input.type}`);
+  lines.push(`status: ${input.status}`);
+  lines.push(`risk: ${input.risk}`);
+  lines.push(`owner: ${input.owner}`);
+  lines.push(`requested_by: ${input.requested_by}`);
+  lines.push(`tenants_impacted: ${toInlineList(input.tenants_impacted || [])}`);
+  lines.push(`target_envs: ${toInlineList(input.target_envs || [])}`);
+  lines.push(`postman_testing_ref: ${input.postman_testing_ref || ''}`);
+  return `${lines.join('\n')}\n`;
+}
+
+function parseInlineList(value: string): string[] {
+  const raw = (value || '').trim();
+  if (!raw || raw === '[]') return [];
+  const cleaned = raw.replace(/^\[/, '').replace(/\]$/, '');
+  return cleaned
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function parseOverviewYaml(text: string): Partial<{
+  wo_id: string;
+  title: string;
+  type: string;
+  status: string;
+  risk: string;
+  owner: string;
+  requested_by: string;
+  tenants_impacted: string[];
+  target_envs: string[];
+  postman_testing_ref: string;
+}> {
+  const out: Record<string, string> = {};
+  (text || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      const m = /^([a-zA-Z_]+)\s*:\s*(.*)$/.exec(line);
+      if (!m?.[1]) return;
+      out[m[1]] = m[2] ?? '';
+    });
+  return {
+    wo_id: out.id?.trim(),
+    title: out.title?.trim(),
+    type: out.type?.trim(),
+    status: out.status?.trim(),
+    risk: out.risk?.trim(),
+    owner: out.owner?.trim(),
+    requested_by: out.requested_by?.trim(),
+    tenants_impacted: parseInlineList(out.tenants_impacted || ''),
+    target_envs: parseInlineList(out.target_envs || ''),
+    postman_testing_ref: out.postman_testing_ref?.trim(),
+  };
+}
+
+function buildServicesYaml(items: ServiceTouchedItem[]) {
+  const lines: string[] = ['services_touched:'];
+  if (!items || items.length === 0) {
+    return 'services_touched: []\n';
+  }
+  items.forEach((item) => {
+    lines.push(`  - service_id: ${item.service_id || ''}`);
+    lines.push(`    repo: ${item.repo || ''}`);
+    if (item.change_type) lines.push(`    change_type: ${item.change_type}`);
+    lines.push(`    requires_deploy: ${item.requires_deploy ? 'true' : 'false'}`);
+    lines.push(`    requires_db_migration: ${item.requires_db_migration ? 'true' : 'false'}`);
+    lines.push(`    requires_config_change: ${item.requires_config_change ? 'true' : 'false'}`);
+    const flags = (item.feature_flags || []).filter(Boolean);
+    lines.push(`    feature_flags: ${flags.length ? `[${flags.join(', ')}]` : '[]'}`);
+    lines.push(`    release_notes_ref: ${item.release_notes_ref || ''}`);
+  });
+  return `${lines.join('\n')}\n`;
+}
+
+function parseServicesYaml(text: string): ServiceTouchedItem[] {
+  const lines = (text || '').split('\n');
+  const items: ServiceTouchedItem[] = [];
+  let current: ServiceTouchedItem | null = null;
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\t/g, '  ');
+    if (!line.trim()) continue;
+    if (line.trim() === 'services_touched: []') return [];
+    if (line.trim() === 'services_touched:') continue;
+
+    const startMatch = /^\s*-\s*service_id\s*:\s*(.*)$/.exec(line);
+    if (startMatch) {
+      if (current) items.push(current);
+      current = {
+        service_id: (startMatch[1] || '').trim(),
+        repo: '',
+        change_type: '',
+        requires_deploy: false,
+        requires_db_migration: false,
+        requires_config_change: false,
+        feature_flags: [],
+        release_notes_ref: '',
+      };
+      continue;
+    }
+
+    const kv = /^\s*([a-zA-Z_]+)\s*:\s*(.*)$/.exec(line);
+    if (!kv?.[1] || !current) continue;
+    const key = kv[1];
+    const value = (kv[2] ?? '').trim();
+    if (key === 'repo') current.repo = value;
+    if (key === 'change_type') current.change_type = value;
+    if (key === 'requires_deploy') current.requires_deploy = value === 'true';
+    if (key === 'requires_db_migration') current.requires_db_migration = value === 'true';
+    if (key === 'requires_config_change') current.requires_config_change = value === 'true';
+    if (key === 'feature_flags') current.feature_flags = parseInlineList(value);
+    if (key === 'release_notes_ref') current.release_notes_ref = value;
+  }
+  if (current) items.push(current);
+  return items;
+}
+
 function extractHeadings(markdown: string): string[] {
   const text = markdown || '';
   const headings: string[] = [];
@@ -133,6 +380,30 @@ function upsertSection(markdown: string, heading: string, content: string): stri
     ...lines.slice(endIndex),
   ];
   return newLines.join('\n');
+}
+
+function readSection(markdown: string, heading: string): string {
+  const lines = (markdown || '').split('\n');
+  const headingLine = `## ${heading}`.toLowerCase();
+  const startIndex = lines.findIndex((line) => line.trim().toLowerCase() === headingLine);
+  if (startIndex === -1) return '';
+  let endIndex = lines.length;
+  for (let i = startIndex + 1; i < lines.length; i += 1) {
+    if (lines[i].trim().startsWith('## ')) {
+      endIndex = i;
+      break;
+    }
+  }
+  const contentLines = lines.slice(startIndex + 1, endIndex);
+  // trim leading/trailing empty lines
+  while (contentLines.length && !contentLines[0].trim()) contentLines.shift();
+  while (contentLines.length && !contentLines[contentLines.length - 1].trim()) contentLines.pop();
+  return contentLines.join('\n');
+}
+
+function writeSection(markdown: string, heading: string, content: string): string {
+  const normalized = content.trim() ? content : '- ';
+  return upsertSection(markdown, heading, normalized);
 }
 
 function defaultWoId() {
@@ -225,10 +496,6 @@ export default function WorkOrderEditorPage() {
   const { hasPermission, hasModule } = useTenant();
   const canWrite = hasModule('releases') && hasPermission('releases:write');
 
-  const overviewRef = useRef<HTMLDivElement | null>(null);
-  const servicesRef = useRef<HTMLDivElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  const tabsRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
   const [loading, setLoading] = useState(true);
@@ -252,9 +519,17 @@ export default function WorkOrderEditorPage() {
   const [branch, setBranch] = useState<string | null>(null);
   const [prUrl, setPrUrl] = useState<string | null>(null);
   const [lastSavedMarkdown, setLastSavedMarkdown] = useState('');
-  const [tab, setTab] = useState<'preview' | 'diff' | 'pr'>('preview');
+  const [tab, setTab] = useState<'overview' | 'services' | 'content' | 'preview' | 'diff' | 'pr'>('overview');
+  const [overviewView, setOverviewView] = useState<'form' | 'markdown'>('form');
+  const [servicesView, setServicesView] = useState<'form' | 'markdown'>('form');
+  const [contentView, setContentView] = useState<'form' | 'markdown'>('form');
+  const [overviewDraft, setOverviewDraft] = useState('');
+  const [servicesDraft, setServicesDraft] = useState('');
 
+  const [localDraftStatus, setLocalDraftStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [lastLocalSavedAt, setLastLocalSavedAt] = useState<number | null>(null);
   const isNew = id === 'new';
+  const localDraftKey = useMemo(() => `wo:draft:${isNew ? 'new' : id}`, [id, isNew]);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -326,7 +601,134 @@ export default function WorkOrderEditorPage() {
     [headings],
   );
 
+  // Keep YAML views in sync with form state.
+  const overviewGenerated = useMemo(
+    () =>
+      buildOverviewYaml({
+        wo_id: woId,
+        title,
+        type,
+        status,
+        risk,
+        owner,
+        requested_by: requestedBy,
+        tenants_impacted: tenantsImpacted,
+        target_envs: targetEnvs,
+        postman_testing_ref: postmanTestingRef,
+      }),
+    [owner, postmanTestingRef, requestedBy, risk, status, targetEnvs, tenantsImpacted, title, type, woId],
+  );
+
+  const servicesGenerated = useMemo(() => buildServicesYaml(services), [services]);
+
+  useEffect(() => {
+    if (overviewView !== 'markdown') return;
+    setOverviewDraft(overviewGenerated);
+  }, [overviewGenerated, overviewView]);
+
+  useEffect(() => {
+    if (servicesView !== 'markdown') return;
+    setServicesDraft(servicesGenerated);
+  }, [servicesGenerated, servicesView]);
+
+  // Local draft: restore on load, autosave 5s after changes.
+  useEffect(() => {
+    if (loading) return;
+    try {
+      const raw = window.localStorage.getItem(localDraftKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as any;
+      if (!parsed || typeof parsed !== 'object') return;
+      // Basic restore (best-effort)
+      if (typeof parsed.woId === 'string') setWoId(parsed.woId);
+      if (typeof parsed.title === 'string') setTitle(parsed.title);
+      if (typeof parsed.type === 'string') setType(parsed.type);
+      if (typeof parsed.status === 'string') setStatus(parsed.status);
+      if (typeof parsed.risk === 'string') setRisk(parsed.risk);
+      if (typeof parsed.owner === 'string') setOwner(parsed.owner);
+      if (typeof parsed.requestedBy === 'string') setRequestedBy(parsed.requestedBy);
+      if (Array.isArray(parsed.tenantsImpacted)) setTenantsImpacted(parsed.tenantsImpacted);
+      if (Array.isArray(parsed.targetEnvs)) setTargetEnvs(parsed.targetEnvs);
+      if (typeof parsed.postmanTestingRef === 'string') setPostmanTestingRef(parsed.postmanTestingRef);
+      if (Array.isArray(parsed.services)) setServices(parsed.services);
+      if (typeof parsed.bodyMarkdown === 'string') setBodyMarkdown(parsed.bodyMarkdown);
+      if (typeof parsed.updatedAt === 'number') setLastLocalSavedAt(parsed.updatedAt);
+      setLocalDraftStatus('saved');
+    } catch {
+      // ignore
+    }
+    // only once per key
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localDraftKey, loading]);
+
+  useEffect(() => {
+    if (loading) return;
+    setLocalDraftStatus('saving');
+    const handle = window.setTimeout(() => {
+      try {
+        const payload = {
+          version: 1,
+          updatedAt: Date.now(),
+          woId,
+          title,
+          type,
+          status,
+          risk,
+          owner,
+          requestedBy,
+          tenantsImpacted,
+          targetEnvs,
+          postmanTestingRef,
+          services,
+          bodyMarkdown,
+        };
+        window.localStorage.setItem(localDraftKey, JSON.stringify(payload));
+        setLastLocalSavedAt(payload.updatedAt);
+        setLocalDraftStatus('saved');
+      } catch {
+        setLocalDraftStatus('idle');
+      }
+    }, 5000);
+    return () => window.clearTimeout(handle);
+  }, [
+    bodyMarkdown,
+    loading,
+    localDraftKey,
+    owner,
+    postmanTestingRef,
+    requestedBy,
+    risk,
+    services,
+    status,
+    targetEnvs,
+    tenantsImpacted,
+    title,
+    type,
+    woId,
+  ]);
+
+  const applyOverviewDraftToForm = () => {
+    const parsed = parseOverviewYaml(overviewDraft);
+    if (parsed.wo_id && isNew) setWoId(parsed.wo_id);
+    if (typeof parsed.title === 'string') setTitle(parsed.title);
+    if (parsed.type) setType(parsed.type);
+    if (parsed.status) setStatus(parsed.status);
+    if (parsed.risk) setRisk(parsed.risk);
+    if (typeof parsed.owner === 'string') setOwner(parsed.owner);
+    if (typeof parsed.requested_by === 'string') setRequestedBy(parsed.requested_by);
+    if (parsed.tenants_impacted) setTenantsImpacted(parsed.tenants_impacted);
+    if (parsed.target_envs) setTargetEnvs(parsed.target_envs);
+    if (typeof parsed.postman_testing_ref === 'string') setPostmanTestingRef(parsed.postman_testing_ref);
+  };
+
+  const applyServicesDraftToForm = () => {
+    const parsed = parseServicesYaml(servicesDraft);
+    setServices(parsed);
+  };
+
   const applySummaryAssist = () => {
+    setTab('content');
+    setContentView('form');
     const serviceLines =
       services.length > 0
         ? services.map((service) => {
@@ -341,16 +743,14 @@ export default function WorkOrderEditorPage() {
   };
 
   const insertMissingSections = () => {
+    setTab('content');
+    setContentView('form');
     if (missingSections.length === 0) return;
     setBodyMarkdown((prev) => {
       const trimmed = prev.trim();
       const additions = missingSections.map((section) => `## ${section}\n- `).join('\n\n');
       return trimmed ? `${trimmed}\n\n${additions}\n` : `${additions}\n`;
     });
-  };
-
-  const jumpTo = (target: React.RefObject<HTMLElement | null>) => {
-    target.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const jumpToHeadingInPreview = (headingText: string) => {
@@ -396,6 +796,12 @@ export default function WorkOrderEditorPage() {
       if (isNew) {
         router.replace(`/work-orders/${response.wo_id}`);
       }
+      try {
+        window.localStorage.removeItem(localDraftKey);
+      } catch {
+        // ignore
+      }
+      setLocalDraftStatus('idle');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save work order';
       if (message.includes('409') || message.toLowerCase().includes('conflict')) {
@@ -475,6 +881,13 @@ export default function WorkOrderEditorPage() {
             </div>
           </div>
           <div className='flex items-center gap-2'>
+          <div className='hidden text-xs text-muted-foreground sm:block'>
+            {localDraftStatus === 'saving'
+              ? 'Saving locally…'
+              : localDraftStatus === 'saved' && lastLocalSavedAt
+                ? `Saved locally ${new Date(lastLocalSavedAt).toLocaleTimeString()}`
+                : null}
+          </div>
             {prUrl && (
               <Button variant='outline' asChild>
                 <a href={prUrl} target='_blank' rel='noreferrer'>
@@ -505,190 +918,359 @@ export default function WorkOrderEditorPage() {
           </Card>
         )}
 
-        <div ref={overviewRef}>
-          <Card>
-            <CardHeader>
-              <CardTitle className='text-base'>Overview</CardTitle>
-            </CardHeader>
-            <CardContent className='grid gap-4 md:grid-cols-3'>
-          <div className='space-y-2'>
-            <label className='text-xs text-muted-foreground'>WO ID</label>
-            <Input id='wo-title' value={woId} disabled={!isNew} onChange={(event) => setWoId(event.target.value)} />
-          </div>
-          <div className='space-y-2 md:col-span-2'>
-            <label className='text-xs text-muted-foreground'>Title</label>
-            <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder='Short WO title' />
-          </div>
-          <div className='space-y-2'>
-            <label className='text-xs text-muted-foreground'>Type</label>
-            <select
-              className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
-              value={type}
-              onChange={(event) => setType(event.target.value)}
-            >
-              {typeOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className='space-y-2'>
-            <label className='text-xs text-muted-foreground'>Status</label>
-            <select
-              className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
-              value={status}
-              onChange={(event) => setStatus(event.target.value)}
-            >
-              {statusOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt.replace('_', ' ')}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className='space-y-2'>
-            <label className='text-xs text-muted-foreground'>Risk</label>
-            <select
-              className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
-              value={risk}
-              onChange={(event) => setRisk(event.target.value)}
-            >
-              {riskOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className='space-y-2'>
-            <label className='text-xs text-muted-foreground'>Owner</label>
-            <Input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder='Team / unit' />
-          </div>
-          <div className='space-y-2'>
-            <label className='text-xs text-muted-foreground'>Requested by</label>
-            <Input
-              value={requestedBy}
-              onChange={(event) => setRequestedBy(event.target.value)}
-              placeholder='Client / internal'
-            />
-          </div>
-          <div className='space-y-2 md:col-span-3'>
-            <label className='text-xs text-muted-foreground'>Tenants impacted</label>
-            <ChipsInput value={tenantsImpacted} onChange={setTenantsImpacted} placeholder='mks, ro, ...' />
-          </div>
-          <div className='space-y-2 md:col-span-3'>
-            <label className='text-xs text-muted-foreground'>Target envs</label>
-            <ChipsInput value={targetEnvs} onChange={setTargetEnvs} placeholder='uat-ro, live-ro, ...' />
-          </div>
-          <div className='space-y-2 md:col-span-3'>
-            <label className='text-xs text-muted-foreground'>Postman testing ref</label>
-            <Input
-              value={postmanTestingRef}
-              onChange={(event) => setPostmanTestingRef(event.target.value)}
-              placeholder='https://...'
-            />
-          </div>
-            </CardContent>
-          </Card>
-        </div>
+        <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
+          <TabsList className='grid w-full grid-cols-3 md:grid-cols-6'>
+            <TabsTrigger value='overview' id='wo-overview-tab'>
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value='services'>Services</TabsTrigger>
+            <TabsTrigger value='content'>Content</TabsTrigger>
+            <TabsTrigger value='preview' id='wo-preview-tab'>
+              Preview
+            </TabsTrigger>
+            <TabsTrigger value='diff'>Diff</TabsTrigger>
+            <TabsTrigger value='pr'>PR</TabsTrigger>
+          </TabsList>
 
-        <div ref={servicesRef}>
-          <ServicesTouchedGrid items={services} onChange={setServices} firstInputId='wo-service-first' />
-        </div>
+          <TabsContent value='overview'>
+            <Card>
+              <CardHeader className='flex flex-row items-center justify-between gap-3'>
+                <CardTitle className='text-base'>Overview</CardTitle>
+                <div className='flex items-center gap-1 rounded-md border bg-white p-1'>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant={overviewView === 'form' ? 'secondary' : 'ghost'}
+                    onClick={() => {
+                      setOverviewView('form');
+                    }}
+                    className='h-8 px-2'
+                  >
+                    Form
+                  </Button>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant={overviewView === 'markdown' ? 'secondary' : 'ghost'}
+                    onClick={() => setOverviewView('markdown')}
+                    className='h-8 px-2'
+                  >
+                    Markdown
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className='grid gap-4 md:grid-cols-3'>
+                {overviewView === 'form' ? (
+                  <>
+                    <div className='space-y-2'>
+                      <label className='text-xs text-muted-foreground'>WO ID</label>
+                      <Input
+                        id='wo-title'
+                        value={woId}
+                        disabled={!isNew}
+                        onChange={(event) => setWoId(event.target.value)}
+                      />
+                    </div>
+                    <div className='space-y-2 md:col-span-2'>
+                      <label className='text-xs text-muted-foreground'>Title</label>
+                      <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder='Short WO title' />
+                    </div>
+                    <div className='space-y-2'>
+                      <label className='text-xs text-muted-foreground'>Type</label>
+                      <select
+                        className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
+                        value={type}
+                        onChange={(event) => setType(event.target.value)}
+                      >
+                        {typeOptions.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className='space-y-2'>
+                      <label className='text-xs text-muted-foreground'>Status</label>
+                      <select
+                        className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
+                        value={status}
+                        onChange={(event) => setStatus(event.target.value)}
+                      >
+                        {statusOptions.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt.replace('_', ' ')}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className='space-y-2'>
+                      <label className='text-xs text-muted-foreground'>Risk</label>
+                      <select
+                        className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
+                        value={risk}
+                        onChange={(event) => setRisk(event.target.value)}
+                      >
+                        {riskOptions.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className='space-y-2'>
+                      <label className='text-xs text-muted-foreground'>Owner</label>
+                      <Input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder='Team / unit' />
+                    </div>
+                    <div className='space-y-2'>
+                      <label className='text-xs text-muted-foreground'>Requested by</label>
+                      <Input
+                        value={requestedBy}
+                        onChange={(event) => setRequestedBy(event.target.value)}
+                        placeholder='Client / internal'
+                      />
+                    </div>
+                    <div className='space-y-2 md:col-span-3'>
+                      <label className='text-xs text-muted-foreground'>Tenants impacted</label>
+                      <ChipsInput value={tenantsImpacted} onChange={setTenantsImpacted} placeholder='mks, ro, ...' />
+                    </div>
+                    <div className='space-y-2 md:col-span-3'>
+                      <label className='text-xs text-muted-foreground'>Target envs</label>
+                      <ChipsInput value={targetEnvs} onChange={setTargetEnvs} placeholder='uat-ro, live-ro, ...' />
+                    </div>
+                    <div className='space-y-2 md:col-span-3'>
+                      <label className='text-xs text-muted-foreground'>Postman testing ref</label>
+                      <Input
+                        value={postmanTestingRef}
+                        onChange={(event) => setPostmanTestingRef(event.target.value)}
+                        placeholder='https://...'
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className='space-y-2 md:col-span-3'>
+                    <p className='text-xs text-muted-foreground'>YAML preview (generated from the current form).</p>
+                    <Textarea
+                      value={overviewDraft}
+                      readOnly
+                      rows={14}
+                      className='font-mono text-xs'
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-        <div ref={contentRef}>
-          <Card>
-            <CardHeader>
-              <CardTitle className='text-base'>Work order content</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <LexicalMarkdownEditor
-                value={bodyMarkdown}
-                onChange={setBodyMarkdown}
-                contentEditableId='wo-editor-content'
-                placeholder='Write the work order here… Use / to insert sections.'
-              />
-            </CardContent>
-          </Card>
-        </div>
+          <TabsContent value='services'>
+            <Card>
+              <CardHeader className='flex flex-row items-center justify-between gap-3'>
+                <CardTitle className='text-base'>Services touched</CardTitle>
+                <div className='flex items-center gap-2'>
+                  <Button
+                    type='button'
+                    size='icon'
+                    variant='outline'
+                    className='h-9 w-9'
+                    onClick={() =>
+                      setServices((prev) => [
+                        ...prev,
+                        {
+                          service_id: '',
+                          repo: '',
+                          change_type: '',
+                          requires_deploy: false,
+                          requires_db_migration: false,
+                          requires_config_change: false,
+                          feature_flags: [],
+                          release_notes_ref: '',
+                        },
+                      ])
+                    }
+                    aria-label='Add service row'
+                    title='Add row'
+                  >
+                    <Plus className='h-4 w-4' />
+                  </Button>
+                  <div className='flex items-center gap-1 rounded-md border bg-white p-1'>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant={servicesView === 'form' ? 'secondary' : 'ghost'}
+                      onClick={() => setServicesView('form')}
+                      className='h-8 px-2'
+                    >
+                      Form
+                    </Button>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant={servicesView === 'markdown' ? 'secondary' : 'ghost'}
+                      onClick={() => setServicesView('markdown')}
+                      className='h-8 px-2'
+                    >
+                      Markdown
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {servicesView === 'form' ? (
+                  <div className='space-y-2'>
+                    <ServicesTouchedGrid items={services} onChange={setServices} firstInputId='wo-service-first' hideHeader />
+                  </div>
+                ) : (
+                  <div className='space-y-2'>
+                    <p className='text-xs text-muted-foreground'>YAML preview (generated from the current grid).</p>
+                    <Textarea
+                      value={servicesDraft}
+                      readOnly
+                      rows={16}
+                      className='font-mono text-xs'
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-        <div ref={tabsRef}>
-          <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
-            <TabsList className='grid w-full max-w-md grid-cols-3'>
-              <TabsTrigger value='preview' id='wo-preview-tab'>
-                Preview
-              </TabsTrigger>
-              <TabsTrigger value='diff'>Diff</TabsTrigger>
-              <TabsTrigger value='pr'>PR</TabsTrigger>
-            </TabsList>
-            <TabsContent value='preview'>
-              <Card>
-                <CardContent className='pt-4'>
-                  <div ref={previewRef}>
-                    <MarkdownRenderer content={previewMarkdown} />
+          <TabsContent value='content'>
+            <Card>
+              <CardHeader className='flex flex-row items-center justify-between gap-3'>
+                <CardTitle className='text-base'>Work order content</CardTitle>
+                <div className='flex items-center gap-1 rounded-md border bg-white p-1'>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant={contentView === 'form' ? 'secondary' : 'ghost'}
+                    onClick={() => setContentView('form')}
+                  >
+                    Form
+                  </Button>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant={contentView === 'markdown' ? 'secondary' : 'ghost'}
+                    onClick={() => setContentView('markdown')}
+                  >
+                    Markdown
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {contentView === 'form' ? (
+                  <div className='grid gap-4'>
+                    {[
+                      { heading: 'Summary', placeholder: '- ' },
+                      { heading: 'Acceptance / checks', placeholder: '- ' },
+                      { heading: 'Versions used during testing', placeholder: '| Component | Version |\n|---|---|\n|  |  |' },
+                      { heading: 'Implementation notes', placeholder: '- ' },
+                      { heading: 'Risks and mitigations', placeholder: '- Risk:\n  - \n- Mitigation:\n  - ' },
+                      { heading: 'Rollback considerations', placeholder: '- ' },
+                    ].map((section) => (
+                      <div key={section.heading} className='space-y-2'>
+                        <p className='text-sm font-medium'>{section.heading}</p>
+                        <Textarea
+                          value={readSection(bodyMarkdown, section.heading) || section.placeholder}
+                          onChange={(e) =>
+                            setBodyMarkdown((prev) => writeSection(prev, section.heading, e.target.value))
+                          }
+                          rows={section.heading === 'Versions used during testing' ? 6 : 4}
+                          className='text-sm'
+                        />
+                      </div>
+                    ))}
+                    {missingSections.length > 0 ? (
+                      <div className='rounded-md border bg-muted/10 p-3 text-xs text-muted-foreground'>
+                        Missing sections: {missingSections.slice(0, 6).join(', ')}
+                        {missingSections.length > 6 ? '…' : ''}
+                      </div>
+                    ) : null}
                   </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-            <TabsContent value='diff'>
-              <Card>
-                <CardContent className='grid gap-4 pt-4 md:grid-cols-2'>
-                  <div>
-                    <p className='text-xs text-muted-foreground'>Saved</p>
-                    <pre className='mt-2 max-h-96 overflow-auto rounded-md border bg-muted/20 p-3 text-xs'>
-                      {lastSavedMarkdown || 'No saved version yet.'}
-                    </pre>
-                  </div>
-                  <div>
-                    <p className='text-xs text-muted-foreground'>Draft</p>
-                    <pre className='mt-2 max-h-96 overflow-auto rounded-md border bg-muted/20 p-3 text-xs'>
-                      {previewMarkdown}
-                    </pre>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-            <TabsContent value='pr'>
-              <Card>
-                <CardContent className='pt-4 text-sm'>
-                  {prUrl ? (
-                    <a className='text-primary underline' href={prUrl} target='_blank' rel='noreferrer'>
-                      {prUrl}
-                    </a>
-                  ) : (
-                    <p className='text-muted-foreground'>No PR yet. Press Ctrl+S or Save to create one.</p>
-                  )}
-                  {branch && <p className='mt-2 text-xs text-muted-foreground'>Branch: {branch}</p>}
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
-        </div>
+                ) : (
+                  <LexicalMarkdownEditor
+                    value={bodyMarkdown}
+                    onChange={setBodyMarkdown}
+                    contentEditableId='wo-editor-content'
+                    placeholder='Write the work order here… Use / to insert sections.'
+                  />
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value='preview'>
+            <Card>
+              <CardContent className='pt-4'>
+                {(() => {
+                  const { frontMatter, body } = splitFrontMatter(previewMarkdown);
+                  return (
+                    <div className='space-y-4'>
+                      {frontMatter ? (
+                        <div>
+                          <p className='text-xs font-medium text-muted-foreground'>YAML</p>
+                          <pre className='mt-2 overflow-auto rounded-md border bg-muted/20 p-3 font-mono text-xs leading-relaxed'>
+                            {frontMatter.split('\n').map((line, idx) => (
+                              <div key={idx} className='whitespace-pre'>
+                                {renderYamlLikeLine(line)}
+                              </div>
+                            ))}
+                          </pre>
+                        </div>
+                      ) : null}
+                      <div ref={previewRef}>
+                        <MarkdownRenderer content={body || previewMarkdown} />
+                      </div>
+                    </div>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value='diff'>
+            <Card>
+              <CardContent className='pt-4'>
+                <p className='text-xs text-muted-foreground'>Unified diff</p>
+                <pre className='mt-2 max-h-[520px] overflow-auto rounded-md border bg-muted/20 p-3 font-mono text-xs leading-relaxed'>
+                  {diffLines(lastSavedMarkdown || '', previewMarkdown || '').map((op, idx) => {
+                    const prefix = op.type === 'insert' ? '+' : op.type === 'delete' ? '-' : ' ';
+                    const rowClass =
+                      op.type === 'insert'
+                        ? 'bg-emerald-500/10'
+                        : op.type === 'delete'
+                          ? 'bg-red-500/10'
+                          : '';
+                    return (
+                      <div key={idx} className={cn('whitespace-pre px-1', rowClass)}>
+                        <span className='mr-2 inline-block w-4 text-muted-foreground'>{prefix}</span>
+                        {renderYamlLikeLine(op.line)}
+                      </div>
+                    );
+                  })}
+                </pre>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value='pr'>
+            <Card>
+              <CardContent className='pt-4 text-sm'>
+                {prUrl ? (
+                  <a className='text-primary underline' href={prUrl} target='_blank' rel='noreferrer'>
+                    {prUrl}
+                  </a>
+                ) : (
+                  <p className='text-muted-foreground'>No PR yet. Press Ctrl+S or Save to create one.</p>
+                )}
+                {branch && <p className='mt-2 text-xs text-muted-foreground'>Branch: {branch}</p>}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </div>
 
       <div className='hidden lg:block'>
         <div className='sticky top-20 space-y-3'>
-          <Card>
-            <CardHeader className='pb-3'>
-              <CardTitle className='text-sm'>Jump to</CardTitle>
-            </CardHeader>
-            <CardContent className='space-y-2'>
-              <Button type='button' variant='ghost' className='w-full justify-start' onClick={() => jumpTo(overviewRef)}>
-                Overview
-              </Button>
-              <Button type='button' variant='ghost' className='w-full justify-start' onClick={() => jumpTo(servicesRef)}>
-                Services touched
-              </Button>
-              <Button type='button' variant='ghost' className='w-full justify-start' onClick={() => jumpTo(contentRef)}>
-                Content
-              </Button>
-              <Button type='button' variant='ghost' className='w-full justify-start' onClick={() => jumpTo(tabsRef)}>
-                Preview / Diff / PR
-              </Button>
-            </CardContent>
-          </Card>
-
           <Card>
             <CardHeader className='pb-3'>
               <CardTitle className='text-sm'>AI assist (beta)</CardTitle>
@@ -708,11 +1290,13 @@ export default function WorkOrderEditorPage() {
               >
                 Insert missing sections
               </Button>
-              {missingSections.length > 0 && (
+              {missingSections.length > 0 ? (
                 <p className='text-[11px] text-muted-foreground'>
                   Missing: {missingSections.slice(0, 3).join(', ')}
                   {missingSections.length > 3 ? '…' : ''}
                 </p>
+              ) : (
+                <p className='text-[11px] text-muted-foreground'>No missing sections detected.</p>
               )}
             </CardContent>
           </Card>

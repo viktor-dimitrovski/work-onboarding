@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { Plus, X } from 'lucide-react';
 
 export type ServiceTouchedItem = {
   service_id: string;
@@ -20,6 +21,7 @@ type ServicesTouchedGridProps = {
   items: ServiceTouchedItem[];
   onChange: (items: ServiceTouchedItem[]) => void;
   firstInputId?: string;
+  hideHeader?: boolean;
 };
 
 const emptyRow = (): ServiceTouchedItem => ({
@@ -78,7 +80,7 @@ function FeatureFlagsInput({
   );
 }
 
-export function ServicesTouchedGrid({ items, onChange, firstInputId }: ServicesTouchedGridProps) {
+export function ServicesTouchedGrid({ items, onChange, firstInputId, hideHeader }: ServicesTouchedGridProps) {
   const rows = useMemo(() => (items.length === 0 ? [emptyRow()] : items), [items]);
 
   const updateRow = (index: number, patch: Partial<ServiceTouchedItem>) => {
@@ -122,12 +124,14 @@ export function ServicesTouchedGrid({ items, onChange, firstInputId }: ServicesT
 
   return (
     <div className='space-y-2'>
-      <div className='flex items-center justify-between'>
-        <p className='text-sm font-semibold'>Services touched</p>
-        <Button type='button' variant='outline' size='sm' onClick={() => onChange([...rows, emptyRow()])}>
-          Add row
-        </Button>
-      </div>
+      {!hideHeader ? (
+        <div className='flex items-center justify-between'>
+          <p className='text-sm font-semibold'>Services touched</p>
+          <Button type='button' variant='outline' size='sm' onClick={() => onChange([...rows, emptyRow()])}>
+            Add row
+          </Button>
+        </div>
+      ) : null}
       <div className='rounded-md border'>
         <div className='grid grid-cols-[1.2fr_1fr_130px_repeat(3,90px)_1.2fr_1fr_60px] gap-2 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground'>
           <div>Service</div>
@@ -213,11 +217,11 @@ export function ServicesTouchedGrid({ items, onChange, firstInputId }: ServicesT
               placeholder='https://...'
             />
             <div className='flex items-center justify-end gap-2 text-xs'>
-              <Button type='button' variant='ghost' size='sm' onClick={() => addRowAfter(index)}>
-                +
+              <Button type='button' variant='ghost' size='icon' className='h-8 w-8' onClick={() => addRowAfter(index)} aria-label='Add row'>
+                <Plus className='h-4 w-4' />
               </Button>
-              <Button type='button' variant='ghost' size='sm' onClick={() => removeRow(index)}>
-                ×
+              <Button type='button' variant='ghost' size='icon' className='h-8 w-8' onClick={() => removeRow(index)} aria-label='Remove row'>
+                <X className='h-4 w-4' />
               </Button>
             </div>
           </div>

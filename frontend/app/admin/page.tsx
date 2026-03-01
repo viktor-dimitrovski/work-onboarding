@@ -1,14 +1,19 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, LayoutGrid, Settings2, Users2, Wallet } from 'lucide-react';
 
+import { LoadingState } from '@/components/common/loading-state';
 import { AppShell } from '@/components/layout/app-shell';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -45,6 +50,8 @@ type TenantModule = {
 
 const MODULE_KEYS = ['tracks', 'assignments', 'assessments', 'reports', 'users', 'settings', 'billing', 'releases'];
 
+type AdminSectionId = 'tenants' | 'tenant' | 'plans' | 'billing';
+
 function resolveBaseDomain(hostname: string): string {
   const raw = process.env.NEXT_PUBLIC_BASE_DOMAINS || process.env.BASE_DOMAINS || '';
   const baseDomains = raw
@@ -77,6 +84,51 @@ function buildTenantUrl(tenantSlug: string): string | null {
   const host = `${tenantSlug}.${baseDomain}`;
   const portSuffix = port ? `:${port}` : '';
   return `${protocol}//${host}${portSuffix}/dashboard`;
+}
+
+function NavItem({
+  active,
+  title,
+  description,
+  icon,
+  badge,
+  disabled,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  description?: string;
+  icon: ReactNode;
+  badge?: ReactNode;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type='button'
+      onClick={onClick}
+      disabled={disabled}
+      className={[
+        'w-full rounded-lg border px-3 py-3 text-left transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2',
+        disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-muted/50',
+        active ? 'border-primary bg-primary/5' : 'border-border bg-white',
+      ].join(' ')}
+    >
+      <div className='flex items-start justify-between gap-3'>
+        <div className='flex items-start gap-3'>
+          <div className='mt-0.5 text-muted-foreground'>{icon}</div>
+          <div>
+            <div className='flex items-center gap-2'>
+              <p className='text-sm font-semibold leading-none'>{title}</p>
+              {badge}
+            </div>
+            {description ? <p className='mt-1 text-xs text-muted-foreground'>{description}</p> : null}
+          </div>
+        </div>
+      </div>
+    </button>
+  );
 }
 
 export default function AdminTenantsPage() {
@@ -112,12 +164,24 @@ export default function AdminTenantsPage() {
   const [inviteName, setInviteName] = useState('');
   const [invitePassword, setInvitePassword] = useState('');
 
+  const [activeSection, setActiveSection] = useState<AdminSectionId>('tenants');
+  const [navFilter, setNavFilter] = useState('');
+  const [tenantFilter, setTenantFilter] = useState('');
+
   const selectedTenant = useMemo(
     () => tenants.find((tenant) => tenant.id === selectedTenantId) || null,
     [selectedTenantId, tenants],
   );
 
   const planLookup = useMemo(() => new Map(plans.map((plan) => [plan.id, plan])), [plans]);
+
+  useEffect(() => {
+    if (selectedTenantId) {
+      setActiveSection('tenant');
+      return;
+    }
+    setActiveSection((prev) => (prev === 'tenant' ? 'tenants' : prev));
+  }, [selectedTenantId]);
 
   useEffect(() => {
     if (!isLoading && !hasRole('super_admin')) {
@@ -295,311 +359,663 @@ export default function AdminTenantsPage() {
     }
   };
 
-  if (loading) {
-    return <p className='text-sm text-muted-foreground'>Loading admin console...</p>;
-  }
+  const filteredTenants = useMemo(() => {
+    const query = tenantFilter.trim().toLowerCase();
+    if (!query) return tenants;
+    return tenants.filter((tenant) => {
+      return (
+        tenant.name.toLowerCase().includes(query) ||
+        tenant.slug.toLowerCase().includes(query) ||
+        tenant.tenant_type.toLowerCase().includes(query)
+      );
+    });
+  }, [tenantFilter, tenants]);
+
+  const navItems = useMemo(() => {
+    const items: Array<{
+      id: AdminSectionId;
+      title: string;
+      description: string;
+      icon: React.ReactNode;
+      badge?: React.ReactNode;
+      disabled?: boolean;
+    }> = [
+      {
+        id: 'tenants',
+        title: 'Tenants',
+        description: 'Provision, activate, and manage tenant access.',
+        icon: <Users2 className='h-4 w-4' />,
+        badge: (
+          <Badge variant='muted' className='text-[10px]'>
+            {tenants.length}
+          </Badge>
+        ),
+      },
+      {
+        id: 'tenant',
+        title: 'Tenant settings',
+        description: 'Modules + admin invitation for a selected tenant.',
+        icon: <Settings2 className='h-4 w-4' />,
+        disabled: !selectedTenant,
+        badge: selectedTenant ? (
+          <Badge variant='secondary' className='text-[10px]'>
+            {selectedTenant.slug}
+          </Badge>
+        ) : undefined,
+      },
+      {
+        id: 'plans',
+        title: 'Plans',
+        description: 'Global plan templates used during provisioning.',
+        icon: <LayoutGrid className='h-4 w-4' />,
+        badge: (
+          <Badge variant='muted' className='text-[10px]'>
+            {plans.length}
+          </Badge>
+        ),
+      },
+      {
+        id: 'billing',
+        title: 'Billing mappings',
+        description: 'Plan ↔ provider price mappings (Stripe etc.).',
+        icon: <Wallet className='h-4 w-4' />,
+        badge: (
+          <Badge variant='muted' className='text-[10px]'>
+            {planPrices.length}
+          </Badge>
+        ),
+      },
+    ];
+
+    const q = navFilter.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((item) => {
+      return item.title.toLowerCase().includes(q) || item.description.toLowerCase().includes(q);
+    });
+  }, [navFilter, planPrices.length, plans.length, selectedTenant, tenants.length]);
 
   return (
     <AppShell>
-      <div className='space-y-6'>
-      <div>
-        <h2 className='text-2xl font-semibold'>Tenant administration</h2>
-        <p className='text-sm text-muted-foreground'>Create tenants, assign plans, and manage modules.</p>
-      </div>
-
-      {error && <p className='text-sm text-destructive'>{error}</p>}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Plans</CardTitle>
-          <CardDescription>
-            Plans are global templates used when provisioning tenants. Create at least one plan if you want to assign it during tenant creation.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className='grid gap-4 md:grid-cols-6'>
-          <div className='space-y-2 md:col-span-2'>
-            <Label>Key</Label>
-            <Input placeholder='pro' value={newPlanKey} onChange={(event) => setNewPlanKey(event.target.value)} />
+      <div className='space-y-4'>
+        <div className='flex flex-wrap items-start justify-between gap-3'>
+          <div>
+            <h2 className='text-2xl font-semibold'>Tenant administration</h2>
+            <p className='text-sm text-muted-foreground'>
+              A compact, searchable console for provisioning tenants and configuring modules, plans, and billing.
+            </p>
           </div>
-          <div className='space-y-2 md:col-span-3'>
-            <Label>Name</Label>
-            <Input placeholder='Pro' value={newPlanName} onChange={(event) => setNewPlanName(event.target.value)} />
-          </div>
-          <div className='space-y-2 md:col-span-1'>
-            <Label>Scope</Label>
-            <select
-              className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
-              value={newPlanScope}
-              onChange={(event) => setNewPlanScope(event.target.value)}
-            >
-              <option value='all'>all</option>
-              <option value='company'>company</option>
-              <option value='education'>education</option>
-            </select>
-          </div>
-          <div className='md:col-span-6 flex items-center justify-between gap-3'>
-            <div className='text-xs text-muted-foreground'>Existing: {plans.length}</div>
-            <Button onClick={createPlan} disabled={!newPlanKey || !newPlanName}>
-              Create plan
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Plan price mappings</CardTitle>
-          <CardDescription>
-            Map internal plans to Stripe prices for checkout and billing portal workflows.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className='space-y-4'>
-          <div className='grid gap-4 md:grid-cols-6'>
-            <div className='space-y-2 md:col-span-2'>
-              <Label>Plan</Label>
-              <select
-                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
-                value={newPlanPricePlanId}
-                onChange={(event) => setNewPlanPricePlanId(event.target.value)}
+          {selectedTenant ? (
+            <div className='flex flex-wrap items-center gap-2'>
+              <Badge variant={selectedTenant.is_active ? 'secondary' : 'outline'} className='text-[10px]'>
+                {selectedTenant.is_active ? 'Active' : 'Disabled'}
+              </Badge>
+              <Badge variant='outline' className='text-[10px]'>
+                {selectedTenant.tenant_type}
+              </Badge>
+              <Badge variant='muted' className='text-[10px]'>
+                {selectedTenant.slug}
+              </Badge>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={() => {
+                  const url = buildTenantUrl(selectedTenant.slug);
+                  if (!url) return;
+                  window.open(url, '_blank', 'noopener,noreferrer');
+                }}
+                title='Open tenant in a new tab'
               >
-                {plans.map((plan) => (
-                  <option key={plan.id} value={plan.id}>
-                    {plan.name}
-                  </option>
-                ))}
-              </select>
+                <ExternalLink className='mr-2 h-4 w-4' />
+                Open tenant
+              </Button>
             </div>
-            <div className='space-y-2 md:col-span-1'>
-              <Label>Interval</Label>
-              <select
-                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
-                value={newPlanPriceInterval}
-                onChange={(event) => setNewPlanPriceInterval(event.target.value)}
-              >
-                <option value='month'>month</option>
-                <option value='year'>year</option>
-              </select>
-            </div>
-            <div className='space-y-2 md:col-span-1'>
-              <Label>Currency</Label>
-              <Input value={newPlanPriceCurrency} onChange={(event) => setNewPlanPriceCurrency(event.target.value)} />
-            </div>
-            <div className='space-y-2 md:col-span-1'>
-              <Label>Amount</Label>
-              <Input value={newPlanPriceAmount} onChange={(event) => setNewPlanPriceAmount(event.target.value)} />
-            </div>
-            <div className='space-y-2 md:col-span-1'>
-              <Label>Provider</Label>
-              <Input value={newPlanPriceProvider} onChange={(event) => setNewPlanPriceProvider(event.target.value)} />
-            </div>
-            <div className='space-y-2 md:col-span-3'>
-              <Label>Provider price ID</Label>
-              <Input
-                placeholder='price_123'
-                value={newPlanPriceProviderId}
-                onChange={(event) => setNewPlanPriceProviderId(event.target.value)}
-              />
-            </div>
-            <div className='space-y-2 md:col-span-3'>
-              <Label>Nickname</Label>
-              <Input
-                placeholder='Pro monthly'
-                value={newPlanPriceNickname}
-                onChange={(event) => setNewPlanPriceNickname(event.target.value)}
-              />
-            </div>
-          </div>
-          <div className='flex items-center justify-between gap-3'>
-            <div className='text-xs text-muted-foreground'>Existing: {planPrices.length}</div>
-            <Button onClick={createPlanPrice} disabled={!newPlanPricePlanId}>
-              Create plan price
-            </Button>
-          </div>
-          {planPrices.length === 0 ? (
-            <p className='text-sm text-muted-foreground'>No plan price mappings yet.</p>
-          ) : (
-            <div className='space-y-2'>
-              {planPrices.map((price) => {
-                const planName = planLookup.get(price.plan_id)?.name || price.plan_id;
-                return (
-                  <div key={price.id} className='flex flex-wrap items-center justify-between gap-3 rounded-md border p-3 text-sm'>
-                    <div>
-                      <p className='font-medium'>{planName}</p>
-                      <p className='text-xs text-muted-foreground'>
-                        {price.billing_interval} · {price.currency.toUpperCase()} · {price.provider}
-                      </p>
-                    </div>
-                    <div className='text-right'>
-                      <p className='font-medium'>{price.amount}</p>
-                      <p className='text-xs text-muted-foreground'>{price.provider_price_id || 'No provider price id'}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Create tenant</CardTitle>
-          <CardDescription>Provision a tenant with an optional plan.</CardDescription>
-        </CardHeader>
-        <CardContent className='grid gap-4 md:grid-cols-4'>
-          <div className='space-y-2'>
-            <Label>Name</Label>
-            <Input value={newTenantName} onChange={(event) => setNewTenantName(event.target.value)} />
-          </div>
-          <div className='space-y-2'>
-            <Label>Slug</Label>
-            <Input value={newTenantSlug} onChange={(event) => setNewTenantSlug(event.target.value)} />
-          </div>
-          <div className='space-y-2'>
-            <Label>Type</Label>
-            <select
-              className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
-              value={newTenantType}
-              onChange={(event) => setNewTenantType(event.target.value)}
-            >
-              <option value='company'>company</option>
-              <option value='education'>education</option>
-            </select>
-          </div>
-          <div className='space-y-2'>
-            <Label>Plan</Label>
-            <select
-              className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
-              value={newTenantPlan}
-              onChange={(event) => setNewTenantPlan(event.target.value)}
-            >
-              <option value=''>No plan</option>
-              {plans.map((plan) => (
-                <option key={plan.id} value={plan.id}>
-                  {plan.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className='md:col-span-4'>
-            <Button onClick={createTenant} disabled={!newTenantName || !newTenantSlug}>
-              Create tenant
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Tenants</CardTitle>
-          <CardDescription>Select a tenant to manage modules and admins.</CardDescription>
-        </CardHeader>
-        <CardContent className='space-y-2'>
-          {tenants.length === 0 ? (
-            <p className='text-sm text-muted-foreground'>No tenants created yet.</p>
-          ) : (
-            tenants.map((tenant) => (
-              <div
-                key={tenant.id}
-                className={`flex flex-wrap items-center justify-between gap-3 rounded-md border p-3 ${
-                  selectedTenantId === tenant.id ? 'border-primary' : 'border-muted'
-                }`}
-              >
-                <div>
-                  <p className='font-medium'>{tenant.name}</p>
-                  <p className='text-xs text-muted-foreground'>
-                    {tenant.slug} · {tenant.tenant_type}
-                  </p>
-                </div>
-                <div className='flex flex-wrap items-center gap-2'>
-                  <Button variant='outline' size='sm' onClick={() => setSelectedTenantId(tenant.id)}>
-                    Manage
-                  </Button>
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    onClick={() => {
-                      const url = buildTenantUrl(tenant.slug);
-                      if (!url) return;
-                      window.open(url, '_blank', 'noopener,noreferrer');
-                    }}
-                    title='Open tenant in a new tab'
-                  >
-                    <ExternalLink className='h-4 w-4' />
-                    Open
-                  </Button>
-                  <Button
-                    variant={tenant.is_active ? 'secondary' : 'outline'}
-                    size='sm'
-                    onClick={() => toggleTenantActive(tenant)}
-                  >
-                    {tenant.is_active ? 'Disable' : 'Enable'}
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
-
-      {selectedTenant && (
-        <div className='grid gap-6 md:grid-cols-2'>
-          <Card>
-            <CardHeader>
-              <CardTitle>Modules for {selectedTenant.name}</CardTitle>
-              <CardDescription>Toggle product modules for this tenant.</CardDescription>
-            </CardHeader>
-            <CardContent className='space-y-3'>
-              {modules.map((module) => (
-                <label key={module.module_key} className='flex items-center justify-between text-sm'>
-                  <span>{module.module_key}</span>
-                  <input
-                    type='checkbox'
-                    checked={module.enabled}
-                    onChange={(event) =>
-                      setModules((prev) =>
-                        prev.map((item) =>
-                          item.module_key === module.module_key
-                            ? { ...item, enabled: event.target.checked }
-                            : item,
-                        ),
-                      )
-                    }
-                  />
-                </label>
-              ))}
-              <Button onClick={saveModules}>Save modules</Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Invite tenant admin</CardTitle>
-              <CardDescription>Create or link the first tenant admin.</CardDescription>
-            </CardHeader>
-            <CardContent className='space-y-3'>
-              <div className='space-y-2'>
-                <Label>Email</Label>
-                <Input value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
-              </div>
-              <div className='space-y-2'>
-                <Label>Full name</Label>
-                <Input value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
-              </div>
-              <div className='space-y-2'>
-                <Label>Password (new user only)</Label>
-                <Input
-                  type='password'
-                  value={invitePassword}
-                  onChange={(event) => setInvitePassword(event.target.value)}
-                />
-              </div>
-              <Button onClick={inviteAdmin}>Invite admin</Button>
-            </CardContent>
-          </Card>
+          ) : null}
         </div>
-      )}
+
+        {error ? (
+          <Alert variant='destructive'>
+            <AlertTitle>Admin console error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        {loading ? (
+          <LoadingState label='Loading admin console…' />
+        ) : (
+          <div className='grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)] lg:h-[calc(100vh-14rem)]'>
+            <Card className='flex min-h-0 flex-col'>
+              <CardHeader className='pb-3'>
+                <CardTitle className='text-sm'>Console navigation</CardTitle>
+                <CardDescription>Jump between sections without losing context.</CardDescription>
+              </CardHeader>
+              <CardContent className='min-h-0 flex-1 pt-0'>
+                <div className='flex min-h-0 flex-1 flex-col gap-3'>
+                  <div className='space-y-2'>
+                    <Label className='text-xs'>Search sections</Label>
+                    <Input
+                      placeholder='Tenants, plans, billing…'
+                      value={navFilter}
+                      onChange={(event) => setNavFilter(event.target.value)}
+                    />
+                  </div>
+
+                  <ScrollArea className='min-h-0 flex-1 pr-2'>
+                    <div className='space-y-2'>
+                      {navItems.map((item) => (
+                        <NavItem
+                          key={item.id}
+                          active={activeSection === item.id}
+                          title={item.title}
+                          description={item.description}
+                          icon={item.icon}
+                          badge={item.badge}
+                          disabled={item.disabled}
+                          onClick={() => setActiveSection(item.id)}
+                        />
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className='flex min-h-0 flex-col'>
+              <CardHeader className='border-b bg-white/70 pb-3 backdrop-blur'>
+                <div className='flex flex-wrap items-start justify-between gap-3'>
+                  <div>
+                    <CardTitle>
+                      {activeSection === 'tenants'
+                        ? 'Tenants'
+                        : activeSection === 'tenant'
+                          ? selectedTenant
+                            ? `Tenant settings — ${selectedTenant.name}`
+                            : 'Tenant settings'
+                          : activeSection === 'plans'
+                            ? 'Plans'
+                            : 'Billing mappings'}
+                    </CardTitle>
+                    <CardDescription>
+                      {activeSection === 'tenants'
+                        ? 'Provision tenants and manage access.'
+                        : activeSection === 'tenant'
+                          ? 'Configure the selected tenant. Designed to scale as more settings are added.'
+                          : activeSection === 'plans'
+                            ? 'Plan templates that drive provisioning defaults.'
+                            : 'Provider price mappings used for checkout and billing workflows.'}
+                    </CardDescription>
+                  </div>
+                  {activeSection === 'tenant' && selectedTenant ? (
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <Button
+                        variant={selectedTenant.is_active ? 'secondary' : 'outline'}
+                        size='sm'
+                        onClick={() => toggleTenantActive(selectedTenant)}
+                      >
+                        {selectedTenant.is_active ? 'Disable tenant' : 'Enable tenant'}
+                      </Button>
+                      <Button variant='outline' size='sm' onClick={() => setSelectedTenantId(null)}>
+                        Clear selection
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </CardHeader>
+
+              <CardContent className='min-h-0 flex-1 p-0'>
+                <ScrollArea className='h-full'>
+                  <div className='space-y-6 p-5'>
+                    {activeSection === 'tenants' ? (
+                      <div className='grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]'>
+                        <div className='space-y-4'>
+                          <div className='rounded-lg border bg-white p-4'>
+                            <div className='flex items-start justify-between gap-4'>
+                              <div>
+                                <p className='text-sm font-semibold'>Create tenant</p>
+                                <p className='mt-1 text-xs text-muted-foreground'>Provision a new tenant with an optional plan.</p>
+                              </div>
+                              <Badge variant='muted' className='text-[10px]'>
+                                Provisioning
+                              </Badge>
+                            </div>
+
+                            <div className='mt-4 grid gap-3'>
+                              <div className='grid gap-3 sm:grid-cols-2'>
+                                <div className='space-y-2'>
+                                  <Label>Name</Label>
+                                  <Input value={newTenantName} onChange={(event) => setNewTenantName(event.target.value)} />
+                                </div>
+                                <div className='space-y-2'>
+                                  <Label>Slug</Label>
+                                  <Input value={newTenantSlug} onChange={(event) => setNewTenantSlug(event.target.value)} />
+                                </div>
+                              </div>
+                              <div className='grid gap-3 sm:grid-cols-2'>
+                                <div className='space-y-2'>
+                                  <Label>Type</Label>
+                                  <select
+                                    className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                                    value={newTenantType}
+                                    onChange={(event) => setNewTenantType(event.target.value)}
+                                  >
+                                    <option value='company'>company</option>
+                                    <option value='education'>education</option>
+                                  </select>
+                                </div>
+                                <div className='space-y-2'>
+                                  <Label>Plan</Label>
+                                  <select
+                                    className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                                    value={newTenantPlan}
+                                    onChange={(event) => setNewTenantPlan(event.target.value)}
+                                  >
+                                    <option value=''>No plan</option>
+                                    {plans.map((plan) => (
+                                      <option key={plan.id} value={plan.id}>
+                                        {plan.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+
+                              <div className='flex items-center justify-end gap-2 pt-1'>
+                                <Button onClick={createTenant} disabled={!newTenantName || !newTenantSlug}>
+                                  Create tenant
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className='rounded-lg border bg-white p-4'>
+                            <p className='text-sm font-semibold'>Tenant directory</p>
+                            <p className='mt-1 text-xs text-muted-foreground'>
+                              Filter and select a tenant to manage modules and admins.
+                            </p>
+                            <div className='mt-3 space-y-2'>
+                              <Label className='text-xs'>Search tenants</Label>
+                              <Input
+                                placeholder='Name, slug, type…'
+                                value={tenantFilter}
+                                onChange={(event) => setTenantFilter(event.target.value)}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className='rounded-lg border bg-white'>
+                          <div className='flex items-center justify-between gap-3 border-b p-4'>
+                            <div>
+                              <p className='text-sm font-semibold'>Tenants</p>
+                              <p className='text-xs text-muted-foreground'>
+                                Showing {filteredTenants.length} of {tenants.length}
+                              </p>
+                            </div>
+                            <Badge variant='muted' className='text-[10px]'>
+                              Select to manage
+                            </Badge>
+                          </div>
+                          <ScrollArea className='h-[520px]'>
+                            <div className='space-y-2 p-4'>
+                              {filteredTenants.length === 0 ? (
+                                <p className='text-sm text-muted-foreground'>No tenants match your search.</p>
+                              ) : (
+                                filteredTenants.map((tenant) => (
+                                  <div
+                                    key={tenant.id}
+                                    className={[
+                                      'rounded-lg border p-3',
+                                      selectedTenantId === tenant.id ? 'border-primary bg-primary/5' : 'border-border',
+                                    ].join(' ')}
+                                  >
+                                    <div className='flex flex-wrap items-start justify-between gap-3'>
+                                      <div>
+                                        <p className='text-sm font-semibold leading-none'>{tenant.name}</p>
+                                        <p className='mt-1 text-xs text-muted-foreground'>
+                                          {tenant.slug} · {tenant.tenant_type}
+                                        </p>
+                                        <div className='mt-2 flex flex-wrap items-center gap-2'>
+                                          <Badge
+                                            variant={tenant.is_active ? 'secondary' : 'outline'}
+                                            className='text-[10px]'
+                                          >
+                                            {tenant.is_active ? 'Active' : 'Disabled'}
+                                          </Badge>
+                                        </div>
+                                      </div>
+                                      <div className='flex flex-wrap items-center gap-2'>
+                                        <Button variant='outline' size='sm' onClick={() => setSelectedTenantId(tenant.id)}>
+                                          Manage
+                                        </Button>
+                                        <Button
+                                          type='button'
+                                          variant='outline'
+                                          size='sm'
+                                          onClick={() => {
+                                            const url = buildTenantUrl(tenant.slug);
+                                            if (!url) return;
+                                            window.open(url, '_blank', 'noopener,noreferrer');
+                                          }}
+                                          title='Open tenant in a new tab'
+                                        >
+                                          <ExternalLink className='h-4 w-4' />
+                                          <span className='ml-2 hidden sm:inline'>Open</span>
+                                        </Button>
+                                        <Button
+                                          variant={tenant.is_active ? 'secondary' : 'outline'}
+                                          size='sm'
+                                          onClick={() => toggleTenantActive(tenant)}
+                                        >
+                                          {tenant.is_active ? 'Disable' : 'Enable'}
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </ScrollArea>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {activeSection === 'tenant' ? (
+                      selectedTenant ? (
+                        <Tabs defaultValue='modules'>
+                          <TabsList className='w-full justify-start'>
+                            <TabsTrigger value='modules'>Modules</TabsTrigger>
+                            <TabsTrigger value='admins'>Admins</TabsTrigger>
+                          </TabsList>
+
+                          <TabsContent value='modules'>
+                            <div className='rounded-lg border bg-white p-4'>
+                              <div className='flex flex-wrap items-start justify-between gap-3'>
+                                <div>
+                                  <p className='text-sm font-semibold'>Enabled modules</p>
+                                  <p className='mt-1 text-xs text-muted-foreground'>
+                                    Toggle modules for this tenant. This grid layout is meant to scale as more settings are added.
+                                  </p>
+                                </div>
+                                <Button size='sm' onClick={saveModules}>
+                                  Save modules
+                                </Button>
+                              </div>
+
+                              <div className='mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
+                                {modules.map((module) => (
+                                  <label
+                                    key={module.module_key}
+                                    className='flex items-center justify-between gap-3 rounded-md border bg-white px-3 py-2 text-sm hover:bg-muted/30'
+                                  >
+                                    <span className='font-medium'>{module.module_key}</span>
+                                    <input
+                                      type='checkbox'
+                                      className='h-4 w-4'
+                                      checked={module.enabled}
+                                      onChange={(event) =>
+                                        setModules((prev) =>
+                                          prev.map((item) =>
+                                            item.module_key === module.module_key
+                                              ? { ...item, enabled: event.target.checked }
+                                              : item,
+                                          ),
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          </TabsContent>
+
+                          <TabsContent value='admins'>
+                            <div className='rounded-lg border bg-white p-4'>
+                              <div className='flex flex-wrap items-start justify-between gap-3'>
+                                <div>
+                                  <p className='text-sm font-semibold'>Invite tenant admin</p>
+                                  <p className='mt-1 text-xs text-muted-foreground'>Create or link the first tenant admin.</p>
+                                </div>
+                                <Badge variant='muted' className='text-[10px]'>
+                                  Tenant: {selectedTenant.slug}
+                                </Badge>
+                              </div>
+
+                              <div className='mt-4 grid gap-3 sm:grid-cols-2'>
+                                <div className='space-y-2 sm:col-span-2'>
+                                  <Label>Email</Label>
+                                  <Input value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
+                                </div>
+                                <div className='space-y-2'>
+                                  <Label>Full name</Label>
+                                  <Input value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
+                                </div>
+                                <div className='space-y-2'>
+                                  <Label>Password (new user only)</Label>
+                                  <Input
+                                    type='password'
+                                    value={invitePassword}
+                                    onChange={(event) => setInvitePassword(event.target.value)}
+                                  />
+                                </div>
+                                <div className='sm:col-span-2 flex items-center justify-end pt-1'>
+                                  <Button onClick={inviteAdmin} disabled={!inviteEmail || !inviteName}>
+                                    Invite admin
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          </TabsContent>
+                        </Tabs>
+                      ) : (
+                        <Alert variant='info'>
+                          <AlertTitle>No tenant selected</AlertTitle>
+                          <AlertDescription>Select a tenant from the Tenants section to configure modules and admins.</AlertDescription>
+                        </Alert>
+                      )
+                    ) : null}
+
+                    {activeSection === 'plans' ? (
+                      <div className='space-y-4'>
+                        <div className='rounded-lg border bg-white p-4'>
+                          <div className='flex flex-wrap items-start justify-between gap-3'>
+                            <div>
+                              <p className='text-sm font-semibold'>Create plan</p>
+                              <p className='mt-1 text-xs text-muted-foreground'>
+                                Plans are global templates used when provisioning tenants.
+                              </p>
+                            </div>
+                            <Badge variant='muted' className='text-[10px]'>
+                              Existing: {plans.length}
+                            </Badge>
+                          </div>
+
+                          <div className='mt-4 grid gap-3 sm:grid-cols-6'>
+                            <div className='space-y-2 sm:col-span-2'>
+                              <Label>Key</Label>
+                              <Input placeholder='pro' value={newPlanKey} onChange={(event) => setNewPlanKey(event.target.value)} />
+                            </div>
+                            <div className='space-y-2 sm:col-span-3'>
+                              <Label>Name</Label>
+                              <Input placeholder='Pro' value={newPlanName} onChange={(event) => setNewPlanName(event.target.value)} />
+                            </div>
+                            <div className='space-y-2 sm:col-span-1'>
+                              <Label>Scope</Label>
+                              <select
+                                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                                value={newPlanScope}
+                                onChange={(event) => setNewPlanScope(event.target.value)}
+                              >
+                                <option value='all'>all</option>
+                                <option value='company'>company</option>
+                                <option value='education'>education</option>
+                              </select>
+                            </div>
+                            <div className='sm:col-span-6 flex items-center justify-end pt-1'>
+                              <Button onClick={createPlan} disabled={!newPlanKey || !newPlanName}>
+                                Create plan
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className='rounded-lg border bg-white'>
+                          <div className='flex items-center justify-between gap-3 border-b p-4'>
+                            <div>
+                              <p className='text-sm font-semibold'>Plans</p>
+                              <p className='text-xs text-muted-foreground'>Global templates, sorted by name.</p>
+                            </div>
+                          </div>
+                          <div className='p-4'>
+                            {plans.length === 0 ? (
+                              <p className='text-sm text-muted-foreground'>No plans created yet.</p>
+                            ) : (
+                              <div className='grid gap-2 md:grid-cols-2'>
+                                {plans
+                                  .slice()
+                                  .sort((a, b) => a.name.localeCompare(b.name))
+                                  .map((plan) => (
+                                    <div key={plan.id} className='rounded-md border bg-white p-3'>
+                                      <div className='flex items-start justify-between gap-3'>
+                                        <div>
+                                          <p className='text-sm font-semibold leading-none'>{plan.name}</p>
+                                          <p className='mt-1 text-xs text-muted-foreground'>Key: {plan.key}</p>
+                                        </div>
+                                        <Badge variant='outline' className='text-[10px]'>
+                                          {plan.id.slice(0, 8)}
+                                        </Badge>
+                                      </div>
+                                    </div>
+                                  ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {activeSection === 'billing' ? (
+                      <div className='space-y-4'>
+                        <div className='rounded-lg border bg-white p-4'>
+                          <div className='flex flex-wrap items-start justify-between gap-3'>
+                            <div>
+                              <p className='text-sm font-semibold'>Create plan price mapping</p>
+                              <p className='mt-1 text-xs text-muted-foreground'>
+                                Map internal plans to Stripe prices (or other providers).
+                              </p>
+                            </div>
+                            <Badge variant='muted' className='text-[10px]'>
+                              Existing: {planPrices.length}
+                            </Badge>
+                          </div>
+
+                          <div className='mt-4 grid gap-3 md:grid-cols-6'>
+                            <div className='space-y-2 md:col-span-2'>
+                              <Label>Plan</Label>
+                              <select
+                                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                                value={newPlanPricePlanId}
+                                onChange={(event) => setNewPlanPricePlanId(event.target.value)}
+                              >
+                                {plans.map((plan) => (
+                                  <option key={plan.id} value={plan.id}>
+                                    {plan.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className='space-y-2 md:col-span-1'>
+                              <Label>Interval</Label>
+                              <select
+                                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                                value={newPlanPriceInterval}
+                                onChange={(event) => setNewPlanPriceInterval(event.target.value)}
+                              >
+                                <option value='month'>month</option>
+                                <option value='year'>year</option>
+                              </select>
+                            </div>
+                            <div className='space-y-2 md:col-span-1'>
+                              <Label>Currency</Label>
+                              <Input value={newPlanPriceCurrency} onChange={(event) => setNewPlanPriceCurrency(event.target.value)} />
+                            </div>
+                            <div className='space-y-2 md:col-span-1'>
+                              <Label>Amount</Label>
+                              <Input value={newPlanPriceAmount} onChange={(event) => setNewPlanPriceAmount(event.target.value)} />
+                            </div>
+                            <div className='space-y-2 md:col-span-1'>
+                              <Label>Provider</Label>
+                              <Input value={newPlanPriceProvider} onChange={(event) => setNewPlanPriceProvider(event.target.value)} />
+                            </div>
+                            <div className='space-y-2 md:col-span-3'>
+                              <Label>Provider price ID</Label>
+                              <Input
+                                placeholder='price_123'
+                                value={newPlanPriceProviderId}
+                                onChange={(event) => setNewPlanPriceProviderId(event.target.value)}
+                              />
+                            </div>
+                            <div className='space-y-2 md:col-span-3'>
+                              <Label>Nickname</Label>
+                              <Input
+                                placeholder='Pro monthly'
+                                value={newPlanPriceNickname}
+                                onChange={(event) => setNewPlanPriceNickname(event.target.value)}
+                              />
+                            </div>
+                            <div className='md:col-span-6 flex items-center justify-end pt-1'>
+                              <Button onClick={createPlanPrice} disabled={!newPlanPricePlanId}>
+                                Create mapping
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className='rounded-lg border bg-white'>
+                          <div className='flex items-center justify-between gap-3 border-b p-4'>
+                            <div>
+                              <p className='text-sm font-semibold'>Mappings</p>
+                              <p className='text-xs text-muted-foreground'>Compact view for quick scanning.</p>
+                            </div>
+                          </div>
+                          <ScrollArea className='h-[520px]'>
+                            <div className='space-y-2 p-4'>
+                              {planPrices.length === 0 ? (
+                                <p className='text-sm text-muted-foreground'>No plan price mappings yet.</p>
+                              ) : (
+                                planPrices.map((price) => {
+                                  const planName = planLookup.get(price.plan_id)?.name || price.plan_id;
+                                  return (
+                                    <div
+                                      key={price.id}
+                                      className='flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white p-3 text-sm'
+                                    >
+                                      <div>
+                                        <p className='font-semibold'>{planName}</p>
+                                        <p className='text-xs text-muted-foreground'>
+                                          {price.billing_interval} · {price.currency.toUpperCase()} · {price.provider}
+                                        </p>
+                                      </div>
+                                      <div className='text-right'>
+                                        <p className='font-semibold'>{price.amount}</p>
+                                        <p className='text-xs text-muted-foreground'>
+                                          {price.provider_price_id || 'No provider price id'}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </ScrollArea>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          </div>
+        )}
       </div>
     </AppShell>
   );

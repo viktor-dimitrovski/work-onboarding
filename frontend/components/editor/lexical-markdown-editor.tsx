@@ -11,7 +11,7 @@ import { TablePlugin } from '@lexical/react/LexicalTablePlugin';
 import { OnChangePlugin } from '@lexical/react/LexicalOnChangePlugin';
 import { MarkdownShortcutPlugin } from '@lexical/react/LexicalMarkdownShortcutPlugin';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
-import LexicalErrorBoundary from '@lexical/react/LexicalErrorBoundary';
+import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
 import { HeadingNode, QuoteNode } from '@lexical/rich-text';
 import { ListItemNode, ListNode } from '@lexical/list';
 import { TableCellNode, TableNode, TableRowNode } from '@lexical/table';

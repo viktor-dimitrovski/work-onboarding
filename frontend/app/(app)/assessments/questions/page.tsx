@@ -700,7 +700,7 @@ export default function AssessmentQuestionsPage() {
 
         <div className='space-y-4'>
           <div className='sticky top-0 z-10 rounded-md border bg-background/80 p-3 backdrop-blur supports-[backdrop-filter]:bg-background/70'>
-            <div className='flex flex-col gap-3 lg:flex-row lg:items-center'>
+            <div className='flex flex-col gap-3 lg:flex-row lg:items-start'>
               <div className='flex flex-wrap items-center gap-2'>
                 <div className='relative w-full sm:max-w-xs'>
                   <Search className='absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
@@ -749,15 +749,15 @@ export default function AssessmentQuestionsPage() {
                   <RefreshCw className='h-4 w-4' />
                 </Button>
               </div>
-              <div className='flex flex-wrap items-center gap-2 lg:ml-auto lg:flex-nowrap'>
+              <div className='flex flex-wrap items-start gap-2 lg:ml-auto lg:flex-nowrap lg:self-start'>
                 {hasActiveFilters && (
                   <Button variant='ghost' size='sm' onClick={clearFilters}>
                     <X className='mr-1 h-3 w-3' />
                     Clear filters
                   </Button>
                 )}
-                <div className='flex items-center gap-3'>
-                  <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+                <div className='flex h-9 items-center gap-3'>
+                  <label className='flex h-9 items-center gap-2 whitespace-nowrap text-xs leading-none text-muted-foreground'>
                     <input
                       type='checkbox'
                       className='h-4 w-4 rounded border-input'
@@ -767,10 +767,10 @@ export default function AssessmentQuestionsPage() {
                     />
                     Select page
                   </label>
-                  <span className='text-xs font-medium text-muted-foreground'>{resultsLabel}</span>
+                  <span className='whitespace-nowrap text-xs font-medium text-muted-foreground'>{resultsLabel}</span>
                   <span
                     className={cn(
-                      'min-w-[92px] text-xs text-muted-foreground tabular-nums',
+                      'min-w-[92px] whitespace-nowrap text-xs text-muted-foreground tabular-nums',
                       selectedCount === 0 && 'invisible',
                     )}
                   >
@@ -781,7 +781,7 @@ export default function AssessmentQuestionsPage() {
                 <Button
                   size='sm'
                   variant='outline'
-                  className={cn(selectedCount === 0 && 'invisible pointer-events-none')}
+                  className={cn('h-9', selectedCount === 0 && 'invisible pointer-events-none')}
                   tabIndex={selectedCount === 0 ? -1 : 0}
                   aria-hidden={selectedCount === 0}
                   onClick={() =>
@@ -794,7 +794,7 @@ export default function AssessmentQuestionsPage() {
                   Archive selected
                 </Button>
 
-                <div className='flex items-center gap-2'>
+                <div className='flex h-9 items-center gap-2'>
                   {isRefreshing && <span className='text-xs text-muted-foreground'>Updating…</span>}
                   <select
                     className='h-9 rounded-md border border-input bg-background px-2 text-xs'
@@ -805,13 +805,14 @@ export default function AssessmentQuestionsPage() {
                     <option value={24}>24 / page</option>
                     <option value={48}>48 / page</option>
                   </select>
-                  <div className='flex items-center gap-1 rounded-md border p-1'>
+                  <div className='flex h-9 items-center gap-1 rounded-md border p-0.5'>
                     <Button
                       type='button'
                       size='sm'
                       variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
                       onClick={() => setViewMode('grid')}
                       aria-label='Grid view'
+                      className='h-8 px-2'
                     >
                       <LayoutGrid className='h-4 w-4' />
                     </Button>
@@ -821,6 +822,7 @@ export default function AssessmentQuestionsPage() {
                       variant={viewMode === 'list' ? 'secondary' : 'ghost'}
                       onClick={() => setViewMode('list')}
                       aria-label='List view'
+                      className='h-8 px-2'
                     >
                       <List className='h-4 w-4' />
                     </Button>
