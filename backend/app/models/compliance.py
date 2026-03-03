@@ -455,6 +455,11 @@ class CompliancePracticeItem(UUIDPrimaryKeyMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description_text: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    frequency: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    frameworks: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

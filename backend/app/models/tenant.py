@@ -70,10 +70,19 @@ class TenantMembership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False
     )
+    # Legacy single role retained for backward compatibility and auditing.
+    # Prefer `roles_json` for authorization decisions.
     role: Mapped[str] = mapped_column(String(50), nullable=False, default='member')
+    roles_json: Mapped[list[str]] = mapped_column('roles', JSONB, nullable=False, default=lambda: ['member'])
     status: Mapped[str] = mapped_column(String(20), nullable=False, default='active')
 
     tenant: Mapped['Tenant'] = relationship(back_populates='memberships')
+
+    def roles(self) -> list[str]:
+        roles = [r for r in (self.roles_json or []) if isinstance(r, str) and r.strip()]
+        if roles:
+            return roles
+        return [self.role] if self.role else ['member']
 
 
 class Group(UUIDPrimaryKeyMixin, TimestampMixin, Base):

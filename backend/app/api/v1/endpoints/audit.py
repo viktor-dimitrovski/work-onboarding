@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -30,6 +31,9 @@ def list_audit_log(
     page_size: int = Query(default=50, ge=1, le=200),
     action: str | None = Query(default=None),
     entity_type: str | None = Query(default=None),
+    actor_user_id: UUID | None = Query(default=None),
+    entity_id: UUID | None = Query(default=None),
+    user_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None),
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
@@ -43,6 +47,12 @@ def list_audit_log(
         base = base.where(AuditLog.action == action)
     if entity_type:
         base = base.where(AuditLog.entity_type == entity_type)
+    if actor_user_id:
+        base = base.where(AuditLog.actor_user_id == actor_user_id)
+    if entity_id:
+        base = base.where(AuditLog.entity_id == entity_id)
+    if user_id:
+        base = base.where(or_(AuditLog.actor_user_id == user_id, AuditLog.entity_id == user_id))
     if status:
         base = base.where(AuditLog.status == status)
     if start:

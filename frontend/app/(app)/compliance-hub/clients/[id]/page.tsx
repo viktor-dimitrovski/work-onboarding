@@ -156,7 +156,7 @@ export default function ComplianceClientDetailPage() {
   if (loading) return <LoadingState label="Loading client set..." />;
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-semibold">

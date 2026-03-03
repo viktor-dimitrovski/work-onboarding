@@ -97,5 +97,20 @@ class TenantContextOut(BaseModel):
     tenant: TenantOut
     role: str | None
     role_label: str | None
+    roles: list[str] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
     modules: list[str] = Field(default_factory=list)
+
+
+class TenantSummaryOut(BaseModel):
+    id: UUID
+    name: str
+    slug: str
+    tenant_type: str
+    is_active: bool
+
+
+class UserTenantMembershipOut(BaseModel):
+    tenant: TenantSummaryOut
+    status: str
+    roles: list[str] = Field(default_factory=list)

@@ -25,6 +25,8 @@ from app.schemas.tenant import (
     TenantModuleUpdate,
     TenantOut,
     TenantUpdate,
+  TenantSummaryOut,
+  UserTenantMembershipOut,
 )
 from app.schemas.common import PaginationMeta
 
@@ -226,6 +228,7 @@ def invite_tenant_admin(
             full_name=payload.full_name,
             hashed_password=hash_password(payload.password),
             is_active=True,
+            password_change_required=True,
         )
         db.add(user)
         db.flush()
@@ -243,8 +246,51 @@ def invite_tenant_admin(
                 tenant_id=tenant_id,
                 user_id=user.id,
                 role='tenant_admin',
+                roles_json=['tenant_admin'],
                 status='active',
             )
         )
     db.commit()
     return {'status': 'ok'}
+
+
+@router.get('/users/{user_id}/memberships', response_model=list[UserTenantMembershipOut], dependencies=[Depends(require_product_admin_host)])
+def list_user_memberships(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> list[UserTenantMembershipOut]:
+    user = db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found')
+
+    current_tenant_id = db.execute(select(func.current_setting('app.tenant_id', True))).scalar()
+    tenants = db.scalars(select(Tenant).order_by(Tenant.created_at.asc())).all()
+    items: list[UserTenantMembershipOut] = []
+    try:
+        for tenant in tenants:
+            set_tenant_id(db, str(tenant.id))
+            membership = db.scalar(
+                select(TenantMembership).where(
+                    TenantMembership.tenant_id == tenant.id,
+                    TenantMembership.user_id == user.id,
+                )
+            )
+            if membership:
+                items.append(
+                    UserTenantMembershipOut(
+                        tenant=TenantSummaryOut(
+                            id=tenant.id,
+                            name=tenant.name,
+                            slug=tenant.slug,
+                            tenant_type=tenant.tenant_type,
+                            is_active=tenant.is_active,
+                        ),
+                        status=membership.status,
+                        roles=membership.roles(),
+                    )
+                )
+    finally:
+        if current_tenant_id:
+            set_tenant_id(db, str(current_tenant_id))
+    return items

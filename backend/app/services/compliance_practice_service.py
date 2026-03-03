@@ -177,6 +177,11 @@ def _input_hash(practice_item: CompliancePracticeItem, batch_id: UUID | None) ->
         {
             "title": practice_item.title,
             "description": practice_item.description_text,
+            "category": practice_item.category,
+            "status": practice_item.status,
+            "frequency": practice_item.frequency,
+            "evidence": practice_item.evidence,
+            "frameworks": list(practice_item.frameworks or []),
             "batch_id": str(batch_id) if batch_id else None,
         },
         sort_keys=True,

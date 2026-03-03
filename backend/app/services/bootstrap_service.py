@@ -38,6 +38,7 @@ def ensure_reference_data(db: Session) -> None:
             full_name='Initial Super Admin',
             hashed_password=hash_password(settings.FIRST_ADMIN_PASSWORD),
             is_active=True,
+            password_change_required=False,
         )
         db.add(admin)
         db.flush()
@@ -75,6 +76,7 @@ def ensure_reference_data(db: Session) -> None:
                 tenant_id=tenant.id,
                 user_id=admin.id,
                 role='tenant_admin',
+                roles_json=['tenant_admin'],
                 status='active',
             )
         )

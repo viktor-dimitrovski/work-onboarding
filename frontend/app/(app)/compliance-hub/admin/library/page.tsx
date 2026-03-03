@@ -164,7 +164,7 @@ export default function ComplianceLibraryAdminPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto min-w-0">
       <div>
         <h2 className="text-2xl font-semibold">Library Admin</h2>
         <p className="text-sm text-muted-foreground">

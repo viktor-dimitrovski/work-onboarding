@@ -56,8 +56,12 @@ export default function NewAssignmentPage() {
         api.get<TrackListResponse>('/tracks?page=1&page_size=100', accessToken),
       ]);
 
-      const employeeRows = usersResponse.items.filter((user) => user.tenant_role === 'member');
-      const mentorRows = usersResponse.items.filter((user) => user.tenant_role === 'mentor');
+      const employeeRows = usersResponse.items.filter((user) =>
+        (user.tenant_roles ?? (user.tenant_role ? [user.tenant_role] : [])).includes('member'),
+      );
+      const mentorRows = usersResponse.items.filter((user) =>
+        (user.tenant_roles ?? (user.tenant_role ? [user.tenant_role] : [])).includes('mentor'),
+      );
 
       const versions = tracksResponse.items
         .filter((track) => track.is_active)

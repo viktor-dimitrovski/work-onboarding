@@ -6,6 +6,8 @@ export interface AuthUser {
   full_name: string;
   is_active: boolean;
   roles: RoleName[];
+  last_login_at?: string | null;
+  must_change_password?: boolean;
 }
 
 export interface TokenResponse {
@@ -26,6 +28,9 @@ export type TenantRole =
   | 'manager'
   | 'mentor'
   | 'tenant_admin'
+  | 'compliance_viewer'
+  | 'compliance_editor'
+  | 'compliance_admin'
   | 'parent'
   | 'student'
   | 'teacher';
@@ -42,6 +47,7 @@ export interface TenantContext {
   tenant: TenantSummary;
   role?: string | null;
   role_label?: string | null;
+  roles?: string[];
   permissions: string[];
   modules: string[];
 }
@@ -345,7 +351,9 @@ export interface UserRow {
   full_name: string;
   is_active: boolean;
   roles: RoleName[];
+  last_login_at?: string | null;
   tenant_role?: string | null;
+  tenant_roles?: string[] | null;
   tenant_status?: string | null;
 }
 

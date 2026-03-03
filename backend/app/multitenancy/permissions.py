@@ -84,6 +84,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'billing:read',
         'billing:manage',
     },
+    'compliance_viewer': {'compliance:read'},
+    'compliance_editor': {'compliance:read', 'compliance:write'},
+    'compliance_admin': {'compliance:read', 'compliance:write', 'compliance:admin'},
     'parent': {'assignments:read'},
 }
 

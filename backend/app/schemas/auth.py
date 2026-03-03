@@ -23,6 +23,11 @@ class PasswordResetRequest(BaseModel):
     email: EmailStr
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class UserSummary(BaseSchema):
     id: UUID
     email: EmailStr
@@ -30,6 +35,7 @@ class UserSummary(BaseSchema):
     is_active: bool
     roles: list[str]
     last_login_at: datetime | None
+    must_change_password: bool = False
 
 
 class TokenResponse(BaseModel):

@@ -58,7 +58,7 @@ export default function ComplianceClientsNewPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto min-w-0">
       <div>
         <h2 className="text-2xl font-semibold">New client set</h2>
         <p className="text-sm text-muted-foreground">Create a versioned client requirement set.</p>

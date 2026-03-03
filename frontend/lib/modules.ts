@@ -15,6 +15,7 @@ import {
   Rocket,
   Send,
   Settings,
+  ShieldCheck,
   Users,
 } from 'lucide-react';
 
@@ -270,6 +271,13 @@ export const MODULES: ModuleDefinition[] = [
         href: '/compliance-hub/clients',
         label: 'Clients',
         icon: FileText,
+        moduleKey: 'compliance',
+        permission: 'compliance:read',
+      },
+      {
+        href: '/compliance-hub/profile',
+        label: 'Profile & AI Match',
+        icon: ShieldCheck,
         moduleKey: 'compliance',
         permission: 'compliance:read',
       },

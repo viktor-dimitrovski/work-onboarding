@@ -72,11 +72,23 @@ from app.schemas.compliance import (
     CompliancePracticeApplyRequest,
     CompliancePracticeCreateRequest,
     CompliancePracticeItemOut,
+    CompliancePracticeListResponse,
     CompliancePracticeMatchOverrideRequest,
     CompliancePracticeMatchResponse,
     CompliancePracticeMatchResultOut,
     CompliancePracticeMatchRunOut,
     CompliancePracticeUpdateRequest,
+    ComplianceProfilePreviewResponse,
+    ComplianceProfileFrameworkPreview,
+    ComplianceProfileControlLite,
+    ComplianceFrameworkRequirementOut,
+    ComplianceTenantFrameworkCreateRequest,
+    ComplianceTenantFrameworkUpdateRequest,
+    ComplianceFrameworkRequirementCreateRequest,
+    ComplianceFrameworkRequirementUpdateRequest,
+    ComplianceSemanticMatchResponse,
+    ComplianceSemanticMatchControlResult,
+    ComplianceSemanticMatchFrameworkResult,
     ComplianceRemediationUpdateRequest,
     ComplianceSeedImportRequest,
     ComplianceSeedImportResponse,
@@ -107,9 +119,19 @@ from app.services.compliance_snapshot_service import create_snapshot, get_trends
 from app.services.compliance_practice_service import run_practice_match
 from app.services.compliance_client_service import parse_requirements, run_client_match
 from app.services import work_order_service
+from app.services.compliance_profile_preview_service import (
+    active_profile_key as _pp_active_profile_key,
+    compute_preview_rows,
+    framework_implementation_percent,
+    framework_practice_metrics,
+    profile_controls as _pp_profile_controls,
+)
 
 
 router = APIRouter(prefix="/compliance", tags=["compliance"])
+
+def _require_admin():
+    return require_access("compliance", "compliance:admin")
 
 
 def _active_profile_key(db: Session, tenant_id: UUID) -> str | None:
@@ -183,13 +205,17 @@ def _client_compliance(
 
 @router.get("/frameworks", response_model=list[ComplianceFrameworkOut])
 def list_frameworks(
+    ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
     __: object = Depends(require_access("compliance", "compliance:read")),
 ) -> list[ComplianceFrameworkOut]:
     frameworks = db.scalars(
         select(ComplianceTenantFramework)
-        .where(ComplianceTenantFramework.is_active.is_(True))
+        .where(
+            ComplianceTenantFramework.tenant_id == ctx.tenant.id,
+            ComplianceTenantFramework.is_active.is_(True),
+        )
         .order_by(ComplianceTenantFramework.name.asc())
     ).all()
     return [ComplianceFrameworkOut.model_validate(item) for item in frameworks]
@@ -198,6 +224,7 @@ def list_frameworks(
 @router.get("/frameworks/{framework_key}", response_model=ComplianceFrameworkOut)
 def get_framework(
     framework_key: str,
+    ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
     __: object = Depends(require_access("compliance", "compliance:read")),
@@ -205,6 +232,7 @@ def get_framework(
     framework = db.scalar(
         select(ComplianceTenantFramework)
         .where(
+            ComplianceTenantFramework.tenant_id == ctx.tenant.id,
             ComplianceTenantFramework.framework_key == framework_key,
             ComplianceTenantFramework.is_active.is_(True),
         )
@@ -223,7 +251,10 @@ def list_profiles(
 ) -> ComplianceProfileListResponse:
     profiles = db.scalars(
         select(ComplianceTenantLibraryProfile)
-        .where(ComplianceTenantLibraryProfile.is_active.is_(True))
+        .where(
+            ComplianceTenantLibraryProfile.tenant_id == ctx.tenant.id,
+            ComplianceTenantLibraryProfile.is_active.is_(True),
+        )
         .order_by(ComplianceTenantLibraryProfile.name.asc())
     ).all()
     active_profile_key = _active_profile_key(db, ctx.tenant.id)
@@ -328,6 +359,454 @@ def list_library_versions(
     __: object = Depends(require_access("compliance", "compliance:admin")),
 ) -> list[ComplianceLibraryVersionOut]:
     return [ComplianceLibraryVersionOut.model_validate(item) for item in list_tenant_library_versions(db, ctx.tenant.id)]
+
+
+@router.get("/profile/preview", response_model=ComplianceProfilePreviewResponse)
+def get_profile_preview(
+    ctx: TenantContext = Depends(require_tenant_membership),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access("compliance", "compliance:read")),
+) -> ComplianceProfilePreviewResponse:
+    profile_key = _pp_active_profile_key(db, tenant_id=ctx.tenant.id)
+    if not profile_key:
+        return ComplianceProfilePreviewResponse(active_profile_key=None, frameworks=[], profile_controls=[])
+
+    rows = compute_preview_rows(db, tenant_id=ctx.tenant.id, profile_key=profile_key)
+    controls = _pp_profile_controls(db, tenant_id=ctx.tenant.id, profile_key=profile_key)
+    controls_out = [
+        ComplianceProfileControlLite(control_key=ck, code=code, title=title) for ck, code, title in controls
+    ]
+
+    by_fw: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        fw = by_fw.setdefault(
+            row.framework_key,
+            {
+                "framework_key": row.framework_key,
+                "name": row.framework_name,
+                "requirements": [],
+            },
+        )
+        fw["requirements"].append(
+            ComplianceFrameworkRequirementOut(
+                control_key=row.control_key,
+                control_code=row.control_code,
+                control_title=row.control_title,
+                ref=row.ref,
+                note=row.note,
+                implementation_score=row.implementation_score,
+                practice_score=row.practice_score,
+            )
+        )
+
+    frameworks_out: list[ComplianceProfileFrameworkPreview] = []
+    for fw_key, item in by_fw.items():
+        impl_percent = framework_implementation_percent(db, tenant_id=ctx.tenant.id, framework_key=fw_key)
+        coverage, practice_impl, controls_total = framework_practice_metrics(
+            db,
+            tenant_id=ctx.tenant.id,
+            profile_key=profile_key,
+            framework_key=fw_key,
+        )
+        frameworks_out.append(
+            ComplianceProfileFrameworkPreview(
+                framework_key=fw_key,
+                name=item["name"],
+                implementation_percent=impl_percent,
+                practice_coverage_percent=coverage,
+                practice_implementation_percent=practice_impl,
+                controls_total=controls_total,
+                requirements_total=len(item["requirements"]),
+                requirements=item["requirements"],
+            )
+        )
+    frameworks_out.sort(key=lambda f: f.name.lower())
+
+    return ComplianceProfilePreviewResponse(
+        active_profile_key=profile_key,
+        frameworks=frameworks_out,
+        profile_controls=controls_out,
+    )
+
+
+@router.post("/profile/semantic-match", response_model=ComplianceSemanticMatchResponse)
+def run_profile_semantic_match(
+    ctx: TenantContext = Depends(require_tenant_membership),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access("compliance", "compliance:read")),
+) -> ComplianceSemanticMatchResponse:
+    from app.services.openai_responses_service import call_openai_responses_json
+
+    profile_key = _pp_active_profile_key(db, tenant_id=ctx.tenant.id)
+    if not profile_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active profile found.")
+
+    rows = compute_preview_rows(db, tenant_id=ctx.tenant.id, profile_key=profile_key)
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Active profile has no controls.")
+
+    practices = db.scalars(
+        select(CompliancePracticeItem).where(CompliancePracticeItem.tenant_id == ctx.tenant.id)
+    ).all()
+    if not practices:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No practice items found. Add practices first.")
+
+    controls_text = "\n".join(
+        f"- [{r.framework_name}] {r.control_code}: {r.control_title} (ref: {r.ref})"
+        for r in rows
+    )
+    practices_text = "\n".join(
+        f"- [{p.category or 'General'}] {p.title}: {p.description_text}"
+        + (f" (status: {p.status}, frameworks: {', '.join(p.frameworks or [])})" if p.status else "")
+        for p in practices
+    )
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "analysis_summary": {"type": "string"},
+            "overall_coverage_percent": {"type": "number"},
+            "recommendations": {"type": "array", "items": {"type": "string"}},
+            "framework_results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "framework_key": {"type": "string"},
+                        "framework_name": {"type": "string"},
+                        "control_results": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "control_key": {"type": "string"},
+                                    "control_code": {"type": "string"},
+                                    "control_title": {"type": "string"},
+                                    "confidence": {"type": "number"},
+                                    "covered_by": {"type": "array", "items": {"type": "string"}},
+                                    "gap_description": {"type": "string"},
+                                },
+                                "required": ["control_key", "control_code", "control_title", "confidence", "covered_by", "gap_description"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "required": ["framework_key", "framework_name", "control_results"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["analysis_summary", "overall_coverage_percent", "recommendations", "framework_results"],
+        "additionalProperties": False,
+    }
+
+    instructions = (
+        "You are a compliance expert. Analyze how well the given internal practices cover the compliance controls.\n"
+        "For each control, assess coverage confidence (0.0–1.0): 0=not covered, 0.5=partially covered, 1.0=fully covered.\n"
+        "List which practices (by title) cover each control. Provide a gap description for controls below 0.8 confidence.\n"
+        "Compute overall_coverage_percent as the average confidence across all controls (0–100).\n"
+        "Provide 3–5 actionable recommendations.\n"
+        "Return valid JSON only."
+    )
+    input_text = (
+        f"=== ACTIVE PROFILE CONTROLS ===\n{controls_text}\n\n"
+        f"=== OUR PRACTICES ===\n{practices_text}"
+    )
+
+    result = call_openai_responses_json(
+        instructions=instructions,
+        input_text=input_text,
+        schema_name="ProfileSemanticMatch",
+        schema=schema,
+        temperature=0.15,
+    )
+
+    by_fw_key: dict[str, str] = {r.framework_key: r.framework_name for r in rows}
+    by_fw_controls: dict[str, list] = {}
+    for r in rows:
+        by_fw_controls.setdefault(r.framework_key, []).append(r)
+
+    fw_results_out = []
+    for fw_data in result.get("framework_results", []):
+        fw_key = fw_data.get("framework_key", "")
+        fw_name = fw_data.get("framework_name", by_fw_key.get(fw_key, fw_key))
+        ctrl_results = fw_data.get("control_results", [])
+        controls_covered = sum(1 for c in ctrl_results if float(c.get("confidence", 0)) >= 0.5)
+        fw_results_out.append(
+            ComplianceSemanticMatchFrameworkResult(
+                framework_key=fw_key,
+                framework_name=fw_name,
+                coverage_percent=round(
+                    (sum(float(c.get("confidence", 0)) for c in ctrl_results) / len(ctrl_results) * 100)
+                    if ctrl_results else 0.0,
+                    1,
+                ),
+                controls_covered=controls_covered,
+                controls_total=len(ctrl_results),
+                controls=[
+                    ComplianceSemanticMatchControlResult(
+                        control_key=c.get("control_key", ""),
+                        control_code=c.get("control_code", ""),
+                        control_title=c.get("control_title", ""),
+                        framework_key=fw_key,
+                        confidence=round(float(c.get("confidence", 0)), 2),
+                        covered_by=c.get("covered_by", []),
+                        gap_description=c.get("gap_description") or None,
+                    )
+                    for c in ctrl_results
+                ],
+            )
+        )
+
+    return ComplianceSemanticMatchResponse(
+        overall_coverage_percent=round(float(result.get("overall_coverage_percent", 0)), 1),
+        frameworks=fw_results_out,
+        analysis_summary=result.get("analysis_summary", ""),
+        recommendations=result.get("recommendations", []),
+        ran_at=datetime.utcnow(),
+    )
+
+
+@router.post("/library/frameworks", response_model=ComplianceFrameworkOut)
+def create_library_framework(
+    req: ComplianceTenantFrameworkCreateRequest,
+    ctx: TenantContext = Depends(require_tenant_membership),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_active_user),
+    __: object = Depends(_require_admin()),
+) -> ComplianceFrameworkOut:
+    existing = db.get(
+        ComplianceTenantFramework,
+        {"tenant_id": ctx.tenant.id, "framework_key": req.framework_key},
+    )
+    if existing and existing.is_active:
+        raise HTTPException(status_code=409, detail="Framework already exists")
+
+    if not existing:
+        existing = ComplianceTenantFramework(
+            tenant_id=ctx.tenant.id,
+            framework_key=req.framework_key,
+            name=req.name,
+            full_name=req.full_name,
+            version=req.version,
+            type=req.type,
+            region=req.region,
+            tags=req.tags,
+            references=req.references,
+            is_active=True,
+        )
+        db.add(existing)
+    else:
+        existing.name = req.name
+        existing.full_name = req.full_name
+        existing.version = req.version
+        existing.type = req.type
+        existing.region = req.region
+        existing.tags = req.tags
+        existing.references = req.references
+        existing.is_active = True
+
+    db.commit()
+    log_action(db, user.id, "compliance.library.framework.create", {"framework_key": req.framework_key})
+    return ComplianceFrameworkOut.model_validate(existing)
+
+
+@router.put("/library/frameworks/{framework_key}", response_model=ComplianceFrameworkOut)
+def update_library_framework(
+    framework_key: str,
+    req: ComplianceTenantFrameworkUpdateRequest,
+    ctx: TenantContext = Depends(require_tenant_membership),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_active_user),
+    __: object = Depends(_require_admin()),
+) -> ComplianceFrameworkOut:
+    fw = db.get(ComplianceTenantFramework, {"tenant_id": ctx.tenant.id, "framework_key": framework_key})
+    if not fw or not fw.is_active:
+        raise HTTPException(status_code=404, detail="Framework not found")
+
+    data = req.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        setattr(fw, k, v)
+
+    db.commit()
+    log_action(db, user.id, "compliance.library.framework.update", {"framework_key": framework_key})
+    return ComplianceFrameworkOut.model_validate(fw)
+
+
+@router.delete("/library/frameworks/{framework_key}", response_class=Response, response_model=None)
+def delete_library_framework(
+    framework_key: str,
+    ctx: TenantContext = Depends(require_tenant_membership),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_active_user),
+    __: object = Depends(_require_admin()),
+) -> Response:
+    fw = db.get(ComplianceTenantFramework, {"tenant_id": ctx.tenant.id, "framework_key": framework_key})
+    if not fw or not fw.is_active:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    fw.is_active = False
+    db.execute(
+        update(ComplianceTenantControlFrameworkRef)
+        .where(
+            ComplianceTenantControlFrameworkRef.tenant_id == ctx.tenant.id,
+            ComplianceTenantControlFrameworkRef.framework_key == framework_key,
+        )
+        .values(is_active=False)
+    )
+    db.commit()
+    log_action(db, user.id, "compliance.library.framework.delete", {"framework_key": framework_key})
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/library/frameworks/{framework_key}/requirements",
+    response_model=ComplianceControlFrameworkRefOut,
+)
+def add_framework_requirement(
+    framework_key: str,
+    req: ComplianceFrameworkRequirementCreateRequest,
+    ctx: TenantContext = Depends(require_tenant_membership),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_active_user),
+    __: object = Depends(_require_admin()),
+) -> ComplianceControlFrameworkRefOut:
+    # ensure framework exists
+    fw = db.get(ComplianceTenantFramework, {"tenant_id": ctx.tenant.id, "framework_key": framework_key})
+    if not fw or not fw.is_active:
+        raise HTTPException(status_code=404, detail="Framework not found")
+
+    ref = db.get(
+        ComplianceTenantControlFrameworkRef,
+        {
+            "tenant_id": ctx.tenant.id,
+            "control_key": req.control_key,
+            "framework_key": framework_key,
+            "ref": req.ref,
+        },
+    )
+    if ref:
+        ref.note = req.note
+        ref.is_active = True
+    else:
+        ref = ComplianceTenantControlFrameworkRef(
+            tenant_id=ctx.tenant.id,
+            control_key=req.control_key,
+            framework_key=framework_key,
+            ref=req.ref,
+            note=req.note,
+            is_active=True,
+        )
+        db.add(ref)
+
+    db.commit()
+    log_action(
+        db,
+        user.id,
+        "compliance.library.framework.requirement.create",
+        {"framework_key": framework_key, "control_key": req.control_key, "ref": req.ref},
+    )
+    return ComplianceControlFrameworkRefOut.model_validate(ref)
+
+
+@router.put(
+    "/library/frameworks/{framework_key}/requirements",
+    response_model=ComplianceControlFrameworkRefOut,
+)
+def update_framework_requirement(
+    framework_key: str,
+    req: ComplianceFrameworkRequirementUpdateRequest,
+    ctx: TenantContext = Depends(require_tenant_membership),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_active_user),
+    __: object = Depends(_require_admin()),
+) -> ComplianceControlFrameworkRefOut:
+    existing = db.get(
+        ComplianceTenantControlFrameworkRef,
+        {
+            "tenant_id": ctx.tenant.id,
+            "control_key": req.control_key,
+            "framework_key": framework_key,
+            "ref": req.old_ref,
+        },
+    )
+    if not existing or not existing.is_active:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+
+    if req.old_ref != req.new_ref:
+        # rename = delete+insert because ref is part of PK
+        db.delete(existing)
+        replacement = ComplianceTenantControlFrameworkRef(
+            tenant_id=ctx.tenant.id,
+            control_key=req.control_key,
+            framework_key=framework_key,
+            ref=req.new_ref,
+            note=req.note,
+            is_active=True,
+        )
+        db.add(replacement)
+        db.commit()
+        log_action(
+            db,
+            user.id,
+            "compliance.library.framework.requirement.rename",
+            {
+                "framework_key": framework_key,
+                "control_key": req.control_key,
+                "old_ref": req.old_ref,
+                "new_ref": req.new_ref,
+            },
+        )
+        return ComplianceControlFrameworkRefOut.model_validate(replacement)
+
+    existing.note = req.note
+    db.commit()
+    log_action(
+        db,
+        user.id,
+        "compliance.library.framework.requirement.update",
+        {"framework_key": framework_key, "control_key": req.control_key, "ref": req.old_ref},
+    )
+    return ComplianceControlFrameworkRefOut.model_validate(existing)
+
+
+@router.delete(
+    "/library/frameworks/{framework_key}/requirements",
+    response_class=Response,
+    response_model=None,
+)
+def delete_framework_requirement(
+    framework_key: str,
+    control_key: str = Query(...),
+    ref: str = Query(...),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_active_user),
+    __: object = Depends(_require_admin()),
+) -> Response:
+    item = db.get(
+        ComplianceTenantControlFrameworkRef,
+        {
+            "tenant_id": ctx.tenant.id,
+            "control_key": control_key,
+            "framework_key": framework_key,
+            "ref": ref,
+        },
+    )
+    if not item:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    db.delete(item)
+    db.commit()
+    log_action(
+        db,
+        user.id,
+        "compliance.library.framework.requirement.delete",
+        {"framework_key": framework_key, "control_key": control_key, "ref": ref},
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/library/rollback/{batch_id}", response_model=ComplianceLibraryImportResponse)
@@ -1107,6 +1586,11 @@ def create_practice(
         tenant_id=ctx.tenant.id,
         title=payload.title,
         description_text=payload.description_text,
+        category=payload.category,
+        status=payload.status,
+        frequency=payload.frequency,
+        evidence=payload.evidence,
+        frameworks=payload.frameworks,
         tags=payload.tags,
         owner_user_id=current_user.id,
     )
@@ -1116,22 +1600,36 @@ def create_practice(
     return CompliancePracticeItemOut.model_validate(item)
 
 
-@router.get("/practices", response_model=list[CompliancePracticeItemOut])
+@router.get("/practices", response_model=CompliancePracticeListResponse)
 def list_practices(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     q: str | None = Query(default=None),
+    category: str | None = Query(default=None),
     ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
     __: object = Depends(require_access("compliance", "compliance:read")),
-) -> list[CompliancePracticeItemOut]:
-    query = select(CompliancePracticeItem).where(CompliancePracticeItem.tenant_id == ctx.tenant.id)
+) -> CompliancePracticeListResponse:
+    base_query = select(CompliancePracticeItem).where(CompliancePracticeItem.tenant_id == ctx.tenant.id)
+    if category:
+        base_query = base_query.where(CompliancePracticeItem.category == category)
     if q:
-        query = query.where(
+        base_query = base_query.where(
             CompliancePracticeItem.title.ilike(f"%{q}%")
             | CompliancePracticeItem.description_text.ilike(f"%{q}%")
         )
-    items = db.scalars(query.order_by(CompliancePracticeItem.created_at.desc())).all()
-    return [CompliancePracticeItemOut.model_validate(item) for item in items]
+
+    total = db.scalar(select(func.count()).select_from(base_query.subquery()))
+    items = db.scalars(
+        base_query.order_by(CompliancePracticeItem.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return CompliancePracticeListResponse(
+        items=[CompliancePracticeItemOut.model_validate(item) for item in items],
+        meta={"page": page, "page_size": page_size, "total": int(total or 0)},
+    )
 
 
 @router.put("/practices/{practice_id}", response_model=CompliancePracticeItemOut)
@@ -1155,6 +1653,16 @@ def update_practice(
         item.title = payload.title
     if payload.description_text is not None:
         item.description_text = payload.description_text
+    if payload.category is not None:
+        item.category = payload.category
+    if payload.status is not None:
+        item.status = payload.status
+    if payload.frequency is not None:
+        item.frequency = payload.frequency
+    if payload.evidence is not None:
+        item.evidence = payload.evidence
+    if payload.frameworks is not None:
+        item.frameworks = payload.frameworks
     if payload.tags is not None:
         item.tags = payload.tags
     item.updated_at = datetime.utcnow()
@@ -1162,6 +1670,40 @@ def update_practice(
     db.commit()
     db.refresh(item)
     return CompliancePracticeItemOut.model_validate(item)
+
+
+@router.delete(
+    "/practices/{practice_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+)
+def delete_practice(
+    practice_id: UUID,
+    ctx: TenantContext = Depends(require_tenant_membership),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access("compliance", "compliance:write")),
+) -> Response:
+    item = db.scalar(
+        select(CompliancePracticeItem).where(
+            CompliancePracticeItem.tenant_id == ctx.tenant.id,
+            CompliancePracticeItem.id == practice_id,
+        )
+    )
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Practice not found")
+    db.delete(item)
+    log_action(
+        db,
+        actor_user_id=current_user.id,
+        action="compliance.practice.delete",
+        entity_type="CompliancePracticeItem",
+        entity_id=item.id,
+        details={},
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/practices/{practice_id}/match", response_model=CompliancePracticeMatchResponse)
@@ -1290,6 +1832,12 @@ def apply_practice_mapping(
             evidence_items = result.suggested_evidence_json.get("items") if isinstance(result.suggested_evidence_json, dict) else []
             if not evidence_items:
                 evidence_items = [{"type": "text", "value": item.description_text}]
+            if item.evidence:
+                value = str(item.evidence).strip()
+                if value:
+                    evidence_items = list(evidence_items) + [
+                        {"type": "link" if value.startswith("http") else "text", "value": value}
+                    ]
             for ev in evidence_items:
                 ev_type = ev.get("type") or "text"
                 ev_value = ev.get("value") or ""

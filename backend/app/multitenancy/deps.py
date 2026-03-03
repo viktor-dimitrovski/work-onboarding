@@ -12,7 +12,7 @@ from app.models.rbac import User
 from app.models.tenant import Tenant, TenantMembership
 from app.modules.billing.models import TenantModule
 from app.multitenancy.tenant_resolution import resolve_host
-from app.api.deps import get_current_active_user
+from app.api.deps import get_current_active_user, get_user_role_names
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ def get_tenant_context(
             )
         )
         if membership:
-            roles = [membership.role]
+            roles = membership.roles()
 
     modules = db.scalars(
         select(TenantModule.module_key).where(
@@ -87,10 +87,15 @@ def get_tenant_context(
     return TenantContext(tenant=tenant, membership=membership, roles=roles, enabled_modules=set(modules))
 
 
-def require_tenant_membership(ctx: TenantContext = Depends(get_tenant_context)) -> TenantContext:
-    if not ctx.membership:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Not a member of this tenant')
-    return ctx
+def require_tenant_membership(
+    ctx: TenantContext = Depends(get_tenant_context),
+    current_user: User | None = Depends(get_current_active_user),
+) -> TenantContext:
+    if ctx.membership:
+        return ctx
+    if current_user and 'super_admin' in get_user_role_names(current_user):
+        return ctx
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Not a member of this tenant')
 
 
 def require_product_admin_host(request: Request) -> None:

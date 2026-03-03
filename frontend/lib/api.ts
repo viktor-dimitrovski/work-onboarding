@@ -153,6 +153,14 @@ export const api = {
     });
   },
 
+  changePassword(token: string, payload: { current_password: string; new_password: string }) {
+    return request<void>('/auth/change-password', {
+      method: 'POST',
+      token,
+      body: JSON.stringify(payload),
+    });
+  },
+
   me(token: string) {
     return request('/auth/me', { token });
   },

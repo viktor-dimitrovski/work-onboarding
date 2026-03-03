@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.schemas.common import BaseSchema
+from app.schemas.common import PaginationMeta
 
 
 class ComplianceFrameworkOut(BaseSchema):
@@ -252,21 +253,135 @@ class CompliancePracticeItemOut(BaseSchema):
     id: UUID
     title: str
     description_text: str
+    category: str | None = None
+    status: str | None = None
+    frequency: str | None = None
+    evidence: str | None = None
+    frameworks: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     owner_user_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
 
+class CompliancePracticeListResponse(BaseSchema):
+    items: list[CompliancePracticeItemOut]
+    meta: PaginationMeta
+
+
+class ComplianceTenantFrameworkCreateRequest(BaseModel):
+    framework_key: str
+    name: str
+    full_name: str | None = None
+    version: str | None = None
+    type: str | None = None
+    region: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    references: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ComplianceTenantFrameworkUpdateRequest(BaseModel):
+    name: str | None = None
+    full_name: str | None = None
+    version: str | None = None
+    type: str | None = None
+    region: str | None = None
+    tags: list[str] | None = None
+    references: list[dict[str, Any]] | None = None
+
+
+class ComplianceFrameworkRequirementOut(BaseSchema):
+    control_key: str
+    control_code: str
+    control_title: str
+    ref: str
+    note: str | None = None
+    implementation_score: float | None = None
+    practice_score: float | None = None
+
+
+class ComplianceFrameworkRequirementCreateRequest(BaseModel):
+    control_key: str
+    ref: str
+    note: str | None = None
+
+
+class ComplianceFrameworkRequirementUpdateRequest(BaseModel):
+    control_key: str
+    old_ref: str
+    new_ref: str
+    note: str | None = None
+
+
+class ComplianceProfileControlLite(BaseSchema):
+    control_key: str
+    code: str
+    title: str
+
+
+class ComplianceProfileFrameworkPreview(BaseSchema):
+    framework_key: str
+    name: str
+    implementation_percent: float | None
+    practice_coverage_percent: float | None
+    practice_implementation_percent: float | None
+    controls_total: int
+    requirements_total: int
+    requirements: list[ComplianceFrameworkRequirementOut] = Field(default_factory=list)
+
+
+class ComplianceProfilePreviewResponse(BaseSchema):
+    active_profile_key: str | None = None
+    frameworks: list[ComplianceProfileFrameworkPreview] = Field(default_factory=list)
+    profile_controls: list[ComplianceProfileControlLite] = Field(default_factory=list)
+
+
+class ComplianceSemanticMatchControlResult(BaseSchema):
+    control_key: str
+    control_code: str
+    control_title: str
+    framework_key: str
+    confidence: float
+    covered_by: list[str] = Field(default_factory=list)
+    gap_description: str | None = None
+
+
+class ComplianceSemanticMatchFrameworkResult(BaseSchema):
+    framework_key: str
+    framework_name: str
+    coverage_percent: float
+    controls_covered: int
+    controls_total: int
+    controls: list[ComplianceSemanticMatchControlResult] = Field(default_factory=list)
+
+
+class ComplianceSemanticMatchResponse(BaseSchema):
+    overall_coverage_percent: float
+    frameworks: list[ComplianceSemanticMatchFrameworkResult] = Field(default_factory=list)
+    analysis_summary: str
+    recommendations: list[str] = Field(default_factory=list)
+    ran_at: datetime
+
+
 class CompliancePracticeCreateRequest(BaseModel):
     title: str
     description_text: str
+    category: str
+    status: str
+    frequency: str
+    evidence: str | None = None
+    frameworks: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
 
 class CompliancePracticeUpdateRequest(BaseModel):
     title: str | None = None
     description_text: str | None = None
+    category: str | None = None
+    status: str | None = None
+    frequency: str | None = None
+    evidence: str | None = None
+    frameworks: list[str] | None = None
     tags: list[str] | None = None
 
 

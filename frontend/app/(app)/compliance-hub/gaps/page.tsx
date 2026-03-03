@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { EmptyState } from "@/components/common/empty-state";
 import { LoadingState } from "@/components/common/loading-state";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,8 +13,11 @@ import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import { formatDateShort, riskTone, statusTone } from "@/lib/constants";
 import { useAuth } from "@/lib/auth-context";
 import { useTenant } from "@/lib/tenant-context";
+import { cn } from "@/lib/utils";
+import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 
 type GapItem = {
   control_key: string;
@@ -58,6 +62,35 @@ export default function ComplianceGapsPage() {
   const [saving, setSaving] = useState(false);
   const [workItems, setWorkItems] = useState<WorkItemLink[]>([]);
   const [jiraUrl, setJiraUrl] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(15);
+  const [sortBy, setSortBy] = useState<"score_asc" | "score_desc" | "criticality" | "title">("score_asc");
+
+  const fwNameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    frameworks.forEach((f) => m.set(f.framework_key, f.name));
+    return m;
+  }, [frameworks]);
+
+  const sortedGaps = useMemo(() => {
+    const copy = [...gaps];
+    const critOrder = (c: string) => (c?.toLowerCase() === "high" ? 0 : c?.toLowerCase() === "medium" ? 1 : 2);
+    if (sortBy === "score_asc") copy.sort((a, b) => a.score - b.score);
+    else if (sortBy === "score_desc") copy.sort((a, b) => b.score - a.score);
+    else if (sortBy === "criticality") copy.sort((a, b) => critOrder(a.criticality) - critOrder(b.criticality));
+    else if (sortBy === "title") copy.sort((a, b) => (a.title ?? "").localeCompare(b.title ?? ""));
+    return copy;
+  }, [gaps, sortBy]);
+
+  const paginatedGaps = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedGaps.slice(start, start + pageSize);
+  }, [sortedGaps, page, pageSize]);
+  const totalPages = Math.max(1, Math.ceil(sortedGaps.length / pageSize));
+
+  useEffect(() => {
+    setPage(1);
+  }, [gaps.length, frameworkKey, threshold]);
 
   useEffect(() => {
     if (!authLoading && !tenantLoading && !(hasModule("compliance") && hasPermission("compliance:read"))) {
@@ -174,28 +207,30 @@ export default function ComplianceGapsPage() {
     }
   };
 
-  if (loading) return <LoadingState label="Loading gaps..." />;
+  const isInitialLoad = loading && gaps.length === 0;
+  if (isInitialLoad) return <LoadingState label="Loading gaps..." />;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-2xl font-semibold">Gaps & remediation</h2>
-          <p className="text-sm text-muted-foreground">Prioritize controls below the compliance threshold.</p>
-        </div>
+    <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto min-w-0">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-xl font-semibold tracking-tight">Gaps & remediation</h2>
+        <p className="text-sm text-muted-foreground">Prioritize controls below the compliance threshold.</p>
       </div>
 
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {error ? (
+        <p className="text-sm text-destructive font-medium">{error}</p>
+      ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Filters</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3">
-          <div className="space-y-2">
-            <Label>Framework</Label>
+      {/* Toolbar: filters + sort + pagination controls */}
+      <div className="flex flex-wrap items-center gap-4 rounded-lg border bg-card px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="gaps-framework" className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+              Framework
+            </Label>
             <select
-              className="h-10 rounded-md border border-input bg-white px-3 text-sm"
+              id="gaps-framework"
+              className="h-9 min-w-[160px] rounded-md border border-input bg-background px-3 text-sm"
               value={frameworkKey}
               onChange={(e) => setFrameworkKey(e.target.value)}
             >
@@ -207,42 +242,219 @@ export default function ComplianceGapsPage() {
               ))}
             </select>
           </div>
-          <div className="space-y-2">
-            <Label>Threshold</Label>
-            <Input value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="0.75" />
+          <div className="flex items-center gap-2">
+            <Label htmlFor="gaps-threshold" className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+              Threshold
+            </Label>
+            <Input
+              id="gaps-threshold"
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              className="h-9 w-20"
+              value={threshold}
+              onChange={(e) => setThreshold(e.target.value)}
+              placeholder="0.75"
+            />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+        <div className="h-6 w-px bg-border hidden sm:block" aria-hidden />
+        {gaps.length > 0 && (
+          <>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="gaps-sort" className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+                Sort by
+              </Label>
+              <select
+                id="gaps-sort"
+                className="h-9 min-w-[140px] rounded-md border border-input bg-background px-3 text-sm"
+                value={sortBy}
+                onChange={(e) => {
+                  setSortBy(e.target.value as typeof sortBy);
+                  setPage(1);
+                }}
+              >
+                <option value="score_asc">Compliance ↑</option>
+                <option value="score_desc">Compliance ↓</option>
+                <option value="criticality">Severity</option>
+                <option value="title">Title</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2 ml-auto">
+              <span className="text-xs text-muted-foreground">
+                {gaps.length} gap{gaps.length !== 1 ? "s" : ""}
+              </span>
+              <Label htmlFor="gaps-per-page" className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+                Per page
+              </Label>
+              <select
+                id="gaps-per-page"
+                className="h-9 w-16 rounded-md border border-input bg-background px-2 text-sm"
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(1);
+                }}
+              >
+                {[10, 15, 25, 50].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Gaps</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {gaps.length === 0 ? (
-            <EmptyState title="No gaps found" description="Adjust filters or ensure statuses are set." />
-          ) : (
-            <div className="space-y-2">
-              {gaps.map((gap) => (
-                <button
-                  key={gap.control_key}
-                  type="button"
-                  onClick={() => openGap(gap)}
-                  className="flex w-full items-center justify-between rounded border px-3 py-2 text-left transition hover:border-primary/40 hover:bg-muted/30"
-                >
-                  <div>
-                    <div className="text-sm font-medium">{gap.title}</div>
-                    <div className="text-xs text-muted-foreground">{gap.control_key}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-semibold">{(gap.score * 100).toFixed(0)}%</div>
-                    <div className="text-xs text-muted-foreground">{gap.criticality}</div>
-                  </div>
-                </button>
-              ))}
+      <Card className="overflow-hidden">
+        <div className="relative">
+          {loading && gaps.length > 0 && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/70 text-sm text-muted-foreground" aria-hidden="true">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              <span>Updating...</span>
             </div>
           )}
-        </CardContent>
+          {gaps.length === 0 ? (
+            <div className="p-8">
+              <EmptyState title="No gaps found" description="Adjust filters or ensure statuses are set." />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] border-collapse text-sm">
+                <thead className="sticky top-0 z-[1] bg-muted/95 backdrop-blur supports-[backdrop-filter]:bg-muted/80">
+                  <tr className="border-b">
+                    <th className="text-left font-medium text-muted-foreground py-3 px-4 w-[100px]">Control ID</th>
+                    <th className="text-left font-medium text-muted-foreground py-3 px-4 min-w-[200px]">Title</th>
+                    <th className="text-left font-medium text-muted-foreground py-3 px-4 w-[140px]">Frameworks</th>
+                    <th className="text-left font-medium text-muted-foreground py-3 px-4 w-[100px]">Compliance</th>
+                    <th className="text-left font-medium text-muted-foreground py-3 px-4 w-[80px]">Severity</th>
+                    <th className="text-left font-medium text-muted-foreground py-3 px-4 w-[90px]">Priority</th>
+                    <th className="text-left font-medium text-muted-foreground py-3 px-4 w-[95px]">Due date</th>
+                    <th className="text-left font-medium text-muted-foreground py-3 px-4 w-[90px]">Status</th>
+                    <th className="w-10 px-2" aria-label="Actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedGaps.map((gap) => (
+                    <tr
+                      key={gap.control_key}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openGap(gap)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openGap(gap);
+                        }
+                      }}
+                      className="border-b transition-colors hover:bg-muted/40 focus:outline-none focus:bg-muted/40 cursor-pointer"
+                      aria-label={`View remediation for ${gap.title ?? gap.control_key}`}
+                    >
+                      <td className="py-3 px-4 font-mono text-xs text-muted-foreground align-top">
+                        {gap.control_key}
+                      </td>
+                      <td className="py-3 px-4 align-top">
+                        <span className="line-clamp-2 font-medium text-foreground">{gap.title}</span>
+                      </td>
+                      <td className="py-3 px-4 align-top">
+                        <div className="flex flex-wrap gap-1">
+                          {(gap.framework_keys?.length ?? 0) > 0
+                            ? gap.framework_keys!.slice(0, 3).map((fk) => (
+                                <Badge
+                                  key={fk}
+                                  variant="secondary"
+                                  className="text-[10px] px-1.5 py-0 font-normal"
+                                >
+                                  {fwNameMap.get(fk) ?? fk}
+                                </Badge>
+                              ))
+                            : "—"}
+                          {(gap.framework_keys?.length ?? 0) > 3 && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                              +{gap.framework_keys!.length - 3}
+                            </Badge>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 align-top">
+                        <div className="flex flex-col gap-1">
+                          <span className="font-semibold tabular-nums">{(gap.score * 100).toFixed(0)}%</span>
+                          <div className="h-1.5 w-14 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className={cn(
+                                "h-full rounded-full transition-all",
+                                gap.score >= 0.75 ? "bg-emerald-500" : gap.score >= 0.5 ? "bg-amber-500" : "bg-rose-500"
+                              )}
+                              style={{ width: `${Math.min(100, gap.score * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 align-top">
+                        <Badge
+                          className={cn(
+                            "text-[10px] px-1.5 py-0.5 font-medium capitalize",
+                            riskTone((gap.criticality ?? "").toLowerCase())
+                          )}
+                        >
+                          {gap.criticality}
+                        </Badge>
+                      </td>
+                      <td className="py-3 px-4 align-top text-muted-foreground text-xs capitalize">
+                        {gap.priority ?? "—"}
+                      </td>
+                      <td className="py-3 px-4 align-top text-muted-foreground text-xs tabular-nums">
+                        {formatDateShort(gap.due_date)}
+                      </td>
+                      <td className="py-3 px-4 align-top">
+                        {gap.status_enum ? (
+                          <Badge className={cn("text-[10px] px-1.5 py-0 font-normal", statusTone(gap.status_enum))}>
+                            {gap.status_enum.replace(/_/g, " ")}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-2 align-middle">
+                        <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        {gaps.length > pageSize && (
+          <div className="flex items-center justify-between gap-4 border-t px-4 py-3 bg-muted/30">
+            <p className="text-xs text-muted-foreground">
+              Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, sortedGaps.length)} of {sortedGaps.length}
+            </p>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <span className="text-xs text-muted-foreground min-w-[4rem] text-center tabular-nums">
+                {page} / {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
 
       <Sheet open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>

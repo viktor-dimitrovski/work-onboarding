@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models.rbac import User
 from app.schemas.auth import (
+    ChangePasswordRequest,
     LoginRequest,
     LogoutRequest,
     PasswordResetRequest,
@@ -34,6 +35,7 @@ def _to_user_summary(user: User) -> UserSummary:
         is_active=user.is_active,
         roles=roles,
         last_login_at=user.last_login_at,
+        must_change_password=bool(user.password_change_required),
     )
 
 
@@ -161,6 +163,35 @@ def logout(payload: LogoutRequest, db: Session = Depends(get_db)) -> None:
 @router.get('/me', response_model=UserSummary)
 def me(current_user: User = Depends(get_current_active_user)) -> UserSummary:
     return _to_user_summary(current_user)
+
+
+@router.post('/change-password', status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> None:
+    client_ip = request.client.host if request.client else 'unknown'
+    ok = auth_service.change_password(
+        db,
+        user=current_user,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='user_password_change',
+        entity_type='auth',
+        entity_id=current_user.id,
+        status='success' if ok else 'failure',
+        details={},
+        ip_address=client_ip,
+    )
+    db.commit()
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Current password is invalid')
 
 
 @router.post('/password-reset-request')

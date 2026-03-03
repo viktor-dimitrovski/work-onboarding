@@ -28,6 +28,7 @@ def create_user(db: Session, *, payload: UserCreate, actor_user_id: UUID | None)
         full_name=payload.full_name,
         hashed_password=hash_password(payload.password),
         is_active=True,
+        password_change_required=True,
     )
     db.add(user)
     db.flush()
@@ -80,26 +81,51 @@ def list_tenant_users(
     page: int,
     page_size: int,
     role: str | None,
-) -> tuple[list[tuple[User, str, str]], int]:
-    base_query = (
-        select(User, TenantMembership.role, TenantMembership.status)
+) -> tuple[list[tuple[User, list[str], str]], int]:
+    count_query = (
+        select(func.count())
+        .select_from(User)
         .join(TenantMembership, TenantMembership.user_id == User.id)
         .where(TenantMembership.tenant_id == tenant_id)
-        .options(joinedload(User.user_roles).joinedload(UserRole.role))
     )
-
     if role:
-        base_query = base_query.where(TenantMembership.role == role)
+        count_query = count_query.where(TenantMembership.roles_json.contains([role]))
+    total = db.scalar(count_query)
 
-    total = db.scalar(select(func.count()).select_from(base_query.subquery()))
-    # joinedload(User.user_roles) eager-loads a collection; SQLAlchemy requires de-duping the result.
-    rows = (
-        db.execute(
-            base_query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
-        )
-        .unique()
-        .all()
+    page_query = (
+        select(User.id, TenantMembership.roles_json, TenantMembership.status)
+        .join(TenantMembership, TenantMembership.user_id == User.id)
+        .where(TenantMembership.tenant_id == tenant_id)
     )
+    if role:
+        page_query = page_query.where(TenantMembership.roles_json.contains([role]))
+
+    page_rows = db.execute(
+        page_query.order_by(User.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    ).all()
+
+    user_ids = [row[0] for row in page_rows]
+    users_by_id: dict[UUID, User] = {}
+    if user_ids:
+        users = (
+            db.scalars(
+                select(User)
+                .where(User.id.in_(user_ids))
+                .options(joinedload(User.user_roles).joinedload(UserRole.role))
+            )
+            .unique()
+            .all()
+        )
+        users_by_id = {row.id: row for row in users}
+
+    rows: list[tuple[User, list[str], str]] = []
+    for user_id, roles_json, status in page_rows:
+        user = users_by_id.get(user_id)
+        if not user:
+            continue
+        roles = [r for r in (roles_json or []) if isinstance(r, str) and r.strip()]
+        rows.append((user, roles, status))
+
     return rows, int(total or 0)
 
 

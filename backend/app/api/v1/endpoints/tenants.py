@@ -32,6 +32,7 @@ def get_tenant_context(
         tenant=TenantOut.model_validate(ctx.tenant),
         role=role,
         role_label=role_label(ctx.tenant.tenant_type, role),
+        roles=ctx.roles,
         permissions=permissions,
         modules=modules,
     )

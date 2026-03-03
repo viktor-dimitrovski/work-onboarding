@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -40,6 +40,26 @@ def get_current_active_user(current_user: User = Depends(get_current_user)) -> U
     if not current_user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Inactive user')
     return current_user
+
+
+def require_password_change_completed(
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+) -> User:
+    if not current_user.password_change_required:
+        return current_user
+
+    path = (request.url.path or '').rstrip('/')
+    allowed = {
+        '/api/v1/auth/me',
+        '/api/v1/auth/change-password',
+        '/api/v1/auth/logout',
+        '/api/v1/auth/refresh',
+        '/api/v1/health',
+    }
+    if path in allowed:
+        return current_user
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Password change required')
 
 
 def get_user_role_names(current_user: User) -> set[str]:

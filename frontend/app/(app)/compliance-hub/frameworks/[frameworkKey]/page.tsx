@@ -58,6 +58,12 @@ const formatPercent = (value: number | null) => {
   return `${(value * 100).toFixed(1)}%`;
 };
 
+const formatStatus = (status: string) =>
+  status
+    .split('_')
+    .map((w) => (w ? w[0]!.toUpperCase() + w.slice(1) : w))
+    .join(' ');
+
 export default function ComplianceFrameworkPage() {
   const params = useParams();
   const router = useRouter();
@@ -137,11 +143,27 @@ export default function ComplianceFrameworkPage() {
     return Array.from(set.entries()).map(([key, label]) => ({ key, label }));
   }, [summary]);
 
+  const controlStats = useMemo(() => {
+    const byStatus = new Map<string, number>();
+    let withEvidence = 0;
+    for (const item of controls) {
+      const status = item.status?.status_enum ?? 'not_started';
+      byStatus.set(status, (byStatus.get(status) ?? 0) + 1);
+      if (item.evidence_count > 0) withEvidence += 1;
+    }
+    const total = controls.length;
+    const notStarted = byStatus.get('not_started') ?? 0;
+    const inProgress = (byStatus.get('in_progress') ?? 0) + (byStatus.get('partial') ?? 0);
+    const implemented = (byStatus.get('implemented') ?? 0) + (byStatus.get('mostly') ?? 0);
+    const evidenceCoverage = total > 0 ? withEvidence / total : null;
+    return { total, notStarted, inProgress, implemented, withEvidence, evidenceCoverage };
+  }, [controls]);
+
   if (loading) return <LoadingState label='Loading framework...' />;
 
   return (
-    <div className='space-y-6'>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
+    <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className='text-2xl font-semibold'>{framework?.name ?? frameworkKey}</h2>
           <p className='text-sm text-muted-foreground'>{framework?.full_name ?? 'Framework summary'}</p>
@@ -158,12 +180,17 @@ export default function ComplianceFrameworkPage() {
           <CardTitle>Framework summary</CardTitle>
         </CardHeader>
         <CardContent className='space-y-3'>
-          <div className='text-3xl font-semibold'>{formatPercent(summary?.framework?.compliance ?? null)}</div>
-          <div className='grid gap-2 md:grid-cols-3'>
+          <div className='flex flex-wrap items-end justify-between gap-3'>
+            <div className='text-2xl font-semibold tabular-nums'>{formatPercent(summary?.framework?.compliance ?? null)}</div>
+            <div className='text-xs text-muted-foreground'>
+              {summary?.framework?.numerator ?? 0}/{summary?.framework?.denominator ?? 0} scored items
+            </div>
+          </div>
+          <div className='grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6'>
             {summary?.by_domain?.map((item) => (
-              <div key={item.key} className='rounded border px-3 py-2'>
-                <div className='text-xs text-muted-foreground'>{item.label}</div>
-                <div className='text-sm font-medium'>{formatPercent(item.compliance)}</div>
+              <div key={item.key} className='rounded-md border bg-slate-50/60 px-2 py-1.5'>
+                <div className='truncate text-[11px] text-muted-foreground'>{item.label}</div>
+                <div className='text-sm font-semibold tabular-nums'>{formatPercent(item.compliance)}</div>
               </div>
             ))}
           </div>
@@ -175,10 +202,44 @@ export default function ComplianceFrameworkPage() {
           <CardTitle>Controls</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className='grid gap-3 md:grid-cols-4'>
-            <Input placeholder='Search controls...' value={query} onChange={(e) => setQuery(e.target.value)} />
+          <div className='flex flex-wrap gap-2'>
+            <div className='rounded-md border bg-slate-50/60 px-2 py-1.5 text-xs'>
+              <div className='text-[11px] text-muted-foreground'>Total</div>
+              <div className='font-semibold tabular-nums'>{controlStats.total}</div>
+            </div>
+            <div className='rounded-md border bg-slate-50/60 px-2 py-1.5 text-xs'>
+              <div className='text-[11px] text-muted-foreground'>Evidence coverage</div>
+              <div className='font-semibold tabular-nums'>{formatPercent(controlStats.evidenceCoverage)}</div>
+            </div>
+            <div className='rounded-md border bg-slate-50/60 px-2 py-1.5 text-xs'>
+              <div className='text-[11px] text-muted-foreground'>Not started</div>
+              <div className='font-semibold tabular-nums'>{controlStats.notStarted}</div>
+            </div>
+            <div className='rounded-md border bg-slate-50/60 px-2 py-1.5 text-xs'>
+              <div className='text-[11px] text-muted-foreground'>In progress</div>
+              <div className='font-semibold tabular-nums'>{controlStats.inProgress}</div>
+            </div>
+            <div className='rounded-md border bg-slate-50/60 px-2 py-1.5 text-xs'>
+              <div className='text-[11px] text-muted-foreground'>Implemented</div>
+              <div className='font-semibold tabular-nums'>{controlStats.implemented}</div>
+            </div>
+            {controls.length > 0 && (
+              <div className='ml-auto flex items-center text-xs text-muted-foreground'>
+                Observation: {formatPercent(controlStats.evidenceCoverage)} of controls have evidence;{' '}
+                {controlStats.notStarted} are not started.
+              </div>
+            )}
+          </div>
+
+          <div className='mt-3 grid gap-2 md:grid-cols-4'>
+            <Input
+              className='h-9'
+              placeholder='Search controls...'
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
             <select
-              className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+              className='h-9 rounded-md border border-input bg-white px-3 text-[13px]'
               value={domainFilter}
               onChange={(e) => setDomainFilter(e.target.value)}
             >
@@ -190,7 +251,7 @@ export default function ComplianceFrameworkPage() {
               ))}
             </select>
             <select
-              className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+              className='h-9 rounded-md border border-input bg-white px-3 text-[13px]'
               value={criticalityFilter}
               onChange={(e) => setCriticalityFilter(e.target.value)}
             >
@@ -200,7 +261,7 @@ export default function ComplianceFrameworkPage() {
               <option value='Low'>Low</option>
             </select>
             <select
-              className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+              className='h-9 rounded-md border border-input bg-white px-3 text-[13px]'
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
             >
@@ -219,24 +280,54 @@ export default function ComplianceFrameworkPage() {
           ) : controls.length === 0 ? (
             <EmptyState title='No controls found' description='Try adjusting filters or search query.' />
           ) : (
-            <div className='mt-4 space-y-2'>
-              {controls.map((item) => (
-                <button
-                  key={item.control.control_key}
-                  type='button'
-                  className='flex w-full items-center justify-between gap-3 rounded-lg border px-4 py-3 text-left transition hover:border-primary/40 hover:bg-muted/20'
-                  onClick={() => setSelectedControlKey(item.control.control_key)}
-                >
-                  <div className='min-w-0'>
-                    <div className='text-sm font-semibold'>{item.control.code}</div>
-                    <div className='truncate text-sm text-muted-foreground'>{item.control.title}</div>
-                  </div>
-                  <div className='flex items-center gap-2'>
-                    <Badge variant='secondary'>{item.status?.status_enum ?? 'not_started'}</Badge>
-                    <Badge variant='outline'>{item.evidence_count} evidence</Badge>
-                  </div>
-                </button>
-              ))}
+            <div className='mt-3 overflow-hidden rounded-lg border'>
+              <div className='hidden grid-cols-[110px_1fr_120px_110px_140px_110px] items-center gap-3 border-b bg-slate-50/60 px-3 py-2 text-[11px] font-semibold text-muted-foreground md:grid'>
+                <div>Code</div>
+                <div>Title</div>
+                <div>Domain</div>
+                <div>Criticality</div>
+                <div>Status</div>
+                <div className='text-right'>Evidence</div>
+              </div>
+              {controls.map((item) => {
+                const status = item.status?.status_enum ?? 'not_started';
+                return (
+                  <button
+                    key={item.control.control_key}
+                    type='button'
+                    className='grid w-full grid-cols-[96px_1fr] items-center gap-3 px-3 py-2 text-left text-[13px] transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300/50 focus-visible:ring-offset-1 focus-visible:ring-offset-white md:grid-cols-[110px_1fr_120px_110px_140px_110px]'
+                    onClick={() => setSelectedControlKey(item.control.control_key)}
+                  >
+                    <div className='font-semibold tabular-nums text-slate-900'>{item.control.code}</div>
+                    <div className='min-w-0'>
+                      <div className='truncate text-slate-900'>{item.control.title}</div>
+                      <div className='mt-0.5 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground md:hidden'>
+                        <span className='rounded border bg-slate-50 px-1.5 py-0.5'>{item.control.domain_code}</span>
+                        <span className='rounded border bg-slate-50 px-1.5 py-0.5'>{item.control.criticality}</span>
+                        <span className='rounded border bg-slate-50 px-1.5 py-0.5'>{formatStatus(status)}</span>
+                        <span className='rounded border bg-slate-50 px-1.5 py-0.5 tabular-nums'>
+                          {item.evidence_count} evidence
+                        </span>
+                      </div>
+                    </div>
+                    <div className='hidden text-muted-foreground md:block'>{item.control.domain_code}</div>
+                    <div className='hidden text-muted-foreground md:block'>{item.control.criticality}</div>
+                    <div className='hidden md:block'>
+                      <Badge
+                        variant='secondary'
+                        className='h-5 rounded-md px-2 text-[11px] font-medium tabular-nums'
+                      >
+                        {formatStatus(status)}
+                      </Badge>
+                    </div>
+                    <div className='hidden text-right md:block'>
+                      <Badge variant='outline' className='h-5 rounded-md px-2 text-[11px] font-medium tabular-nums'>
+                        {item.evidence_count}
+                      </Badge>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           )}
         </CardContent>

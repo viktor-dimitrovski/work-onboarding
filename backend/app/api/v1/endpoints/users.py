@@ -1,13 +1,17 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_active_user
 from app.db.session import get_db
+from app.models.audit import AuditLog
 from app.models.rbac import User
 from app.models.tenant import TenantMembership
 from app.multitenancy.deps import TenantContext, require_tenant_membership
 from app.multitenancy.permissions import require_access
+from app.schemas.audit import AuditLogListResponse, AuditLogOut
 from app.schemas.common import PaginationMeta
 from app.schemas.user import TenantMembershipUpdate, UserAddExisting, UserCreate, UserListResponse, UserOut
 from app.services import audit_service, user_service
@@ -16,14 +20,23 @@ from app.services import audit_service, user_service
 router = APIRouter(prefix='/users', tags=['users'])
 
 
-def _to_user_out(user: User, *, tenant_role: str | None = None, tenant_status: str | None = None) -> UserOut:
+def _to_user_out(
+    user: User,
+    *,
+    tenant_roles: list[str] | None = None,
+    tenant_status: str | None = None,
+) -> UserOut:
+    roles = [r for r in (tenant_roles or []) if isinstance(r, str) and r.strip()]
+    primary_role = roles[0] if roles else None
     return UserOut(
         id=user.id,
         email=user.email,
         full_name=user.full_name,
         is_active=user.is_active,
         roles=user_service.get_user_roles(user),
-        tenant_role=tenant_role,
+        last_login_at=user.last_login_at,
+        tenant_role=primary_role,
+        tenant_roles=roles,
         tenant_status=tenant_status,
         created_at=user.created_at,
         updated_at=user.updated_at,
@@ -52,8 +65,8 @@ def list_users(
         users = [row for row in users if row[2] == 'active']
     return UserListResponse(
         items=[
-            _to_user_out(user, tenant_role=tenant_role, tenant_status=tenant_status)
-            for user, tenant_role, tenant_status in users
+            _to_user_out(user, tenant_roles=tenant_roles, tenant_status=tenant_status)
+            for user, tenant_roles, tenant_status in users
         ],
         meta=PaginationMeta(page=page, page_size=page_size, total=total),
     )
@@ -67,27 +80,59 @@ def create_user(
     ctx: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('users', 'users:write')),
 ) -> UserOut:
-    user = user_service.create_user(db, payload=payload, actor_user_id=current_user.id)
-    tenant_role = payload.tenant_role or 'member'
-    db.add(
-        TenantMembership(
-            tenant_id=ctx.tenant.id,
-            user_id=user.id,
-            role=tenant_role,
-            status='active',
+    email = payload.email.lower()
+    tenant_roles = [r.strip().lower() for r in (payload.tenant_roles or []) if r.strip()]
+    if not tenant_roles:
+        tenant_roles = [payload.tenant_role.strip().lower()] if payload.tenant_role else ['member']
+    tenant_roles = list(dict.fromkeys(tenant_roles))
+
+    user = db.scalar(select(User).where(User.email == email))
+    created = False
+    if not user:
+        if not payload.full_name or not payload.password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail='full_name and password are required when creating a new user',
+            )
+        user = user_service.create_user(db, payload=payload, actor_user_id=current_user.id)
+        created = True
+
+    membership = db.scalar(
+        select(TenantMembership).where(
+            TenantMembership.tenant_id == ctx.tenant.id,
+            TenantMembership.user_id == user.id,
         )
     )
+    if not membership:
+        membership = TenantMembership(
+            tenant_id=ctx.tenant.id,
+            user_id=user.id,
+            role=tenant_roles[0],
+            roles_json=tenant_roles,
+            status='active',
+        )
+        db.add(membership)
+    else:
+        membership.role = tenant_roles[0]
+        membership.roles_json = tenant_roles
+        membership.status = 'active'
+
     audit_service.log_action(
         db,
         actor_user_id=current_user.id,
         action='user_create',
         entity_type='user',
         entity_id=user.id,
-        details={'email': user.email, 'roles': user_service.get_user_roles(user), 'tenant_role': tenant_role},
+        details={
+            'email': user.email,
+            'created': created,
+            'roles': user_service.get_user_roles(user),
+            'tenant_roles': tenant_roles,
+        },
     )
     db.commit()
 
-    return _to_user_out(user, tenant_role=tenant_role)
+    return _to_user_out(user, tenant_roles=tenant_roles, tenant_status=membership.status if membership else None)
 
 
 @router.post('/add-existing', response_model=UserOut)
@@ -102,6 +147,11 @@ def add_existing_user_to_tenant(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found')
 
+    tenant_roles = [r.strip().lower() for r in (payload.tenant_roles or []) if r.strip()]
+    if not tenant_roles:
+        tenant_roles = [payload.tenant_role.strip().lower()] if payload.tenant_role else ['member']
+    tenant_roles = list(dict.fromkeys(tenant_roles))
+
     membership = db.scalar(
         select(TenantMembership).where(
             TenantMembership.tenant_id == ctx.tenant.id,
@@ -112,12 +162,14 @@ def add_existing_user_to_tenant(
         membership = TenantMembership(
             tenant_id=ctx.tenant.id,
             user_id=user.id,
-            role=payload.tenant_role or 'member',
+            role=tenant_roles[0],
+            roles_json=tenant_roles,
             status='active',
         )
         db.add(membership)
     else:
-        membership.role = payload.tenant_role or membership.role
+        membership.role = tenant_roles[0]
+        membership.roles_json = tenant_roles
         membership.status = 'active'
 
     audit_service.log_action(
@@ -126,10 +178,10 @@ def add_existing_user_to_tenant(
         action='tenant_user_add',
         entity_type='user',
         entity_id=user.id,
-        details={'email': user.email, 'tenant_role': membership.role},
+        details={'email': user.email, 'tenant_roles': tenant_roles},
     )
     db.commit()
-    return _to_user_out(user, tenant_role=membership.role, tenant_status=membership.status)
+    return _to_user_out(user, tenant_roles=membership.roles(), tenant_status=membership.status)
 
 
 @router.put('/{user_id}/membership', response_model=UserOut)
@@ -150,8 +202,16 @@ def update_tenant_membership(
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Membership not found')
 
-    if payload.role is not None:
-        membership.role = payload.role
+    if payload.roles is not None:
+        roles = [r.strip().lower() for r in payload.roles if isinstance(r, str) and r.strip()]
+        roles = list(dict.fromkeys(roles))
+        if not roles:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='At least one tenant role is required')
+        membership.roles_json = roles
+        membership.role = roles[0]
+    elif payload.role is not None:
+        membership.role = payload.role.strip().lower()
+        membership.roles_json = [membership.role]
     if payload.status is not None:
         membership.status = payload.status
 
@@ -161,14 +221,17 @@ def update_tenant_membership(
         action='tenant_membership_update',
         entity_type='user',
         entity_id=membership.user_id,
-        details={'tenant_role': membership.role, 'tenant_status': membership.status},
+        details={
+            'tenant_roles': membership.roles(),
+            'tenant_status': membership.status,
+        },
     )
     db.commit()
 
     user = db.scalar(select(User).where(User.id == membership.user_id))
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found')
-    return _to_user_out(user, tenant_role=membership.role, tenant_status=membership.status)
+    return _to_user_out(user, tenant_roles=membership.roles(), tenant_status=membership.status)
 
 
 @router.delete('/{user_id}/membership', status_code=status.HTTP_204_NO_CONTENT)
@@ -198,3 +261,53 @@ def remove_user_from_tenant(
         details={},
     )
     db.commit()
+
+
+def _display_name(user: User | None) -> str | None:
+    if not user:
+        return None
+    return (user.full_name or '').strip() or (user.email or '').strip() or None
+
+
+@router.get('/{user_id}/activity', response_model=AuditLogListResponse)
+def user_activity(
+    user_id: UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('settings', 'settings:manage')),
+    ___: TenantContext = Depends(require_tenant_membership),
+) -> AuditLogListResponse:
+    base = select(AuditLog).where(or_(AuditLog.actor_user_id == user_id, AuditLog.entity_id == user_id))
+    total = db.scalar(select(func.count()).select_from(base.subquery()))
+    rows = (
+        db.scalars(base.order_by(AuditLog.created_at.desc()).offset((page - 1) * page_size).limit(page_size)).all()
+    )
+
+    actor_ids: set[UUID] = {row.actor_user_id for row in rows if row.actor_user_id}
+    users_by_id: dict[UUID, User] = {}
+    if actor_ids:
+        users_by_id = {row.id: row for row in db.scalars(select(User).where(User.id.in_(list(actor_ids)))).all()}
+
+    items = [
+        AuditLogOut(
+            id=row.id,
+            actor_user_id=row.actor_user_id,
+            actor_name=_display_name(users_by_id.get(row.actor_user_id)),
+            actor_email=users_by_id.get(row.actor_user_id).email if users_by_id.get(row.actor_user_id) else None,
+            action=row.action,
+            entity_type=row.entity_type,
+            entity_id=row.entity_id,
+            status=row.status,
+            details=row.details_json or {},
+            ip_address=row.ip_address,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+    return AuditLogListResponse(
+        items=items,
+        meta=PaginationMeta(page=page, page_size=page_size, total=int(total or 0)),
+    )

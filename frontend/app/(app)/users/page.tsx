@@ -10,9 +10,21 @@ import { LoadingState } from '@/components/common/loading-state';
 import { StatusChip } from '@/components/common/status-chip';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
+import { formatDateTime } from '@/lib/constants';
 import { tenantRoleOptions } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
 import type { UserRow } from '@/lib/types';
@@ -22,21 +34,95 @@ interface UserListResponse {
   meta: { page: number; page_size: number; total: number };
 }
 
-const createUserSchema = z.object({
+interface AuditLogOut {
+  id: string;
+  actor_user_id?: string | null;
+  actor_name?: string | null;
+  actor_email?: string | null;
+  action: string;
+  entity_type: string;
+  entity_id?: string | null;
+  status: string;
+  details: Record<string, unknown>;
+  ip_address?: string | null;
+  created_at: string;
+}
+
+interface AuditLogListResponse {
+  items: AuditLogOut[];
+  meta: { page: number; page_size: number; total: number };
+}
+
+const addUserSchema = z.object({
   email: z.string().email(),
-  full_name: z.string().min(2),
-  password: z.string().min(8),
-  tenant_role: z.string().min(1, 'Select a tenant role'),
+  full_name: z.string().optional(),
+  password: z.string().optional(),
+  tenant_roles: z.array(z.string()).min(1, 'Select at least one tenant role'),
 });
 
-type CreateUserValues = z.infer<typeof createUserSchema>;
+type AddUserValues = z.infer<typeof addUserSchema>;
 
-const addExistingSchema = z.object({
-  email: z.string().email(),
-  tenant_role: z.string().min(1, 'Select a tenant role'),
-});
+function normalizeTenantRoles(value: unknown): string[] {
+  if (!Array.isArray(value)) return ['member'];
+  const roles = value
+    .filter((v) => typeof v === 'string')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const unique = Array.from(new Set(roles));
+  return unique.length ? unique : ['member'];
+}
 
-type AddExistingValues = z.infer<typeof addExistingSchema>;
+function rolesEqual(a: string[], b: string[]) {
+  if (a.length !== b.length) return false;
+  const as = new Set(a);
+  for (const item of b) if (!as.has(item)) return false;
+  return true;
+}
+
+function TenantRolesEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+}) {
+  const safeValue = normalizeTenantRoles(value);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type='button' size='sm' variant='outline' disabled={disabled}>
+          Roles ({safeValue.length})
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='start' className='w-64'>
+        <DropdownMenuLabel>Tenant roles</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {tenantRoleOptions.map((role) => {
+          const checked = safeValue.includes(role);
+          return (
+            <DropdownMenuCheckboxItem
+              key={role}
+              checked={checked}
+              onSelect={(e) => e.preventDefault()}
+              onCheckedChange={(nextChecked) => {
+                if (nextChecked) {
+                  onChange(Array.from(new Set([...safeValue, role])));
+                  return;
+                }
+                if (safeValue.length <= 1) return;
+                onChange(safeValue.filter((r) => r !== role));
+              }}
+            >
+              {role.replaceAll('_', ' ')}
+            </DropdownMenuCheckboxItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 export default function UsersPage() {
   const { accessToken } = useAuth();
@@ -46,22 +132,20 @@ export default function UsersPage() {
   const [showDisabled, setShowDisabled] = useState(false);
   const [query, setQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
+  const [rowSavingId, setRowSavingId] = useState<string | null>(null);
+  const [editedTenantRoles, setEditedTenantRoles] = useState<Record<string, string[]>>({});
+  const [activityUser, setActivityUser] = useState<UserRow | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const [activityRows, setActivityRows] = useState<AuditLogOut[]>([]);
 
-  const form = useForm<CreateUserValues>({
-    resolver: zodResolver(createUserSchema),
+  const form = useForm<AddUserValues>({
+    resolver: zodResolver(addUserSchema),
     defaultValues: {
       email: '',
       full_name: '',
       password: '',
-      tenant_role: 'member',
-    },
-  });
-
-  const addExistingForm = useForm<AddExistingValues>({
-    resolver: zodResolver(addExistingSchema),
-    defaultValues: {
-      email: '',
-      tenant_role: 'member',
+      tenant_roles: ['member'],
     },
   });
 
@@ -94,28 +178,24 @@ export default function UsersPage() {
     if (!accessToken) return;
     setError(null);
     try {
-      await api.post('/users', values, accessToken);
+      const fullName = (values.full_name || '').trim();
+      const password = (values.password || '').trim();
+      const payload = {
+        email: values.email,
+        tenant_roles: normalizeTenantRoles(values.tenant_roles),
+        full_name: fullName || undefined,
+        password: password || undefined,
+      };
+      await api.post('/users', payload, accessToken);
       form.reset({
         email: '',
         full_name: '',
         password: '',
-        tenant_role: 'member',
+        tenant_roles: ['member'],
       });
       await loadUsers();
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Failed to create user');
-    }
-  });
-
-  const onAddExisting = addExistingForm.handleSubmit(async (values) => {
-    if (!accessToken) return;
-    setError(null);
-    try {
-      await api.post('/users/add-existing', values, accessToken);
-      addExistingForm.reset({ email: '', tenant_role: 'member' });
-      await loadUsers();
-    } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Failed to add existing user');
+      setError(submitError instanceof Error ? submitError.message : 'Failed to add user');
     }
   });
 
@@ -123,10 +203,32 @@ export default function UsersPage() {
     if (!accessToken) return;
     setError(null);
     try {
+      setRowSavingId(user.id);
       await api.put(`/users/${user.id}/membership`, { status: nextStatus }, accessToken);
       await loadUsers();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Failed to update user status');
+    } finally {
+      setRowSavingId(null);
+    }
+  };
+
+  const saveTenantRoles = async (user: UserRow, roles: string[]) => {
+    if (!accessToken) return;
+    setError(null);
+    try {
+      setRowSavingId(user.id);
+      await api.put(`/users/${user.id}/membership`, { roles }, accessToken);
+      await loadUsers();
+      setEditedTenantRoles((prev) => {
+        const copy = { ...prev };
+        delete copy[user.id];
+        return copy;
+      });
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Failed to update tenant roles');
+    } finally {
+      setRowSavingId(null);
     }
   };
 
@@ -137,10 +239,29 @@ export default function UsersPage() {
     if (!ok) return;
     setError(null);
     try {
+      setRowSavingId(user.id);
       await api.delete(`/users/${user.id}/membership`, accessToken);
       await loadUsers();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Failed to remove user from tenant');
+    } finally {
+      setRowSavingId(null);
+    }
+  };
+
+  const openActivity = async (user: UserRow) => {
+    if (!accessToken) return;
+    setActivityUser(user);
+    setActivityLoading(true);
+    setActivityError(null);
+    setActivityRows([]);
+    try {
+      const response = await api.get<AuditLogListResponse>(`/users/${user.id}/activity?page=1&page_size=200`, accessToken);
+      setActivityRows(response.items);
+    } catch (err) {
+      setActivityError(err instanceof Error ? err.message : 'Failed to load activity history');
+    } finally {
+      setActivityLoading(false);
     }
   };
 
@@ -157,7 +278,12 @@ export default function UsersPage() {
   return (
     <div className='space-y-6'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <h2 className='text-2xl font-semibold'>Users</h2>
+        <div>
+          <h2 className='text-2xl font-semibold'>Users</h2>
+          <p className='text-sm text-muted-foreground'>
+            Manage tenant access (role + status). Global roles are shown for visibility.
+          </p>
+        </div>
         <label className='flex items-center gap-2 text-sm text-muted-foreground'>
           <input
             type='checkbox'
@@ -170,180 +296,277 @@ export default function UsersPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Create user</CardTitle>
-          <CardDescription>Add a user and assign a tenant role.</CardDescription>
+          <CardTitle>User management</CardTitle>
+          <CardDescription>Directory + access controls in one compact view.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form className='grid gap-4 md:grid-cols-2' onSubmit={onSubmit}>
-            <div className='space-y-2'>
-              <Label>Email</Label>
-              <Input type='email' {...form.register('email')} />
-              {form.formState.errors.email && (
-                <p className='text-xs text-destructive'>{form.formState.errors.email.message}</p>
-              )}
-            </div>
+          <Tabs defaultValue='directory'>
+            <TabsList>
+              <TabsTrigger value='directory'>Directory</TabsTrigger>
+              <TabsTrigger value='add'>Add user</TabsTrigger>
+            </TabsList>
 
-            <div className='space-y-2'>
-              <Label>Full name</Label>
-              <Input {...form.register('full_name')} />
-              {form.formState.errors.full_name && (
-                <p className='text-xs text-destructive'>{form.formState.errors.full_name.message}</p>
-              )}
-            </div>
+            <TabsContent value='directory'>
+              <div className='mb-4 flex flex-wrap items-center justify-between gap-2'>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder='Search name/email...'
+                    className='w-64'
+                  />
+                  <select
+                    className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+                    value={roleFilter}
+                    onChange={(event) => setRoleFilter(event.target.value)}
+                  >
+                    <option value=''>All tenant roles</option>
+                    {tenantRoleOptions.map((role) => (
+                      <option key={role} value={role}>
+                        {role.replace('_', ' ')}
+                      </option>
+                    ))}
+                  </select>
+                  {(query || roleFilter) && (
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      onClick={() => {
+                        setQuery('');
+                        setRoleFilter('');
+                      }}
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
+                <div className='text-xs text-muted-foreground'>
+                  Showing <span className='font-medium text-foreground'>{filteredUsers.length}</span> users
+                </div>
+              </div>
 
-            <div className='space-y-2'>
-              <Label>Password</Label>
-              <Input type='password' {...form.register('password')} />
-              {form.formState.errors.password && (
-                <p className='text-xs text-destructive'>{form.formState.errors.password.message}</p>
-              )}
-            </div>
+              {error && <p className='mb-3 text-sm text-destructive'>{error}</p>}
 
-            <div className='space-y-2'>
-              <Label>Tenant role</Label>
-              <select
-                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
-                {...form.register('tenant_role')}
-              >
-                {tenantRoleOptions.map((role) => (
-                  <option key={role} value={role}>
-                    {role.replace('_', ' ')}
-                  </option>
-                ))}
-              </select>
-              {form.formState.errors.tenant_role && (
-                <p className='text-xs text-destructive'>{form.formState.errors.tenant_role.message}</p>
-              )}
-            </div>
-
-            {error && <p className='text-sm text-destructive md:col-span-2'>{error}</p>}
-
-            <div className='flex flex-col gap-3 md:col-span-2 md:flex-row md:items-center md:justify-end'>
-              <Button className='w-full md:w-auto' type='submit' disabled={form.formState.isSubmitting}>
-                {form.formState.isSubmitting ? 'Creating...' : 'Create user'}
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Add existing user</CardTitle>
-          <CardDescription>
-            If the user already exists in the database (created by another tenant), add them to this tenant.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className='grid gap-4 md:grid-cols-2' onSubmit={onAddExisting}>
-            <div className='space-y-2'>
-              <Label>Email</Label>
-              <Input type='email' {...addExistingForm.register('email')} />
-              {addExistingForm.formState.errors.email && (
-                <p className='text-xs text-destructive'>{addExistingForm.formState.errors.email.message}</p>
-              )}
-            </div>
-            <div className='space-y-2'>
-              <Label>Tenant role</Label>
-              <select
-                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
-                {...addExistingForm.register('tenant_role')}
-              >
-                {tenantRoleOptions.map((role) => (
-                  <option key={role} value={role}>
-                    {role.replace('_', ' ')}
-                  </option>
-                ))}
-              </select>
-              {addExistingForm.formState.errors.tenant_role && (
-                <p className='text-xs text-destructive'>{addExistingForm.formState.errors.tenant_role.message}</p>
-              )}
-            </div>
-
-            {error && <p className='text-sm text-destructive md:col-span-2'>{error}</p>}
-
-            <div className='flex flex-col gap-3 md:col-span-2 md:flex-row md:items-center md:justify-end'>
-              <Button className='w-full md:w-auto' type='submit' disabled={addExistingForm.formState.isSubmitting}>
-                {addExistingForm.formState.isSubmitting ? 'Adding...' : 'Add to tenant'}
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>User directory</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className='mb-4 flex flex-wrap items-center gap-2'>
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder='Search by name or email...'
-              className='max-w-sm'
-            />
-            <select
-              className='h-10 rounded-md border border-input bg-white px-3 text-sm'
-              value={roleFilter}
-              onChange={(event) => setRoleFilter(event.target.value)}
-            >
-              <option value=''>All roles</option>
-              {tenantRoleOptions.map((role) => (
-                <option key={role} value={role}>
-                  {role.replace('_', ' ')}
-                </option>
-              ))}
-            </select>
-            {(query || roleFilter) && (
-              <Button
-                type='button'
-                variant='ghost'
-                onClick={() => {
-                  setQuery('');
-                  setRoleFilter('');
-                }}
-              >
-                Clear
-              </Button>
-            )}
-          </div>
-
-          {filteredUsers.length === 0 ? (
-            <EmptyState title='No users found' description='Create your first user account.' />
-          ) : (
-            <div className='space-y-2'>
-              {filteredUsers.map((user) => (
-                <div key={user.id} className='flex flex-wrap items-center justify-between rounded-md border p-3'>
-                  <div>
-                    <p className='font-medium'>{user.full_name}</p>
-                    <p className='text-xs text-muted-foreground'>{user.email}</p>
-                  </div>
-                  <div className='flex flex-wrap items-center gap-2'>
-                    <StatusChip status={(user.tenant_role || 'member').replace('_', ' ')} />
-                    {user.tenant_status && user.tenant_status !== 'active' && (
-                      <StatusChip status={user.tenant_status} />
-                    )}
-                    <div className='flex items-center gap-2'>
-                      <Button
-                        type='button'
-                        size='sm'
-                        variant='outline'
-                        onClick={() => setMembershipStatus(user, user.tenant_status === 'disabled' ? 'active' : 'disabled')}
-                      >
-                        {user.tenant_status === 'disabled' ? 'Enable' : 'Disable'}
-                      </Button>
-                      <Button type='button' size='sm' variant='outline' onClick={() => removeFromTenant(user)}>
-                        Remove
-                      </Button>
-                    </div>
+              {filteredUsers.length === 0 ? (
+                <EmptyState title='No users found' description='Create your first user account.' />
+              ) : (
+                <div className='overflow-hidden rounded-md border'>
+                  <div className='max-h-[520px] overflow-auto'>
+                    <table className='w-full text-sm'>
+                      <thead className='sticky top-0 z-10 bg-muted/60 text-xs text-muted-foreground'>
+                        <tr className='border-b'>
+                          <th className='px-3 py-2 text-left font-medium'>User</th>
+                          <th className='px-3 py-2 text-left font-medium'>Tenant roles</th>
+                          <th className='px-3 py-2 text-left font-medium'>Status</th>
+                          <th className='px-3 py-2 text-left font-medium'>Last login</th>
+                          <th className='px-3 py-2 text-left font-medium'>Global roles</th>
+                          <th className='px-3 py-2 text-right font-medium'>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredUsers.map((user) => {
+                          const currentRoles = normalizeTenantRoles(
+                            user.tenant_roles ?? (user.tenant_role ? [user.tenant_role] : []),
+                          );
+                          const selectedRoles = normalizeTenantRoles(
+                            editedTenantRoles[user.id] ?? currentRoles,
+                          );
+                          const roleDirty = !rolesEqual(currentRoles, selectedRoles);
+                          const saving = rowSavingId === user.id;
+                          return (
+                            <tr key={user.id} className='border-b last:border-b-0'>
+                              <td className='px-3 py-2'>
+                                <div className='font-medium leading-5'>{user.full_name}</div>
+                                <div className='text-xs text-muted-foreground'>{user.email}</div>
+                              </td>
+                              <td className='px-3 py-2'>
+                                <div className='flex flex-wrap items-center gap-2'>
+                                  <div className='flex flex-wrap gap-1'>
+                                    {(roleDirty ? selectedRoles : currentRoles).map((r) => (
+                                      <StatusChip key={r} status={r} />
+                                    ))}
+                                  </div>
+                                  <TenantRolesEditor
+                                    disabled={saving}
+                                    value={selectedRoles}
+                                    onChange={(next) =>
+                                      setEditedTenantRoles((prev) => ({ ...prev, [user.id]: next }))
+                                    }
+                                  />
+                                  {roleDirty ? (
+                                    <Button
+                                      type='button'
+                                      size='sm'
+                                      disabled={saving}
+                                      onClick={() => saveTenantRoles(user, selectedRoles)}
+                                    >
+                                      {saving ? 'Saving...' : 'Save'}
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td className='px-3 py-2'>
+                                <div className='flex items-center gap-2'>
+                                  <StatusChip status={user.tenant_status || 'active'} />
+                                </div>
+                              </td>
+                              <td className='px-3 py-2 text-xs text-muted-foreground'>
+                                {formatDateTime(user.last_login_at)}
+                              </td>
+                              <td className='px-3 py-2'>
+                                <div className='flex flex-wrap gap-1'>
+                                  {(user.roles || []).length ? (
+                                    user.roles.map((r) => <StatusChip key={r} status={r} />)
+                                  ) : (
+                                    <span className='text-xs text-muted-foreground'>—</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className='px-3 py-2'>
+                                <div className='flex justify-end gap-2'>
+                                  <Button
+                                    type='button'
+                                    size='sm'
+                                    variant='outline'
+                                    disabled={saving}
+                                    onClick={() => openActivity(user)}
+                                  >
+                                    Activity
+                                  </Button>
+                                  <Button
+                                    type='button'
+                                    size='sm'
+                                    variant='outline'
+                                    disabled={saving}
+                                    onClick={() =>
+                                      setMembershipStatus(
+                                        user,
+                                        user.tenant_status === 'disabled' ? 'active' : 'disabled',
+                                      )
+                                    }
+                                  >
+                                    {user.tenant_status === 'disabled' ? 'Enable' : 'Disable'}
+                                  </Button>
+                                  <Button
+                                    type='button'
+                                    size='sm'
+                                    variant='outline'
+                                    disabled={saving}
+                                    onClick={() => removeFromTenant(user)}
+                                  >
+                                    Remove
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              )}
+            </TabsContent>
+
+            <TabsContent value='add'>
+              <form className='grid gap-4 md:grid-cols-2' onSubmit={onSubmit}>
+                <div className='space-y-2'>
+                  <Label>Email</Label>
+                  <Input type='email' {...form.register('email')} />
+                  {form.formState.errors.email && (
+                    <p className='text-xs text-destructive'>{form.formState.errors.email.message}</p>
+                  )}
+                  <p className='text-xs text-muted-foreground'>
+                    If this email already exists globally, we will reuse the same user and only grant access in this
+                    tenant.
+                  </p>
+                </div>
+
+                <div className='space-y-2'>
+                  <Label>Tenant roles</Label>
+                  <div className='flex items-center gap-2'>
+                    <TenantRolesEditor
+                      value={normalizeTenantRoles(form.watch('tenant_roles'))}
+                      onChange={(next) => form.setValue('tenant_roles', next, { shouldValidate: true })}
+                    />
+                    <div className='flex flex-wrap gap-1'>
+                      {normalizeTenantRoles(form.watch('tenant_roles')).map((r) => (
+                        <StatusChip key={r} status={r} />
+                      ))}
+                    </div>
+                  </div>
+                  {form.formState.errors.tenant_roles && (
+                    <p className='text-xs text-destructive'>{form.formState.errors.tenant_roles.message}</p>
+                  )}
+                </div>
+
+                <div className='space-y-2'>
+                  <Label>Full name (required for new user)</Label>
+                  <Input {...form.register('full_name')} placeholder='Only needed when creating a new user' />
+                </div>
+
+                <div className='space-y-2'>
+                  <Label>Temp password (required for new user)</Label>
+                  <Input type='password' {...form.register('password')} placeholder='Only needed when creating a new user' />
+                </div>
+
+                <div className='flex items-center justify-end md:col-span-2'>
+                  <Button type='submit' disabled={form.formState.isSubmitting}>
+                    {form.formState.isSubmitting ? 'Saving...' : 'Add user'}
+                  </Button>
+                </div>
+              </form>
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
+
+      <Sheet open={!!activityUser} onOpenChange={(open) => (!open ? setActivityUser(null) : undefined)}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>User activity</SheetTitle>
+            <SheetDescription>
+              {activityUser ? `${activityUser.full_name} (${activityUser.email})` : '—'}
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className='mt-4'>
+            {activityLoading ? (
+              <p className='text-sm text-muted-foreground'>Loading activity…</p>
+            ) : activityError ? (
+              <p className='text-sm text-destructive'>{activityError}</p>
+            ) : activityRows.length === 0 ? (
+              <p className='text-sm text-muted-foreground'>No activity found in this tenant.</p>
+            ) : (
+              <ScrollArea className='h-[70vh] pr-3'>
+                <div className='space-y-3'>
+                  {activityRows.map((row) => (
+                    <div key={row.id} className='rounded-md border bg-muted/20 px-3 py-2'>
+                      <div className='flex flex-wrap items-center justify-between gap-2'>
+                        <div className='text-sm font-medium'>
+                          {row.action}{' '}
+                          <span className='text-xs text-muted-foreground'>
+                            · {row.entity_type}
+                          </span>
+                        </div>
+                        <div className='text-xs text-muted-foreground'>{formatDateTime(row.created_at)}</div>
+                      </div>
+                      <div className='mt-1 text-xs text-muted-foreground'>
+                        Actor: {row.actor_name || row.actor_email || '—'} · Status: {row.status}
+                      </div>
+                      {row.details && Object.keys(row.details).length ? (
+                        <pre className='mt-2 overflow-auto rounded bg-white p-2 text-[11px] leading-4'>
+                          {JSON.stringify(row.details, null, 2)}
+                        </pre>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

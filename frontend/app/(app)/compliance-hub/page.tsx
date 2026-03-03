@@ -137,8 +137,8 @@ export default function ComplianceHubPage() {
   const trendMax = trendValues.length ? Math.max(...trendValues) : 1;
 
   return (
-    <div className='space-y-6'>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
+    <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className='text-2xl font-semibold'>Compliance Hub</h2>
           <p className='text-sm text-muted-foreground'>Standards tracking, control coverage, and evidence vault.</p>

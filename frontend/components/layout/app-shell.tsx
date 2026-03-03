@@ -11,16 +11,23 @@ import { TenantProvider } from '@/lib/tenant-context';
 import { cn } from '@/lib/utils';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const isWorkOrderEditor = Boolean(pathname?.startsWith('/work-orders/'));
+  const mustChangePassword = Boolean(user?.must_change_password);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated && pathname !== '/login') {
       router.replace('/login');
     }
   }, [isAuthenticated, isLoading, pathname, router]);
+
+  useEffect(() => {
+    if (!isLoading && isAuthenticated && mustChangePassword && pathname !== '/change-password') {
+      router.replace('/change-password');
+    }
+  }, [isAuthenticated, isLoading, mustChangePassword, pathname, router]);
 
   useEffect(() => {
     if (!isWorkOrderEditor) return;
@@ -37,6 +44,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!isAuthenticated) {
     return null;
+  }
+
+  if (mustChangePassword) {
+    return (
+      <div className='flex min-h-screen'>
+        <main className='flex-1 p-6'>{children}</main>
+      </div>
+    );
   }
 
   return (

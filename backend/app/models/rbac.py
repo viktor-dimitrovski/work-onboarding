@@ -27,6 +27,8 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     oauth_provider_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    password_change_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     preferences_json: Mapped[dict[str, Any]] = mapped_column('preferences', JSONB, nullable=False, default=dict)
 
     user_roles: Mapped[list['UserRole']] = relationship(back_populates='user', cascade='all, delete-orphan')

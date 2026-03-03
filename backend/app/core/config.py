@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str | None = None
     OPENAI_API_BASE: str = 'https://api.openai.com/v1'
-    OPENAI_MODEL: str = 'gpt-5.2-pro'
+    OPENAI_MODEL: str = 'gpt-3.5-turbo'
     OPENAI_EMBEDDING_MODEL: str = 'text-embedding-3-small'
     OPENAI_PROJECT_ID: str | None = None
     OPENAI_TEXT_FORMAT: str | None = None

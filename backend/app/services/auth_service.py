@@ -15,6 +15,7 @@ from app.core.security import (
 )
 from app.models.rbac import User, UserRole
 from app.models.token import RefreshToken
+from app.core.security import hash_password
 
 
 class AuthError(Exception):
@@ -123,4 +124,22 @@ def revoke_refresh_token(db: Session, *, refresh_token: str) -> bool:
     if token_entity.revoked_at is None:
         token_entity.revoked_at = datetime.now(UTC)
         db.flush()
+    return True
+
+
+def change_password(
+    db: Session,
+    *,
+    user: User,
+    current_password: str,
+    new_password: str,
+) -> bool:
+    if not user.hashed_password:
+        return False
+    if not verify_password(current_password, user.hashed_password):
+        return False
+    user.hashed_password = hash_password(new_password)
+    user.password_change_required = False
+    user.password_changed_at = datetime.now(UTC)
+    db.flush()
     return True
