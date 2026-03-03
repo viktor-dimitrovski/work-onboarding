@@ -39,6 +39,7 @@ def setup_database() -> Generator[None, None, None]:
     with engine.connect() as conn:
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS billing"))
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS release_mgmt"))
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS compliance"))
         conn.commit()
     Base.metadata.create_all(bind=engine)
 

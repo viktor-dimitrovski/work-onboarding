@@ -27,12 +27,15 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     OPENAI_API_BASE: str = 'https://api.openai.com/v1'
     OPENAI_MODEL: str = 'gpt-5.2-pro'
+    OPENAI_EMBEDDING_MODEL: str = 'text-embedding-3-small'
     OPENAI_PROJECT_ID: str | None = None
     OPENAI_TEXT_FORMAT: str | None = None
     OPENAI_INCLUDE_TEMPERATURE: bool = True
     OPENAI_TEXT_VERBOSITY: str | None = None
     OPENAI_MAX_OUTPUT_TOKENS: int | None = None
     OPENAI_TIMEOUT_MS: int = 60_000
+
+    COMPLIANCE_VECTOR_SEARCH_ENABLED: bool = False
 
     FRONTEND_BASE_URL: str = 'http://localhost:3001'
     OAUTH_STATE_TTL_MINUTES: int = 10

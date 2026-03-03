@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     assignments,
     auth,
     billing,
+    compliance,
     health,
     keybindings,
     progress,
@@ -40,6 +41,7 @@ api_router.include_router(audit.router, dependencies=[Depends(require_tenant_mem
 api_router.include_router(settings.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(usage.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(billing.router, dependencies=[Depends(require_tenant_membership)])
+api_router.include_router(compliance.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(work_orders.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(release_manifests.router, dependencies=[Depends(require_tenant_membership)])
 api_router.include_router(release_center.router, dependencies=[Depends(require_tenant_membership)])

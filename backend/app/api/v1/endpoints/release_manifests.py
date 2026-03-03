@@ -68,10 +68,10 @@ def _find_rel_path(rel_id: str, ref: str) -> str:
 @router.get("", response_model=list[ReleaseManifestOut])
 def list_release_manifests(
     year: str | None = Query(default=None),
-    _: str | None = Query(default=None, alias="ref"),
+    ref: str | None = Query(default=None, alias="ref"),
     ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access("releases", "releases:read")),
 ) -> list[ReleaseManifestOut]:
     items: list[ReleaseManifestOut] = []
@@ -111,10 +111,10 @@ def list_release_manifests(
 @router.get("/{rel_id}", response_model=ReleaseManifestOut)
 def get_release_manifest(
     rel_id: str,
-    _: str | None = Query(default=None, alias="ref"),
+    ref: str | None = Query(default=None, alias="ref"),
     ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access("releases", "releases:read")),
 ) -> ReleaseManifestOut:
     rel = db.scalar(select(ReleaseManifest).where(ReleaseManifest.rel_id == rel_id))
@@ -170,9 +170,9 @@ def preview_release_manifest(
 @router.post("", response_model=ReleaseManifestOut, status_code=status.HTTP_201_CREATED)
 def create_release_manifest(
     payload: ReleaseManifestPreviewRequest,
+    background_tasks: BackgroundTasks,
     ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access("releases", "releases:write")),
 ) -> ReleaseManifestOut:
@@ -257,9 +257,9 @@ def create_release_manifest(
 def update_release_manifest(
     rel_id: str,
     payload: ReleaseManifestPreviewRequest,
+    background_tasks: BackgroundTasks,
     ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access("releases", "releases:write")),
 ) -> ReleaseManifestOut:
@@ -412,9 +412,9 @@ def create_or_get_release_manifest_pr(
 @router.post("/{rel_id}/sync", response_model=ReleaseManifestOut)
 def sync_release_manifest(
     rel_id: str,
+    background_tasks: BackgroundTasks,
     ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access("releases", "releases:write")),
 ) -> ReleaseManifestOut:
@@ -465,11 +465,11 @@ def sync_release_manifest(
 
 @router.post("/sync", response_model=dict)
 def bulk_sync_release_manifests(
+    background_tasks: BackgroundTasks,
     sync_status: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
     ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access("releases", "releases:write")),
 ) -> dict:

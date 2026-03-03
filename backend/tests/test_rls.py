@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from app.models.tenant import Tenant
 from app.models.track import TrackTemplate
+from app.models.compliance import ComplianceControlStatus
 from app.models.release_mgmt import ReleaseWorkOrder
 
 
@@ -92,4 +93,34 @@ def test_release_mgmt_rls(db_session):
     _set_tenant(db_session, tenant_b.id)
     with pytest.raises(Exception):
         db_session.add(ReleaseWorkOrder(wo_id='WO-2026-0002', title='Wrong tenant', tenant_id=tenant_a.id))
+        db_session.commit()
+
+
+def test_compliance_rls(db_session):
+    tenant_a = Tenant(id=uuid.uuid4(), name='Tenant A', slug='tenant-a', tenant_type='company')
+    tenant_b = Tenant(id=uuid.uuid4(), name='Tenant B', slug='tenant-b', tenant_type='company')
+    db_session.add_all([tenant_a, tenant_b])
+    db_session.commit()
+
+    _enable_rls_schema(db_session, 'compliance.control_status')
+    db_session.commit()
+
+    _set_tenant(db_session, tenant_a.id)
+    db_session.add(ComplianceControlStatus(control_key='CTL_TEST_01', status_enum='not_started', score=0))
+    db_session.commit()
+
+    _set_tenant(db_session, tenant_b.id)
+    results = db_session.query(ComplianceControlStatus).all()
+    assert results == []
+
+    _set_tenant(db_session, tenant_b.id)
+    with pytest.raises(Exception):
+        db_session.add(
+            ComplianceControlStatus(
+                control_key='CTL_TEST_01',
+                status_enum='not_started',
+                score=0,
+                tenant_id=tenant_a.id,
+            )
+        )
         db_session.commit()
