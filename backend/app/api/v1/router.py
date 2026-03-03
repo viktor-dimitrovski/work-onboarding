@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     billing,
     compliance,
     health,
+    integration_registry,
     keybindings,
     progress,
     reports,
@@ -48,3 +49,4 @@ api_router.include_router(compliance.router, dependencies=tenant_deps)
 api_router.include_router(work_orders.router, dependencies=tenant_deps)
 api_router.include_router(release_manifests.router, dependencies=tenant_deps)
 api_router.include_router(release_center.router, dependencies=tenant_deps)
+api_router.include_router(integration_registry.router, dependencies=tenant_deps)

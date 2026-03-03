@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.models.compliance import (
@@ -14,6 +14,8 @@ from app.models.compliance import (
     CompliancePracticeMatchResult,
     CompliancePracticeMatchRun,
     ComplianceTenantControl,
+    ComplianceTenantControlFrameworkRef,
+    ComplianceTenantFramework,
     ComplianceTenantLibraryImportBatch,
 )
 from app.services.openai_responses_service import call_openai_responses_json
@@ -84,6 +86,31 @@ def run_practice_match(
     )
     input_hash = _input_hash(practice_item, batch_id)
 
+    cached_run = db.scalar(
+        select(CompliancePracticeMatchRun)
+        .where(
+            CompliancePracticeMatchRun.tenant_id == tenant_id,
+            CompliancePracticeMatchRun.input_hash == input_hash,
+            CompliancePracticeMatchRun.status == "success",
+        )
+        .order_by(CompliancePracticeMatchRun.finished_at.desc().nullslast())
+        .limit(1)
+    )
+    if cached_run:
+        cached_results = db.scalars(
+            select(CompliancePracticeMatchResult)
+            .where(
+                CompliancePracticeMatchResult.tenant_id == tenant_id,
+                CompliancePracticeMatchResult.run_id == cached_run.id,
+                CompliancePracticeMatchResult.practice_item_id == practice_item.id,
+            )
+            .order_by(CompliancePracticeMatchResult.created_at.desc())
+        ).all()
+        if cached_results:
+            return cached_run, cached_results
+
+    controls = _maybe_filter_controls_by_framework_tags(db, tenant_id=tenant_id, practice_item=practice_item, controls=controls)
+
     run = CompliancePracticeMatchRun(
         tenant_id=tenant_id,
         run_type=run_type,
@@ -111,6 +138,50 @@ def run_practice_match(
     run.finished_at = datetime.utcnow()
     db.flush()
     return run, results
+
+
+def _maybe_filter_controls_by_framework_tags(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    practice_item: CompliancePracticeItem,
+    controls: list[ComplianceTenantControl],
+) -> list[ComplianceTenantControl]:
+    tags = [str(t).strip() for t in (practice_item.frameworks or []) if str(t).strip()]
+    if not tags:
+        return controls
+
+    fw_keys = set(
+        db.scalars(
+            select(ComplianceTenantFramework.framework_key).where(
+                ComplianceTenantFramework.tenant_id == tenant_id,
+                ComplianceTenantFramework.is_active.is_(True),
+                ComplianceTenantFramework.framework_key.in_(tags),
+            )
+        ).all()
+    )
+    if not fw_keys:
+        return controls
+
+    filtered = db.scalars(
+        select(ComplianceTenantControl)
+        .join(
+            ComplianceTenantControlFrameworkRef,
+            and_(
+                ComplianceTenantControlFrameworkRef.tenant_id == tenant_id,
+                ComplianceTenantControlFrameworkRef.control_key == ComplianceTenantControl.control_key,
+                ComplianceTenantControlFrameworkRef.is_active.is_(True),
+            ),
+        )
+        .where(
+            ComplianceTenantControl.tenant_id == tenant_id,
+            ComplianceTenantControl.is_active.is_(True),
+            ComplianceTenantControlFrameworkRef.framework_key.in_(list(fw_keys)),
+        )
+        .distinct()
+        .order_by(ComplianceTenantControl.code.asc())
+    ).all()
+    return filtered or controls
 
 
 def _call_match_llm(practice_item: CompliancePracticeItem, controls: list[ComplianceTenantControl]) -> list[dict[str, Any]]:

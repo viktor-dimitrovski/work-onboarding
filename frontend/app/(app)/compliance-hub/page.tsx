@@ -79,6 +79,7 @@ export default function ComplianceHubPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [snapshotRunning, setSnapshotRunning] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !tenantLoading && !(hasModule('compliance') && hasPermission('compliance:read'))) {
@@ -128,6 +129,20 @@ export default function ComplianceHubPage() {
     }
   };
 
+  const runSnapshot = async () => {
+    if (!accessToken) return;
+    setSnapshotRunning(true);
+    setError(null);
+    try {
+      await api.post('/compliance/snapshots/run', { scope: 'overall' }, accessToken);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to run snapshot');
+    } finally {
+      setSnapshotRunning(false);
+    }
+  };
+
   if (loading) return <LoadingState label='Loading compliance hub...' />;
 
   const trendValues = trends
@@ -135,6 +150,11 @@ export default function ComplianceHubPage() {
     .map((item) => item.implementation_percent ?? 0);
   const trendMin = trendValues.length ? Math.min(...trendValues) : 0;
   const trendMax = trendValues.length ? Math.max(...trendValues) : 1;
+  const canAdmin = hasPermission('compliance:admin');
+  const noFrameworks = (summary?.by_framework?.length ?? 0) === 0;
+  const noActiveProfile = !activeProfile;
+  const noTrends = trends.length < 2;
+  const showGettingStarted = noFrameworks || noActiveProfile || noTrends || dashboard?.coverage_percent === null;
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto min-w-0">
@@ -158,17 +178,62 @@ export default function ComplianceHubPage() {
 
       {error ? <p className='text-sm text-red-600'>{error}</p> : null}
 
+      {showGettingStarted ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Getting started</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <ol className="list-decimal pl-5 space-y-1 text-muted-foreground">
+              <li>
+                Import or update your baseline library (frameworks, controls, profiles).
+                {canAdmin ? (
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="px-2 h-auto"
+                    onClick={() => router.push('/compliance-hub/admin/library')}
+                  >
+                    Open Library Admin
+                  </Button>
+                ) : null}
+              </li>
+              <li>Select and enable an active profile (scopes which controls are tracked).</li>
+              <li>Add practices, run matching, then accept + apply mappings to create evidence and update control status.</li>
+              <li>Run snapshots to build trends and track progress over time.</li>
+            </ol>
+            {canAdmin ? (
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button type="button" variant="outline" disabled={snapshotRunning} onClick={runSnapshot}>
+                  {snapshotRunning ? 'Running snapshot...' : 'Run snapshot now'}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => router.push('/compliance-hub/practices')}>
+                  Add / match practices
+                </Button>
+                <Button type="button" variant="outline" onClick={() => router.push('/compliance-hub/clients')}>
+                  Import client requirements
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                You don’t have admin access for snapshots/library import. Ask an admin to run the initial setup.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className='grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]'>
         <Card>
           <CardHeader>
-            <CardTitle>Overall compliance</CardTitle>
+            <CardTitle>Implementation score</CardTitle>
           </CardHeader>
           <CardContent>
             <div className='text-4xl font-semibold'>
               {formatPercent(dashboard?.implementation?.compliance ?? summary?.overall?.compliance ?? null)}
             </div>
             <p className='mt-2 text-xs text-muted-foreground'>
-              Weighted by control criticality, excluding N/A controls.
+              Implementation score (status-based), weighted by control criticality, excluding N/A controls.
             </p>
           </CardContent>
         </Card>
@@ -255,11 +320,21 @@ export default function ComplianceHubPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Implementation trend (90 days)</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle>Implementation trend (90 days)</CardTitle>
+            {canAdmin ? (
+              <Button type="button" size="sm" variant="outline" disabled={snapshotRunning} onClick={runSnapshot}>
+                {snapshotRunning ? 'Running...' : 'Run snapshot'}
+              </Button>
+            ) : null}
+          </div>
         </CardHeader>
         <CardContent>
           {trends.length < 2 ? (
-            <EmptyState title='No trend data yet' description='Run snapshots to build trends.' />
+            <EmptyState
+              title='No trend data yet'
+              description={canAdmin ? 'Run a snapshot to start building trends.' : 'Ask an admin to run snapshots to build trends.'}
+            />
           ) : (
             <svg viewBox='0 0 300 120' className='h-32 w-full'>
               <polyline

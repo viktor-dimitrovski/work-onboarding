@@ -444,3 +444,173 @@ export interface BillingInvoice {
   period_end?: string | null;
   lines: BillingInvoiceLine[];
 }
+
+// ---------------------------------------------------------------------------
+// Integration Registry
+// ---------------------------------------------------------------------------
+
+export interface IrDictionary {
+  id: string;
+  key: string;
+  name: string;
+  is_addable: boolean;
+  is_global: boolean;
+  tenant_id?: string | null;
+}
+
+export interface IrDictionaryItem {
+  id: string;
+  dictionary_id: string;
+  code: string;
+  label: string;
+  is_active: boolean;
+  sort_order: number;
+  meta_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  created_by?: string | null;
+}
+
+export interface IrEndpoint {
+  id: string;
+  instance_id: string;
+  tenant_id: string;
+  fqdn?: string | null;
+  ip?: string | null;
+  port?: number | null;
+  protocol: string;
+  base_path?: string | null;
+  is_public: boolean;
+  is_primary: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IrRouteHop {
+  id: string;
+  instance_id: string;
+  tenant_id: string;
+  direction: 'inbound' | 'outbound';
+  hop_order: number;
+  label?: string | null;
+  proxy_chain?: string | null;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface IrService {
+  id: string;
+  tenant_id: string;
+  name: string;
+  service_type?: string | null;
+  owner_team?: string | null;
+  status: string;
+  description?: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  created_by?: string | null;
+  updated_by?: string | null;
+}
+
+export interface IrServiceListItem {
+  id: string;
+  name: string;
+  service_type?: string | null;
+  owner_team?: string | null;
+  status: string;
+  instance_count: number;
+}
+
+export interface IrInstance {
+  id: string;
+  tenant_id: string;
+  service_id: string;
+  service_name?: string | null;
+  env: string;
+  datacenter?: string | null;
+  network_zone?: string | null;
+  status: string;
+  contact?: string | null;
+  vault_ref?: string | null;
+  type_settings_json: Record<string, unknown>;
+  tags: string[];
+  notes?: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  created_by?: string | null;
+  updated_by?: string | null;
+  endpoints: IrEndpoint[];
+  route_hops: IrRouteHop[];
+  encryption_locked?: boolean;
+}
+
+export interface IrInstanceListItem {
+  id: string;
+  tenant_id: string;
+  service_id: string;
+  service_name?: string | null;
+  env: string;
+  datacenter?: string | null;
+  network_zone?: string | null;
+  status: string;
+  primary_endpoint?: string | null;
+  version: number;
+  updated_at: string;
+  updated_by?: string | null;
+  encryption_locked?: boolean;
+}
+
+export interface IrInstanceListResponse {
+  items: IrInstanceListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface IrAuditLog {
+  id: string;
+  tenant_id: string;
+  entity_type: string;
+  entity_id: string;
+  version: number;
+  action: string;
+  changed_by?: string | null;
+  changed_at: string;
+  change_reason: string;
+  snapshot_json: Record<string, unknown>;
+}
+
+export interface IrGridPrefs {
+  grid_key: string;
+  visible_columns: string[];
+  order: string[];
+}
+
+export interface IrOverviewRecentItem {
+  instance_id: string;
+  service_name: string;
+  env: string;
+  status: string;
+  changed_at: string;
+  changed_by?: string | null;
+}
+
+export interface IrOverview {
+  total: number;
+  uat_count: number;
+  prod_count: number;
+  draft_count: number;
+  active_count: number;
+  service_count: number;
+  recently_changed: IrOverviewRecentItem[];
+}
+
+export interface IrCryptoSettings {
+  initialized: boolean;
+  unlocked: boolean;
+  key_fingerprint?: string | null;
+  kdf_params?: Record<string, unknown> | null;
+}

@@ -74,6 +74,14 @@ class ComplianceEvidenceOut(BaseSchema):
     expires_at: datetime | None = None
 
 
+class ComplianceEvidenceSummaryOut(BaseSchema):
+    id: UUID
+    control_key: str
+    type: str
+    title: str
+    url: str | None = None
+
+
 class ComplianceControlListItem(BaseSchema):
     control: ComplianceControlOut
     status: ComplianceControlStatusOut | None = None
@@ -363,6 +371,16 @@ class ComplianceSemanticMatchResponse(BaseSchema):
     ran_at: datetime
 
 
+class ComplianceSemanticMatchApplyResponse(BaseSchema):
+    match: ComplianceSemanticMatchResponse
+    results_created: int
+    results_updated: int
+    evidence_created: int
+    statuses_updated: int
+    practices_updated: int
+    unmatched_practices: list[str] = Field(default_factory=list)
+
+
 class CompliancePracticeCreateRequest(BaseModel):
     title: str
     description_text: str
@@ -464,6 +482,35 @@ class ComplianceClientRequirementOut(BaseSchema):
     priority: str | None = None
     category: str | None = None
     order_index: int
+    coverage_percent: float | None = None
+    coverage_updated_at: datetime | None = None
+
+
+class ComplianceClientRequirementCoverageControl(BaseSchema):
+    control_key: str
+    control_code: str
+    control_title: str
+    match_confidence: float
+    match_coverage_score: float
+    accepted: bool
+    implementation_score: float | None = None
+    framework_refs: list[ComplianceControlFrameworkRefOut] = Field(default_factory=list)
+
+
+class ComplianceClientRequirementCoverage(BaseSchema):
+    requirement_id: UUID
+    requirement_text: str
+    coverage_percent: float | None = None
+    match_confidence: float | None = None
+    controls: list[ComplianceClientRequirementCoverageControl] = Field(default_factory=list)
+    evidence: list[ComplianceEvidenceSummaryOut] = Field(default_factory=list)
+    evidence_count: int = 0
+
+
+class ComplianceClientCoverageResponse(BaseSchema):
+    overall_percent: float | None = None
+    coverage_percent: float | None = None
+    requirements: list[ComplianceClientRequirementCoverage] = Field(default_factory=list)
 
 
 class ComplianceClientMatchRunOut(BaseSchema):
@@ -499,6 +546,18 @@ class ComplianceClientMatchOverrideRequest(BaseModel):
     accepted: bool
     manual_override: bool = True
     override_reason: str | None = None
+
+
+class ComplianceClientApplyRequest(BaseModel):
+    result_ids: list[UUID]
+    add_evidence: bool = True
+    set_status: str | None = None
+
+
+class ComplianceClientApplyResponse(BaseSchema):
+    applied_results: int
+    evidence_created: int
+    statuses_updated: int
 
 
 class ComplianceClientOverviewItem(BaseSchema):

@@ -17,6 +17,11 @@ type ControlStatus = {
   owner_user_id?: string | null;
   last_reviewed_at?: string | null;
   na_reason?: string | null;
+  priority?: string | null;
+  due_date?: string | null;
+  remediation_notes?: string | null;
+  remediation_owner_user_id?: string | null;
+  target_score?: number | null;
 };
 
 type EvidenceItem = {
@@ -55,6 +60,14 @@ type ControlDetail = {
   }>;
 };
 
+type WorkItemLink = {
+  id: string;
+  link_type: string;
+  url?: string | null;
+  work_order_id?: string | null;
+  status?: string | null;
+};
+
 const STATUS_OPTIONS = [
   { value: 'not_started', label: 'Not started' },
   { value: 'in_progress', label: 'In progress' },
@@ -90,6 +103,16 @@ export function ControlDrawer({
   const [evText, setEvText] = useState('');
   const [evSaving, setEvSaving] = useState(false);
   const [evError, setEvError] = useState<string | null>(null);
+  const [remPriority, setRemPriority] = useState('');
+  const [remDueDate, setRemDueDate] = useState('');
+  const [remNotes, setRemNotes] = useState('');
+  const [remSaving, setRemSaving] = useState(false);
+  const [remError, setRemError] = useState<string | null>(null);
+  const [workItems, setWorkItems] = useState<WorkItemLink[]>([]);
+  const [workItemsLoading, setWorkItemsLoading] = useState(false);
+  const [workItemError, setWorkItemError] = useState<string | null>(null);
+  const [jiraUrl, setJiraUrl] = useState('');
+  const [workItemSaving, setWorkItemSaving] = useState(false);
 
   const statusLabel = useMemo(
     () => STATUS_OPTIONS.find((opt) => opt.value === status)?.label ?? status,
@@ -110,6 +133,9 @@ export function ControlDrawer({
         setStatus(statusEnum);
         setNotes(data.status?.notes ?? '');
         setNaReason(data.status?.na_reason ?? '');
+        setRemPriority(data.status?.priority ?? '');
+        setRemDueDate(data.status?.due_date ? data.status.due_date.slice(0, 10) : '');
+        setRemNotes(data.status?.remediation_notes ?? '');
       })
       .catch((err) => {
         if (!isMounted) return;
@@ -122,6 +148,28 @@ export function ControlDrawer({
     return () => {
       isMounted = false;
     };
+  }, [open, controlKey, accessToken]);
+
+  const loadWorkItems = async () => {
+    if (!accessToken || !controlKey) return;
+    setWorkItemsLoading(true);
+    setWorkItemError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('source_type', 'control');
+      params.set('source_key', controlKey);
+      const data = await api.get<WorkItemLink[]>(`/compliance/work-items?${params.toString()}`, accessToken);
+      setWorkItems(data);
+    } catch (err) {
+      setWorkItemError(err instanceof Error ? err.message : 'Failed to load work items');
+    } finally {
+      setWorkItemsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open || !controlKey || !accessToken) return;
+    void loadWorkItems();
   }, [open, controlKey, accessToken]);
 
   const saveStatus = async () => {
@@ -170,6 +218,77 @@ export function ControlDrawer({
       setEvError(err instanceof Error ? err.message : 'Failed to add evidence');
     } finally {
       setEvSaving(false);
+    }
+  };
+
+  const saveRemediation = async () => {
+    if (!accessToken || !controlKey) return;
+    setRemSaving(true);
+    setRemError(null);
+    try {
+      const payload = {
+        priority: remPriority || null,
+        due_date: remDueDate || null,
+        remediation_notes: remNotes.trim() || null,
+      };
+      const updated = await api.put<ControlStatus>(
+        `/compliance/controls/${controlKey}/remediation`,
+        payload,
+        accessToken,
+      );
+      setDetail((prev) => (prev ? { ...prev, status: updated } : prev));
+      onUpdated?.();
+    } catch (err) {
+      setRemError(err instanceof Error ? err.message : 'Failed to update remediation');
+    } finally {
+      setRemSaving(false);
+    }
+  };
+
+  const linkJira = async () => {
+    if (!accessToken || !controlKey || !jiraUrl.trim()) return;
+    setWorkItemSaving(true);
+    setWorkItemError(null);
+    try {
+      await api.post(
+        '/compliance/work-items/link',
+        {
+          source_type: 'control',
+          source_key: controlKey,
+          link_type: 'jira',
+          url: jiraUrl.trim(),
+        },
+        accessToken,
+      );
+      setJiraUrl('');
+      await loadWorkItems();
+    } catch (err) {
+      setWorkItemError(err instanceof Error ? err.message : 'Failed to link Jira');
+    } finally {
+      setWorkItemSaving(false);
+    }
+  };
+
+  const createWorkOrder = async () => {
+    if (!accessToken || !controlKey || !detail) return;
+    setWorkItemSaving(true);
+    setWorkItemError(null);
+    try {
+      await api.post(
+        '/compliance/work-items/create-work-order',
+        {
+          source_type: 'control',
+          source_key: controlKey,
+          title: `Remediate ${detail.control.code}: ${detail.control.title}`,
+          description: remNotes.trim() || '',
+        },
+        accessToken,
+      );
+      await loadWorkItems();
+    } catch (err) {
+      setWorkItemError(err instanceof Error ? err.message : 'Failed to create work order');
+    } finally {
+      setWorkItemSaving(false);
     }
   };
 
@@ -237,6 +356,70 @@ export function ControlDrawer({
               </div>
               <Button type='button' onClick={saveStatus} disabled={saving}>
                 {saving ? 'Saving...' : 'Save status'}
+              </Button>
+            </div>
+
+            <div className='space-y-3 rounded-lg border bg-muted/20 p-4'>
+              <div>
+                <div className='text-xs text-muted-foreground'>Remediation</div>
+                <div className='text-sm font-medium'>Plan next steps</div>
+              </div>
+              <div className='grid gap-3 sm:grid-cols-2'>
+                <div className='space-y-2'>
+                  <Label>Priority</Label>
+                  <select
+                    className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
+                    value={remPriority}
+                    onChange={(e) => setRemPriority(e.target.value)}
+                  >
+                    <option value=''>Not set</option>
+                    <option value='high'>High</option>
+                    <option value='medium'>Medium</option>
+                    <option value='low'>Low</option>
+                  </select>
+                </div>
+                <div className='space-y-2'>
+                  <Label>Due date</Label>
+                  <Input type='date' value={remDueDate} onChange={(e) => setRemDueDate(e.target.value)} />
+                </div>
+              </div>
+              <div className='space-y-2'>
+                <Label>Remediation notes</Label>
+                <Textarea rows={3} value={remNotes} onChange={(e) => setRemNotes(e.target.value)} />
+              </div>
+              {remError ? <p className='text-sm text-red-600'>{remError}</p> : null}
+              <Button type='button' onClick={saveRemediation} disabled={remSaving}>
+                {remSaving ? 'Saving...' : 'Save remediation'}
+              </Button>
+            </div>
+
+            <div className='space-y-3 rounded-lg border bg-muted/10 p-4'>
+              <div className='text-sm font-semibold'>Work items</div>
+              {workItemsLoading ? (
+                <p className='text-sm text-muted-foreground'>Loading work items...</p>
+              ) : workItems.length === 0 ? (
+                <p className='text-sm text-muted-foreground'>No work items linked yet.</p>
+              ) : (
+                <ul className='space-y-1 text-sm text-muted-foreground'>
+                  {workItems.map((item) => (
+                    <li key={item.id}>
+                      {item.link_type}: {item.url || item.work_order_id}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {workItemError ? <p className='text-sm text-red-600'>{workItemError}</p> : null}
+              <div className='space-y-2'>
+                <Label>Link Jira ticket</Label>
+                <div className='flex gap-2'>
+                  <Input value={jiraUrl} onChange={(e) => setJiraUrl(e.target.value)} placeholder='https://jira/...' />
+                  <Button type='button' variant='outline' disabled={workItemSaving} onClick={linkJira}>
+                    Link
+                  </Button>
+                </div>
+              </div>
+              <Button type='button' variant='outline' disabled={workItemSaving} onClick={createWorkOrder}>
+                {workItemSaving ? 'Creating...' : 'Create Work Order'}
               </Button>
             </div>
 

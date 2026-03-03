@@ -20,6 +20,10 @@ export const tenantRoleOptions = [
   'compliance_editor',
   'compliance_admin',
   'parent',
+  'ir_viewer',
+  'ir_editor',
+  'ir_approver',
+  'ir_admin',
 ] as const;
 
 export function statusTone(status: string): string {
@@ -92,3 +96,68 @@ export function shortId(value?: string | null): string {
   if (v.length <= 12) return v;
   return `${v.slice(0, 8)}…${v.slice(-4)}`;
 }
+
+// ---------------------------------------------------------------------------
+// Integration Registry helpers
+// ---------------------------------------------------------------------------
+
+export function irStatusTone(status: string): string {
+  switch (status) {
+    case 'active':
+      return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+    case 'draft':
+      return 'bg-amber-100 text-amber-700 border-amber-200';
+    case 'disabled':
+      return 'bg-slate-100 text-slate-500 border-slate-200';
+    case 'deprecated':
+      return 'bg-red-100 text-red-600 border-red-200';
+    default:
+      return 'bg-slate-100 text-slate-600 border-slate-200';
+  }
+}
+
+export function irEnvTone(env: string): string {
+  switch (env?.toUpperCase()) {
+    case 'PROD':
+      return 'bg-orange-100 text-orange-700 border-orange-200';
+    case 'UAT':
+      return 'bg-sky-100 text-sky-700 border-sky-200';
+    default:
+      return 'bg-slate-100 text-slate-600 border-slate-200';
+  }
+}
+
+export function maskVaultRef(value?: string | null): string {
+  if (!value) return '—';
+  const parts = String(value).split('/');
+  if (parts.length > 4) {
+    return `${parts.slice(0, 4).join('/')}/***`;
+  }
+  return String(value);
+}
+
+export const IR_DEFAULT_COLUMNS = [
+  'service',
+  'env',
+  'dc',
+  'network',
+  'type',
+  'endpoint',
+  'status',
+  'updated',
+  'actions',
+] as const;
+
+export type IrColumnKey = (typeof IR_DEFAULT_COLUMNS)[number];
+
+export const IR_COLUMN_LABELS: Record<string, string> = {
+  service: 'Service',
+  env: 'Env',
+  dc: 'DC',
+  network: 'Network',
+  type: 'Type',
+  endpoint: 'Primary Endpoint',
+  status: 'Status',
+  updated: 'Last Change',
+  actions: 'Actions',
+};

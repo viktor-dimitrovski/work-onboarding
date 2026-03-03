@@ -499,6 +499,34 @@ class CompliancePracticeMatchRun(UUIDPrimaryKeyMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ComplianceSemanticMatchRun(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = 'semantic_match_runs'
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('success','failed')",
+            name='ck_compliance_semantic_match_runs_status',
+        ),
+        {'schema': COMPLIANCE_SCHEMA},
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        server_default=sa.text("current_setting('app.tenant_id')::uuid"),
+    )
+    profile_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default='success')
+    model_info_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    input_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    result_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=sa.text('now()')
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class CompliancePracticeMatchResult(UUIDPrimaryKeyMixin, Base):
     __tablename__ = 'practice_match_results'
     __table_args__ = ({'schema': COMPLIANCE_SCHEMA},)
@@ -582,6 +610,8 @@ class ComplianceClientRequirement(UUIDPrimaryKeyMixin, Base):
     priority: Mapped[str | None] = mapped_column(String(20), nullable=True)
     category: Mapped[str | None] = mapped_column(String(80), nullable=True)
     order_index: Mapped[int] = mapped_column(nullable=False, default=0)
+    coverage_percent: Mapped[float | None] = mapped_column(nullable=True)
+    coverage_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ComplianceClientMatchRun(UUIDPrimaryKeyMixin, Base):

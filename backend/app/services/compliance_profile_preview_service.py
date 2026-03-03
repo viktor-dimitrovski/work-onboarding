@@ -206,19 +206,24 @@ def framework_practice_metrics(
     if not controls:
         return None, None, 0
 
-    # Coverage: any accepted practice match
-    covered_keys = set(
-        db.execute(
-            select(CompliancePracticeMatchResult.control_key)
-            .where(
-                CompliancePracticeMatchResult.tenant_id == tenant_id,
-                CompliancePracticeMatchResult.accepted.is_(True),
-            )
-            .distinct()
-        ).scalars().all()
-    )
+    # Coverage: best accepted practice coverage score per control
+    coverage_rows = db.execute(
+        select(
+            CompliancePracticeMatchResult.control_key,
+            CompliancePracticeMatchResult.coverage_score,
+            CompliancePracticeMatchResult.confidence,
+        ).where(
+            CompliancePracticeMatchResult.tenant_id == tenant_id,
+            CompliancePracticeMatchResult.accepted.is_(True),
+        )
+    ).all()
+    coverage_scores: dict[str, float] = {}
+    for control_key, score, confidence in coverage_rows:
+        value = float(score or 0.0) or float(confidence or 0.0)
+        coverage_scores[control_key] = max(coverage_scores.get(control_key, 0.0), min(value, 1.0))
+
     total_controls = len(controls)
-    coverage = len([ck for ck, _w in controls if ck in covered_keys]) / total_controls
+    coverage = sum(coverage_scores.get(ck, 0.0) for ck, _w in controls) / total_controls
 
     # Practice implementation %: weighted avg of best mapped practice status score, default 0
     best_scores = _best_practice_scores(db, tenant_id=tenant_id)

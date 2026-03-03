@@ -89,6 +89,19 @@ type SemanticMatchResult = {
   ran_at: string;
 };
 
+type SemanticMatchApplySummary = {
+  results_created: number;
+  results_updated: number;
+  evidence_created: number;
+  statuses_updated: number;
+  practices_updated: number;
+  unmatched_practices: string[];
+};
+
+type SemanticMatchApplyResponse = SemanticMatchApplySummary & {
+  match: SemanticMatchResult;
+};
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function pct(v: number | null | undefined) {
@@ -117,6 +130,7 @@ export default function ProfilePage() {
   const { accessToken, isLoading: authLoading } = useAuth();
   const { context, isLoading: tenantLoading, hasModule, hasPermission } = useTenant();
   const tenantSlug = context?.tenant?.slug;
+  const canWriteCompliance = hasPermission("compliance:write");
 
   useEffect(() => {
     if (!authLoading && !tenantLoading && !(hasModule("compliance") && hasPermission("compliance:read"))) {
@@ -134,6 +148,7 @@ export default function ProfilePage() {
   const [matchResult, setMatchResult] = useState<SemanticMatchResult | null>(null);
   const [matchLoading, setMatchLoading] = useState(false);
   const [matchError, setMatchError] = useState<string | null>(null);
+  const [applySummary, setApplySummary] = useState<SemanticMatchApplySummary | null>(null);
   const [showMatchPanel, setShowMatchPanel] = useState(false);
 
   // Framework CRUD
@@ -180,6 +195,24 @@ export default function ProfilePage() {
     }
   }, [accessToken, tenantSlug]);
 
+  const loadLatestMatch = useCallback(async () => {
+    if (!accessToken || !tenantSlug) return;
+    try {
+      const data = await api.get<Partial<SemanticMatchResult>>(
+        "/compliance/profile/semantic-match/latest",
+        accessToken
+      );
+      if (!data || typeof data.overall_coverage_percent !== "number" || !Array.isArray(data.frameworks)) {
+        return;
+      }
+      setMatchResult(data as SemanticMatchResult);
+      setApplySummary(null);
+      setShowMatchPanel(true);
+    } catch {
+      // Ignore if no prior run exists.
+    }
+  }, [accessToken, tenantSlug]);
+
   useEffect(() => {
     if (tenantLoading) return;
     if (!tenantSlug) {
@@ -187,21 +220,40 @@ export default function ProfilePage() {
       return;
     }
     loadPreview();
-  }, [tenantLoading, tenantSlug, loadPreview]);
+    loadLatestMatch();
+  }, [tenantLoading, tenantSlug, loadPreview, loadLatestMatch]);
 
   // ── Semantic Match ──────────────────────────────────────────────────────────
   const runSemanticMatch = async () => {
     if (!accessToken) return;
     setMatchLoading(true);
     setMatchError(null);
+    setApplySummary(null);
     setShowMatchPanel(true);
     try {
-      const result = await api.post<SemanticMatchResult>(
-        "/compliance/profile/semantic-match",
-        {},
-        accessToken
-      );
-      setMatchResult(result);
+      if (canWriteCompliance) {
+        const result = await api.post<SemanticMatchApplyResponse>(
+          "/compliance/profile/semantic-match/apply",
+          {},
+          accessToken
+        );
+        setMatchResult(result.match);
+        setApplySummary({
+          results_created: result.results_created,
+          results_updated: result.results_updated,
+          evidence_created: result.evidence_created,
+          statuses_updated: result.statuses_updated,
+          practices_updated: result.practices_updated,
+          unmatched_practices: result.unmatched_practices || [],
+        });
+      } else {
+        const result = await api.post<SemanticMatchResult>(
+          "/compliance/profile/semantic-match",
+          {},
+          accessToken
+        );
+        setMatchResult(result);
+      }
     } catch (e: unknown) {
       setMatchError(e instanceof Error ? e.message : "Semantic match failed.");
     } finally {
@@ -419,10 +471,10 @@ export default function ProfilePage() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <BookOpen className="h-6 w-6 text-primary" />
-            Active Profile
+            Compliance Overview
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Key: <code className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono">{preview.active_profile_key}</code>
+            Active profile: <code className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono">{preview.active_profile_key}</code>
             {" · "}{preview.frameworks.length} frameworks{" · "}
             {preview.profile_controls.length} controls
           </p>
@@ -437,7 +489,13 @@ export default function ProfilePage() {
             ) : (
               <Sparkles className="h-4 w-4 mr-1.5" />
             )}
-            {matchResult ? "Re-run AI Analysis" : "Run AI Analysis"}
+            {canWriteCompliance
+              ? matchResult
+                ? "Re-run & Apply AI Analysis"
+                : "Run & Apply AI Analysis"
+              : matchResult
+              ? "Re-run AI Analysis"
+              : "Run AI Analysis"}
           </Button>
         </div>
       </div>
@@ -629,6 +687,28 @@ export default function ProfilePage() {
 
             {matchResult && !matchLoading && (
               <div className="space-y-4">
+                {applySummary && (
+                  <Alert className="flex items-start gap-3 text-sm">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5" aria-hidden />
+                    <div className="space-y-1">
+                      <div className="font-medium text-foreground">
+                        Applied AI results to coverage and evidence
+                      </div>
+                      <div className="text-muted-foreground">
+                        Matches: {applySummary.results_created + applySummary.results_updated} · Evidence:{" "}
+                        {applySummary.evidence_created} · Status updates: {applySummary.statuses_updated} · Practices:{" "}
+                        {applySummary.practices_updated}
+                      </div>
+                      {applySummary.unmatched_practices.length > 0 && (
+                        <div className="text-muted-foreground">
+                          Unmatched practice titles: {applySummary.unmatched_practices.slice(0, 4).join(", ")}
+                          {applySummary.unmatched_practices.length > 4 &&
+                            ` +${applySummary.unmatched_practices.length - 4} more`}
+                        </div>
+                      )}
+                    </div>
+                  </Alert>
+                )}
                 {/* Summary */}
                 <Card>
                   <CardHeader className="pb-2">

@@ -45,6 +45,17 @@ from app.models.compliance import (
     ComplianceTenantProfile,
     ComplianceWorkItemLink,
 )
+from app.models.integration_registry import (
+    IrAuditLog,
+    IrDictionary,
+    IrDictionaryItem,
+    IrEndpoint,
+    IrInstance,
+    IrRouteHop,
+    IrService,
+    IrTenantCrypto,
+    IrUserGridPrefs,
+)
 from app.models.rbac import Role, User, UserRole
 from app.models.tenant import Group, GroupMembership, Tenant, TenantDomain, TenantMembership
 from app.models.release_mgmt import ReleaseManifest, ReleasePlan, ReleaseWorkOrder, ReleaseWorkOrderService
@@ -113,6 +124,15 @@ __all__ = [
     'ComplianceTenantLibraryProfileControl',
     'ComplianceTenantProfile',
     'ComplianceWorkItemLink',
+    'IrAuditLog',
+    'IrDictionary',
+    'IrDictionaryItem',
+    'IrEndpoint',
+    'IrInstance',
+    'IrRouteHop',
+    'IrService',
+    'IrTenantCrypto',
+    'IrUserGridPrefs',
     'MentorReview',
     'OnboardingAssignment',
     'QuizAttempt',

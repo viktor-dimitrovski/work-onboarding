@@ -92,6 +92,27 @@ def run_client_match(
     )
     input_hash = _input_hash(requirements, batch_id)
 
+    cached_run = db.scalar(
+        select(ComplianceClientMatchRun)
+        .where(
+            ComplianceClientMatchRun.tenant_id == tenant_id,
+            ComplianceClientMatchRun.client_set_version_id == version.id,
+            ComplianceClientMatchRun.input_hash == input_hash,
+            ComplianceClientMatchRun.status == "success",
+        )
+        .order_by(ComplianceClientMatchRun.finished_at.desc().nullslast())
+        .limit(1)
+    )
+    if cached_run:
+        cached_results = db.scalars(
+            select(ComplianceClientMatchResult).where(
+                ComplianceClientMatchResult.tenant_id == tenant_id,
+                ComplianceClientMatchResult.run_id == cached_run.id,
+            )
+        ).all()
+        if cached_results:
+            return cached_run, cached_results
+
     run = ComplianceClientMatchRun(
         tenant_id=tenant_id,
         client_set_version_id=version.id,

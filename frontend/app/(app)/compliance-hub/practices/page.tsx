@@ -71,6 +71,7 @@ export default function CompliancePracticesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [matching, setMatching] = useState(false);
+  const [bulkMatching, setBulkMatching] = useState(false);
   const [applying, setApplying] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -136,6 +137,20 @@ export default function CompliancePracticesPage() {
       setError(err instanceof Error ? err.message : "Matching failed.");
     } finally {
       setMatching(false);
+    }
+  };
+
+  const bulkMatch = async () => {
+    if (!accessToken) return;
+    setBulkMatching(true);
+    setError(null);
+    try {
+      await api.post("/compliance/practices/match/bulk", {}, accessToken);
+      await loadItems();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Bulk match failed.");
+    } finally {
+      setBulkMatching(false);
     }
   };
 
@@ -335,9 +350,14 @@ export default function CompliancePracticesPage() {
             Describe what you do and map it to controls.
           </p>
         </div>
-        <Button type="button" size="sm" onClick={openAdd}>
-          Add practice
-        </Button>
+        <div className="flex gap-2">
+          <Button type="button" size="sm" variant="outline" disabled={bulkMatching} onClick={bulkMatch}>
+            {bulkMatching ? "Bulk matching..." : "Bulk match"}
+          </Button>
+          <Button type="button" size="sm" onClick={openAdd}>
+            Add practice
+          </Button>
+        </div>
       </div>
 
       {error ? (

@@ -23,6 +23,7 @@ from app.models.compliance import (
     ComplianceTenantProfile,
 )
 from app.services.compliance_summary_service import compute_framework_summary, compute_summary
+from app.services.compliance_client_coverage_service import compute_client_coverage
 
 
 @dataclass
@@ -55,6 +56,7 @@ def create_snapshot(
         profile_key=profile_key,
         scope=scope,
         framework_key=framework_key,
+        client_set_version_id=client_set_version_id,
     )
 
     input_hash = _compute_input_hash(
@@ -142,7 +144,21 @@ def _compute_metrics(
     profile_key: str,
     scope: str,
     framework_key: str | None,
+    client_set_version_id: UUID | None,
 ) -> SnapshotMetrics:
+    if scope == "client_set":
+        if not client_set_version_id:
+            raise ValueError("client_set_version_id is required for client_set snapshots.")
+        coverage_response, _ = compute_client_coverage(
+            db,
+            tenant_id=tenant_id,
+            version_id=client_set_version_id,
+        )
+        return SnapshotMetrics(
+            implementation_percent=coverage_response.overall_percent,
+            coverage_percent=coverage_response.coverage_percent,
+            metrics_json=coverage_response.model_dump(mode="json"),
+        )
     if scope == "framework" and framework_key:
         summary = compute_framework_summary(db, tenant_id=tenant_id, framework_key=framework_key)
         implementation = summary["framework"]["compliance"] if summary else None
@@ -330,23 +346,37 @@ def _compute_coverage_percent(
     if not profile_controls:
         return None
 
-    accepted_practice = db.execute(
-        select(CompliancePracticeMatchResult.control_key)
-        .where(
+    practice_rows = db.execute(
+        select(
+            CompliancePracticeMatchResult.control_key,
+            CompliancePracticeMatchResult.coverage_score,
+            CompliancePracticeMatchResult.confidence,
+        ).where(
             CompliancePracticeMatchResult.tenant_id == tenant_id,
             CompliancePracticeMatchResult.accepted.is_(True),
         )
-        .distinct()
-    ).scalars().all()
-    accepted_client = db.execute(
-        select(ComplianceClientMatchResult.control_key)
-        .where(
+    ).all()
+    client_rows = db.execute(
+        select(
+            ComplianceClientMatchResult.control_key,
+            ComplianceClientMatchResult.coverage_score,
+            ComplianceClientMatchResult.confidence,
+        ).where(
             ComplianceClientMatchResult.tenant_id == tenant_id,
             ComplianceClientMatchResult.accepted.is_(True),
         )
-        .distinct()
-    ).scalars().all()
+    ).all()
 
-    accepted_controls = set(accepted_practice) | set(accepted_client)
-    covered = len([ck for ck in profile_controls if ck in accepted_controls])
+    practice_scores: dict[str, float] = {}
+    for control_key, score, confidence in practice_rows:
+        value = float(score or 0.0) or float(confidence or 0.0)
+        practice_scores[control_key] = max(practice_scores.get(control_key, 0.0), min(value, 1.0))
+    client_scores: dict[str, float] = {}
+    for control_key, score, confidence in client_rows:
+        value = float(score or 0.0) or float(confidence or 0.0)
+        client_scores[control_key] = max(client_scores.get(control_key, 0.0), min(value, 1.0))
+
+    covered = 0.0
+    for control_key in profile_controls:
+        covered += max(practice_scores.get(control_key, 0.0), client_scores.get(control_key, 0.0))
     return covered / len(profile_controls)

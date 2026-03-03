@@ -36,6 +36,7 @@ MODULE_PERMISSIONS: dict[str, set[str]] = {
     'users': {'users:read', 'users:write'},
     'settings': {'settings:manage'},
     'billing': {'billing:read', 'billing:manage'},
+    'integration_registry': {'ir:read', 'ir:write', 'ir:approve', 'ir:admin'},
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -83,11 +84,19 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'settings:manage',
         'billing:read',
         'billing:manage',
+        'ir:read',
+        'ir:write',
+        'ir:approve',
+        'ir:admin',
     },
     'compliance_viewer': {'compliance:read'},
     'compliance_editor': {'compliance:read', 'compliance:write'},
     'compliance_admin': {'compliance:read', 'compliance:write', 'compliance:admin'},
     'parent': {'assignments:read'},
+    'ir_viewer': {'ir:read'},
+    'ir_editor': {'ir:read', 'ir:write'},
+    'ir_approver': {'ir:read', 'ir:write', 'ir:approve'},
+    'ir_admin': {'ir:read', 'ir:write', 'ir:approve', 'ir:admin'},
 }
 
 ROLE_LABELS: dict[str, dict[str, str]] = {

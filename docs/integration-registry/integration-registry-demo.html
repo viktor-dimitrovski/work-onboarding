@@ -1,0 +1,1495 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Integration Registry – HTML Working Demo</title>
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#0f1a2e;
+      --panel2:#0c1627;
+      --muted:#93a4c7;
+      --text:#e8eefc;
+      --line:rgba(255,255,255,.09);
+      --chip:rgba(255,255,255,.08);
+      --good:rgba(77, 215, 153, .18);
+      --warn:rgba(255, 200, 87, .18);
+      --bad: rgba(255, 107, 107, .18);
+      --accent:#7aa2ff;
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius:14px;
+      --radius2:20px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      background: radial-gradient(1000px 500px at 30% -10%, rgba(122,162,255,.18), transparent 65%),
+                  radial-gradient(900px 450px at 90% 10%, rgba(77,215,153,.12), transparent 65%),
+                  var(--bg);
+      color:var(--text);
+      font-family:var(--sans);
+      height:100vh;
+      overflow:hidden;
+    }
+    a{ color:inherit; text-decoration:none; }
+    .app{
+      display:grid;
+      grid-template-columns: 290px 1fr;
+      height:100vh;
+    }
+
+    /* Sidebar */
+    .sidebar{
+      background: linear-gradient(180deg, var(--panel), var(--panel2));
+      border-right:1px solid var(--line);
+      padding:18px 14px;
+      display:flex;
+      flex-direction:column;
+      gap:14px;
+    }
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding:10px 10px;
+      border:1px solid var(--line);
+      border-radius: var(--radius2);
+      box-shadow: var(--shadow);
+      background: rgba(255,255,255,.03);
+    }
+    .logo{
+      width:38px;height:38px;border-radius:12px;
+      background: linear-gradient(135deg, rgba(122,162,255,.9), rgba(77,215,153,.8));
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      position:relative;
+    }
+    .logo:after{
+      content:"";
+      position:absolute; inset:10px;
+      border-radius:10px;
+      background: rgba(11,18,32,.35);
+      border:1px solid rgba(255,255,255,.12);
+    }
+    .brand h1{ font-size:14px; margin:0; letter-spacing:.2px; }
+    .brand .sub{ font-size:12px; color:var(--muted); margin-top:2px; }
+
+    .nav{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      padding:6px;
+    }
+    .nav button{
+      display:flex; align-items:center; gap:10px;
+      width:100%;
+      padding:10px 12px;
+      background: transparent;
+      color: var(--text);
+      border:1px solid transparent;
+      border-radius: 14px;
+      cursor:pointer;
+      font-size:13px;
+      text-align:left;
+    }
+    .nav button:hover{
+      background: rgba(255,255,255,.05);
+      border-color: rgba(255,255,255,.08);
+    }
+    .nav button.active{
+      background: rgba(122,162,255,.14);
+      border-color: rgba(122,162,255,.25);
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+    .nav .ico{
+      width:18px;height:18px; border-radius:6px;
+      background: rgba(255,255,255,.08);
+      border:1px solid rgba(255,255,255,.1);
+    }
+    .section-title{
+      margin:10px 10px 0 10px;
+      font-size:11px;
+      color:var(--muted);
+      letter-spacing:.8px;
+      text-transform:uppercase;
+    }
+    .sidebar-footer{
+      margin-top:auto;
+      padding:10px;
+      border-top:1px solid var(--line);
+      color:var(--muted);
+      font-size:12px;
+      display:flex; justify-content:space-between; align-items:center;
+      gap:10px;
+    }
+    .pill{
+      padding:6px 10px;
+      border-radius: 999px;
+      border:1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      font-size:12px;
+      display:inline-flex;
+      gap:8px;
+      align-items:center;
+      white-space:nowrap;
+    }
+    .dot{ width:7px;height:7px;border-radius:99px;background: rgba(77,215,153,.9); box-shadow: 0 0 18px rgba(77,215,153,.6); }
+
+    /* Main */
+    .main{
+      display:flex;
+      flex-direction:column;
+      height:100vh;
+      overflow:hidden;
+    }
+    .topbar{
+      padding:14px 18px;
+      border-bottom:1px solid var(--line);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:14px;
+      background: rgba(255,255,255,.02);
+      backdrop-filter: blur(8px);
+    }
+    .topbar .title{
+      display:flex; flex-direction:column; gap:4px;
+    }
+    .topbar h2{ margin:0; font-size:15px; letter-spacing:.2px;}
+    .crumbs{
+      color:var(--muted);
+      font-size:12px;
+    }
+    .actions{
+      display:flex; gap:10px; align-items:center;
+    }
+    .btn{
+      padding:9px 12px;
+      border-radius: 12px;
+      border:1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      font-size:13px;
+      cursor:pointer;
+    }
+    .btn:hover{ background: rgba(255,255,255,.06); }
+    .btn.primary{
+      border-color: rgba(122,162,255,.35);
+      background: rgba(122,162,255,.14);
+    }
+    .btn.primary:hover{ background: rgba(122,162,255,.18); }
+    .btn.ghost{
+      background: transparent;
+    }
+    .btn.small{ padding:7px 10px; font-size:12px; border-radius: 11px; }
+    .kbd{
+      font-family:var(--mono);
+      font-size:11px;
+      color: var(--muted);
+      padding:2px 6px;
+      border:1px solid rgba(255,255,255,.10);
+      border-bottom-color: rgba(255,255,255,.06);
+      background: rgba(0,0,0,.18);
+      border-radius: 8px;
+    }
+    .content{
+      padding:16px 18px;
+      overflow:auto;
+      height:calc(100vh - 64px);
+    }
+
+    /* Cards */
+    .row{ display:flex; gap:12px; flex-wrap:wrap; }
+    .card{
+      border:1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.03);
+      border-radius: var(--radius2);
+      box-shadow: var(--shadow);
+    }
+    .card .hd{
+      padding:12px 14px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .card .hd .left{
+      display:flex; flex-direction:column; gap:3px;
+    }
+    .card .hd .left .h{
+      font-size:13px;
+      margin:0;
+    }
+    .card .hd .left .s{
+      font-size:12px; color:var(--muted);
+    }
+    .card .bd{ padding:12px 14px; }
+
+    /* Filters */
+    .filters{
+      display:flex; gap:10px; flex-wrap:wrap;
+      align-items:center;
+    }
+    .input, select{
+      background: rgba(0,0,0,.20);
+      border:1px solid rgba(255,255,255,.10);
+      color: var(--text);
+      padding:9px 10px;
+      border-radius: 12px;
+      font-size:13px;
+      outline:none;
+    }
+    .input::placeholder{ color: rgba(147,164,199,.85); }
+    select{
+      appearance:none;
+      padding-right:28px;
+      background-image:
+        linear-gradient(45deg, transparent 50%, rgba(255,255,255,.55) 50%),
+        linear-gradient(135deg, rgba(255,255,255,.55) 50%, transparent 50%);
+      background-position:
+        calc(100% - 16px) 16px,
+        calc(100% - 11px) 16px;
+      background-size:5px 5px, 5px 5px;
+      background-repeat:no-repeat;
+    }
+    .chip{
+      display:inline-flex;
+      gap:8px;
+      align-items:center;
+      padding:6px 10px;
+      border-radius: 999px;
+      border:1px solid rgba(255,255,255,.10);
+      background: var(--chip);
+      font-size:12px;
+      color: var(--text);
+      white-space:nowrap;
+    }
+    .chip .x{ cursor:pointer; color: var(--muted); }
+    .tag{
+      font-size:11px;
+      padding:4px 8px;
+      border-radius: 999px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      white-space:nowrap;
+    }
+    .tag.good{ background: var(--good); border-color: rgba(77,215,153,.25); }
+    .tag.warn{ background: var(--warn); border-color: rgba(255,200,87,.25); }
+    .tag.bad{  background: var(--bad);  border-color: rgba(255,107,107,.25); }
+    .mono{ font-family: var(--mono); }
+
+    /* Grid */
+    .grid-wrap{ overflow:auto; border-radius: var(--radius2); border:1px solid rgba(255,255,255,.10); }
+    table{ width:100%; border-collapse:collapse; min-width: 980px; }
+    thead th{
+      text-align:left;
+      font-size:11px;
+      color: var(--muted);
+      letter-spacing:.8px;
+      text-transform:uppercase;
+      padding:10px 12px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+      background: rgba(0,0,0,.14);
+      position:sticky; top:0; z-index:1;
+    }
+    tbody td{
+      padding:10px 12px;
+      border-bottom:1px solid rgba(255,255,255,.06);
+      font-size:13px;
+      vertical-align:middle;
+    }
+    tbody tr:hover{
+      background: rgba(255,255,255,.04);
+      cursor:pointer;
+    }
+    .col-actions{
+      display:flex; gap:8px; align-items:center; justify-content:flex-end;
+    }
+    .link{
+      color: rgba(122,162,255,.95);
+    }
+    .right{ text-align:right; }
+
+    /* Drawer */
+    .drawer-overlay{
+      position:fixed; inset:0;
+      background: rgba(0,0,0,.55);
+      display:none;
+      z-index:50;
+    }
+    .drawer{
+      position:fixed;
+      right:0; top:0; height:100%;
+      width:min(520px, 95vw);
+      background: linear-gradient(180deg, rgba(15,26,46,.98), rgba(11,18,32,.98));
+      border-left:1px solid rgba(255,255,255,.10);
+      box-shadow: -20px 0 50px rgba(0,0,0,.35);
+      transform: translateX(100%);
+      transition: transform .18s ease;
+      display:flex; flex-direction:column;
+    }
+    .drawer-overlay.show{ display:block; }
+    .drawer-overlay.show .drawer{ transform: translateX(0); }
+    .drawer-hd{
+      padding:14px 14px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+      display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
+    }
+    .drawer-hd .t{ display:flex; flex-direction:column; gap:4px; }
+    .drawer-hd .t .h{ margin:0; font-size:14px; }
+    .drawer-hd .t .s{ color:var(--muted); font-size:12px; }
+    .drawer-body{
+      padding:12px 14px;
+      overflow:auto;
+      flex:1;
+    }
+    .tabs{
+      display:flex; gap:8px; flex-wrap:wrap;
+      padding:10px 14px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+    }
+    .tab{
+      padding:7px 10px;
+      border-radius: 12px;
+      border:1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.03);
+      font-size:12px;
+      cursor:pointer;
+      color: var(--text);
+    }
+    .tab.active{
+      border-color: rgba(122,162,255,.35);
+      background: rgba(122,162,255,.14);
+    }
+    .kv{
+      display:grid;
+      grid-template-columns: 150px 1fr;
+      gap:8px 12px;
+      align-items:start;
+      font-size:13px;
+      margin-top:10px;
+    }
+    .kv .k{
+      color: var(--muted);
+      font-size:12px;
+    }
+    .kv .v{ word-break: break-word; }
+    .muted{ color: var(--muted); }
+    .hr{ height:1px; background: rgba(255,255,255,.08); margin:12px 0; }
+
+    /* Modal */
+    .modal-overlay{
+      position:fixed; inset:0;
+      background: rgba(0,0,0,.55);
+      display:none;
+      z-index:60;
+      align-items:center;
+      justify-content:center;
+      padding:18px;
+    }
+    .modal-overlay.show{ display:flex; }
+    .modal{
+      width:min(560px, 96vw);
+      border-radius: var(--radius2);
+      border:1px solid rgba(255,255,255,.12);
+      background: linear-gradient(180deg, rgba(15,26,46,.98), rgba(11,18,32,.98));
+      box-shadow: var(--shadow);
+      overflow:hidden;
+    }
+    .modal .hd{
+      padding:12px 14px;
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+    }
+    .modal .bd{ padding:12px 14px; }
+    .modal .ft{
+      padding:12px 14px;
+      display:flex; justify-content:flex-end; gap:10px;
+      border-top:1px solid rgba(255,255,255,.08);
+    }
+    .checklist{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:10px 14px;
+      margin-top:10px;
+    }
+    .ck{
+      display:flex; gap:10px; align-items:flex-start;
+      padding:10px 10px;
+      border:1px solid rgba(255,255,255,.08);
+      border-radius: 14px;
+      background: rgba(255,255,255,.03);
+    }
+    .ck input{ margin-top:3px; }
+    .ck .lbl{ font-size:13px; }
+    .ck .desc{ font-size:12px; color:var(--muted); margin-top:3px; }
+
+    /* Dictionary page */
+    .split{
+      display:grid;
+      grid-template-columns: 260px 1fr;
+      gap:12px;
+    }
+    .list{
+      display:flex; flex-direction:column; gap:8px;
+    }
+    .list .item{
+      padding:10px 12px;
+      border:1px solid rgba(255,255,255,.08);
+      border-radius: 14px;
+      background: rgba(255,255,255,.03);
+      cursor:pointer;
+    }
+    .list .item.active{ border-color: rgba(122,162,255,.35); background: rgba(122,162,255,.12); }
+    .list .item .n{ font-size:13px; }
+    .list .item .k{ font-size:12px; color:var(--muted); margin-top:3px; }
+    .hint{
+      font-size:12px;
+      color:var(--muted);
+      margin-top:8px;
+      line-height:1.4;
+    }
+
+    /* Responsive */
+    @media (max-width: 980px){
+      .app{ grid-template-columns: 88px 1fr; }
+      .brand .txt{ display:none; }
+      .section-title{ display:none; }
+      .nav button span.txt{ display:none; }
+      .sidebar{ padding:16px 10px; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"></div>
+      <div class="txt">
+        <h1>Integration Registry</h1>
+        <div class="sub">Connections catalog + audit</div>
+      </div>
+    </div>
+
+    <div class="section-title">Module</div>
+    <nav class="nav" aria-label="Integration Registry navigation">
+      <button class="active" data-page="connections"><span class="ico"></span><span class="txt">Connections</span></button>
+      <button data-page="overview"><span class="ico"></span><span class="txt">Overview</span></button>
+      <button data-page="services"><span class="ico"></span><span class="txt">Services</span></button>
+      <button data-page="dictionaries"><span class="ico"></span><span class="txt">Dictionaries</span></button>
+      <button data-page="audit"><span class="ico"></span><span class="txt">Audit / History</span></button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <span class="pill"><span class="dot"></span> UAT mode</span>
+      <span class="pill mono">RBAC</span>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="topbar">
+      <div class="title">
+        <div class="crumbs" id="crumbs">Integration Registry / Connections</div>
+        <h2 id="pageTitle">Connections</h2>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" id="btnColumns" title="Choose visible columns"><span class="mono">Columns</span></button>
+        <button class="btn" id="btnHelp" title="Keyboard shortcuts"><span class="mono">?</span></button>
+        <button class="btn primary" id="btnNew">New connection</button>
+      </div>
+    </header>
+
+    <section class="content">
+      <!-- Connections page -->
+      <div id="page-connections">
+        <div class="card" style="margin-bottom:12px;">
+          <div class="hd">
+            <div class="left">
+              <div class="h">Filters</div>
+              <div class="s">Search by client / service / domain / IP</div>
+            </div>
+            <div class="right muted" style="font-size:12px;">Tip: click a row → details drawer</div>
+          </div>
+          <div class="bd">
+            <div class="filters">
+              <input class="input" id="q" placeholder="Search…" style="min-width:220px;"/>
+              <select id="tenant">
+                <option value="">Tenant: Any</option>
+                <option>Capital</option>
+                <option>Erste</option>
+                <option>OTP</option>
+              </select>
+              <select id="env">
+                <option value="">Env: Any</option>
+                <option>UAT</option>
+                <option>PROD</option>
+              </select>
+              <select id="dc">
+                <option value="">DC: Any</option>
+                <option>MK-DC1</option>
+                <option>RO-DC1</option>
+                <option>EU-WEST</option>
+              </select>
+              <select id="type">
+                <option value="">Type: Any</option>
+                <option>HTTP API</option>
+                <option>Database</option>
+                <option>Message Broker</option>
+              </select>
+              <button class="btn small" id="btnClear">Clear</button>
+
+              <span class="chip"><span class="mono">Public/Private</span> <span class="muted">per endpoint</span></span>
+              <span class="chip"><span class="mono">Vault</span> <span class="muted">ref only</span></span>
+              <span class="chip"><span class="mono">History</span> <span class="muted">snapshot versions</span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-wrap">
+          <table id="grid">
+            <thead>
+              <tr>
+                <th data-col="tenant">Tenant</th>
+                <th data-col="service">Service</th>
+                <th data-col="env">Env</th>
+                <th data-col="dc">DC</th>
+                <th data-col="network">Network</th>
+                <th data-col="type">Type</th>
+                <th data-col="endpoint">Primary Endpoint</th>
+                <th data-col="status">Status</th>
+                <th data-col="updated">Last Change</th>
+                <th data-col="actions" class="right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="gridBody"></tbody>
+          </table>
+        </div>
+
+        <div class="hint">
+          Demo features included: column picker (persisted in localStorage), details drawer with tabs, dictionary editor page mock, and “Add new” behavior in dropdowns (in the “New connection” modal).
+        </div>
+      </div>
+
+      <!-- Dictionaries page -->
+      <div id="page-dictionaries" style="display:none;">
+        <div class="card">
+          <div class="hd">
+            <div class="left">
+              <div class="h">Dictionaries (Šifrarnici)</div>
+              <div class="s">All dropdowns are driven by these code lists</div>
+            </div>
+            <div>
+              <button class="btn small" id="btnAddItem">Add item</button>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="split">
+              <div>
+                <div class="list" id="dictList"></div>
+                <div class="hint">Click a dictionary to edit items. Codes should be stable (do not change if integrations depend on them). Disable instead of delete when in use.</div>
+              </div>
+              <div class="grid-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Code</th>
+                      <th>Label</th>
+                      <th>Active</th>
+                      <th>Updated</th>
+                      <th class="right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dictItems"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Placeholder pages -->
+      <div id="page-overview" style="display:none;">
+        <div class="row">
+          <div class="card" style="flex:1; min-width:280px;">
+            <div class="hd"><div class="left"><div class="h">Overview</div><div class="s">Quick counters</div></div></div>
+            <div class="bd">
+              <div class="row">
+                <span class="pill"><span class="dot"></span> Active: <b id="cntActive">0</b></span>
+                <span class="pill">UAT: <b id="cntUat">0</b></span>
+                <span class="pill">PROD: <b id="cntProd">0</b></span>
+              </div>
+              <div class="hr"></div>
+              <div class="muted">For MVP: keep this simple (counts + recently changed). Add charts later.</div>
+            </div>
+          </div>
+          <div class="card" style="flex:1; min-width:280px;">
+            <div class="hd"><div class="left"><div class="h">Recently changed</div><div class="s">Last 5 updates</div></div></div>
+            <div class="bd" id="recent"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="page-services" style="display:none;">
+        <div class="card">
+          <div class="hd"><div class="left"><div class="h">Services</div><div class="s">Logical catalog (SXS, BC Connectors…)</div></div></div>
+          <div class="bd" class="muted">
+            <div class="muted">Demo placeholder: in the real module this page lists integration_service and links to instances.</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="page-audit" style="display:none;">
+        <div class="card">
+          <div class="hd"><div class="left"><div class="h">Audit / History</div><div class="s">Search who changed what, when</div></div></div>
+          <div class="bd">
+            <div class="muted">Demo placeholder. In implementation: global audit log with entity_type/entity_id/version/changed_by/change_reason + snapshot/diff view.</div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+</div>
+
+<!-- Drawer -->
+<div class="drawer-overlay" id="drawerOverlay" role="dialog" aria-modal="true" aria-label="Connection details">
+  <div class="drawer">
+    <div class="drawer-hd">
+      <div class="t">
+        <p class="h" id="drawerTitle" style="margin:0;">—</p>
+        <div class="s" id="drawerSub">—</div>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="btn small" id="btnEdit">Edit</button>
+        <button class="btn small ghost" id="btnCloseDrawer">Close</button>
+      </div>
+    </div>
+    <div class="tabs" id="drawerTabs">
+      <button class="tab active" data-tab="overview">Overview</button>
+      <button class="tab" data-tab="endpoints">Endpoints</button>
+      <button class="tab" data-tab="routes">Routes</button>
+      <button class="tab" data-tab="settings">Settings</button>
+      <button class="tab" data-tab="history">History</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </div>
+</div>
+
+<!-- Columns Modal -->
+<div class="modal-overlay" id="columnsOverlay" role="dialog" aria-modal="true" aria-label="Choose visible columns">
+  <div class="modal">
+    <div class="hd">
+      <div>
+        <div style="font-size:13px;">Columns</div>
+        <div class="muted" style="font-size:12px;">Choose what’s visible in the grid (saved in this demo via localStorage).</div>
+      </div>
+      <button class="btn small ghost" id="btnCloseColumns">Close</button>
+    </div>
+    <div class="bd">
+      <input class="input" id="colSearch" placeholder="Search columns…" style="width:100%;"/>
+      <div class="checklist" id="colChecklist"></div>
+    </div>
+    <div class="ft">
+      <button class="btn" id="btnResetCols">Reset</button>
+      <button class="btn primary" id="btnApplyCols">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- Help Modal -->
+<div class="modal-overlay" id="helpOverlay" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+  <div class="modal">
+    <div class="hd">
+      <div>
+        <div style="font-size:13px;">Help</div>
+        <div class="muted" style="font-size:12px;">Keyboard shortcuts (demo)</div>
+      </div>
+      <button class="btn small ghost" id="btnCloseHelp">Close</button>
+    </div>
+    <div class="bd">
+      <div class="kv" style="grid-template-columns: 190px 1fr;">
+        <div class="k"><span class="kbd">/</span></div><div class="v">Focus search</div>
+        <div class="k"><span class="kbd">Esc</span></div><div class="v">Close drawer/modals</div>
+        <div class="k"><span class="kbd">C</span></div><div class="v">Open Columns picker</div>
+        <div class="k"><span class="kbd">N</span></div><div class="v">New connection</div>
+      </div>
+      <div class="hr"></div>
+      <div class="muted">In the real app: add a “?” popover listing shortcuts + templates, and make shortcuts user-overridable.</div>
+    </div>
+    <div class="ft">
+      <button class="btn primary" id="btnOkHelp">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Connection Modal -->
+<div class="modal-overlay" id="newOverlay" role="dialog" aria-modal="true" aria-label="New connection">
+  <div class="modal">
+    <div class="hd">
+      <div>
+        <div style="font-size:13px;">New connection (demo)</div>
+        <div class="muted" style="font-size:12px;">Shows “Add new” in dropdowns + change reason concept.</div>
+      </div>
+      <button class="btn small ghost" id="btnCloseNew">Close</button>
+    </div>
+    <div class="bd">
+      <div class="row" style="gap:10px;">
+        <select id="newTenant" style="flex:1; min-width:200px;"></select>
+        <input class="input" id="newService" placeholder="Service name (e.g., SXS)" style="flex:1; min-width:200px;"/>
+      </div>
+      <div class="row" style="gap:10px; margin-top:10px;">
+        <select id="newEnv" style="flex:1; min-width:200px;"></select>
+        <select id="newDc" style="flex:1; min-width:200px;"></select>
+      </div>
+      <div class="row" style="gap:10px; margin-top:10px;">
+        <select id="newType" style="flex:1; min-width:200px;"></select>
+        <select id="newNetwork" style="flex:1; min-width:200px;"></select>
+      </div>
+      <div class="row" style="gap:10px; margin-top:10px;">
+        <input class="input" id="newFqdn" placeholder="FQDN (e.g., sxs-uat.capital.local)" style="flex:1; min-width:240px;"/>
+        <input class="input mono" id="newIp" placeholder="IP (e.g., 10.10.2.15)" style="flex:1; min-width:180px;"/>
+        <input class="input mono" id="newPort" placeholder="Port" value="443" style="width:120px;"/>
+      </div>
+      <div class="row" style="gap:10px; margin-top:10px;">
+        <input class="input mono" id="newVault" placeholder="vault://kv/clients/capital/uat/sxs" style="flex:1; min-width:280px;"/>
+      </div>
+      <div style="margin-top:10px;">
+        <input class="input" id="newReason" placeholder="Change reason (required in real app)" style="width:100%;"/>
+      </div>
+      <div class="hint">Dropdowns are driven by Dictionaries. If you type a missing value, choose “+ Add …” to add it.</div>
+    </div>
+    <div class="ft">
+      <button class="btn" id="btnMockSave">Mock save</button>
+      <button class="btn primary" id="btnMockSaveClose">Mock save & close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // --- Demo data ---
+  const demoRows = [
+    {
+      id:"inst-001",
+      tenant:"Capital",
+      service:"SXS",
+      env:"UAT",
+      dc:"MK-DC1",
+      network:"Private",
+      type:"HTTP API",
+      endpoint:"sxs-uat.capital.local:443",
+      status:"Active",
+      updated:"Smeki · 2026-03-03 14:58",
+      vault:"vault://kv/clients/capital/uat/sxs",
+      endpoints:[
+        {fqdn:"sxs-uat.capital.local", ip:"10.10.2.15", port:443, proto:"https", public:false, path:"/api"},
+        {fqdn:"", ip:"10.10.2.16", port:443, proto:"https", public:false, path:"/api"}
+      ],
+      routes:[
+        {direction:"outbound", chain:"RO → HAProxy (MK) → SXS SC (MK)", notes:"mTLS, SNI pass-through"},
+        {direction:"inbound", chain:"Capital (RO) → HAProxy (MK) → /webhook", notes:"IP allowlist + rate-limit"}
+      ],
+      settings:{
+        auth:"mTLS",
+        timeouts:"connect=3s, read=30s",
+        retries:"2",
+        notes:"No secrets stored; vault ref only."
+      },
+      history:[
+        {v:3, at:"2026-03-03 14:58", by:"Smeki", reason:"Updated endpoint list"},
+        {v:2, at:"2026-03-02 10:12", by:"Ana", reason:"Added proxy hop info"},
+        {v:1, at:"2026-03-01 09:05", by:"Smeki", reason:"Initial create"}
+      ]
+    },
+    {
+      id:"inst-002",
+      tenant:"Capital",
+      service:"BC Connectors",
+      env:"PROD",
+      dc:"EU-WEST",
+      network:"Hybrid",
+      type:"Message Broker",
+      endpoint:"broker.capital.prod:9092",
+      status:"Active",
+      updated:"Ana · 2026-03-02 11:03",
+      vault:"vault://kv/clients/capital/prod/bc-broker",
+      endpoints:[
+        {fqdn:"broker.capital.prod", ip:"34.120.22.10", port:9092, proto:"tcp", public:true, path:""},
+      ],
+      routes:[
+        {direction:"outbound", chain:"MK → WAF (EU) → Broker", notes:"TLS + ACL"},
+      ],
+      settings:{
+        auth:"SASL",
+        timeouts:"session=30s",
+        retries:"3",
+        notes:"Kafka cluster"
+      },
+      history:[
+        {v:2, at:"2026-03-02 11:03", by:"Ana", reason:"Updated vault ref path"},
+        {v:1, at:"2026-02-25 16:20", by:"Smeki", reason:"Initial create"}
+      ]
+    },
+    {
+      id:"inst-003",
+      tenant:"Erste",
+      service:"IBANK Directory",
+      env:"UAT",
+      dc:"RO-DC1",
+      network:"Public",
+      type:"HTTP API",
+      endpoint:"directory-uat.erste.com:443",
+      status:"Draft",
+      updated:"Smeki · 2026-03-01 18:44",
+      vault:"vault://kv/clients/erste/uat/ibank-directory",
+      endpoints:[
+        {fqdn:"directory-uat.erste.com", ip:"52.10.5.99", port:443, proto:"https", public:true, path:"/v1"},
+      ],
+      routes:[
+        {direction:"outbound", chain:"MK → Internet → Erste UAT", notes:"OAuth2 client credentials"},
+      ],
+      settings:{
+        auth:"OAuth2",
+        timeouts:"connect=5s, read=45s",
+        retries:"1",
+        notes:"Draft until allowlist confirmed"
+      },
+      history:[
+        {v:1, at:"2026-03-01 18:44", by:"Smeki", reason:"Initial create"}
+      ]
+    }
+  ];
+
+  const dictionaries = {
+    tenant: {
+      key:"tenant",
+      name:"Tenants / Clients",
+      addable:true,
+      items:[
+        {code:"CAPITAL", label:"Capital", active:true, updated:"2026-03-01"},
+        {code:"ERSTE", label:"Erste", active:true, updated:"2026-02-28"},
+        {code:"OTP", label:"OTP", active:true, updated:"2026-02-20"},
+      ]
+    },
+    environment: {
+      key:"environment",
+      name:"Environments",
+      addable:false,
+      items:[
+        {code:"UAT", label:"UAT", active:true, updated:"2026-01-10"},
+        {code:"PROD", label:"PROD", active:true, updated:"2026-01-10"},
+      ]
+    },
+    datacenter: {
+      key:"datacenter",
+      name:"Data Centers",
+      addable:true,
+      items:[
+        {code:"MK-DC1", label:"MK-DC1", active:true, updated:"2026-02-12"},
+        {code:"RO-DC1", label:"RO-DC1", active:true, updated:"2026-02-12"},
+        {code:"EU-WEST", label:"EU-WEST", active:true, updated:"2026-02-12"},
+      ]
+    },
+    service_type: {
+      key:"service_type",
+      name:"Service Types",
+      addable:false,
+      items:[
+        {code:"HTTP", label:"HTTP API", active:true, updated:"2026-01-10"},
+        {code:"DB", label:"Database", active:true, updated:"2026-01-10"},
+        {code:"BROKER", label:"Message Broker", active:true, updated:"2026-01-10"},
+      ]
+    },
+    network_zone: {
+      key:"network_zone",
+      name:"Network Zones",
+      addable:false,
+      items:[
+        {code:"PUBLIC", label:"Public", active:true, updated:"2026-01-10"},
+        {code:"PRIVATE", label:"Private", active:true, updated:"2026-01-10"},
+        {code:"HYBRID", label:"Hybrid", active:true, updated:"2026-01-10"},
+      ]
+    }
+  };
+
+  // --- Column system ---
+  const allCols = [
+    {key:"tenant", label:"Tenant", desc:"Client / tenant"},
+    {key:"service", label:"Service", desc:"Logical service name"},
+    {key:"env", label:"Env", desc:"UAT / PROD"},
+    {key:"dc", label:"DC", desc:"Data center"},
+    {key:"network", label:"Network", desc:"Public/Private/Hybrid"},
+    {key:"type", label:"Type", desc:"HTTP/DB/Broker"},
+    {key:"endpoint", label:"Primary Endpoint", desc:"Computed primary endpoint"},
+    {key:"status", label:"Status", desc:"Draft/Active/Deprecated"},
+    {key:"updated", label:"Last Change", desc:"who + when"},
+    {key:"actions", label:"Actions", desc:"Row actions"}
+  ];
+  const defaultVisible = ["tenant","service","env","dc","network","type","endpoint","status","updated","actions"];
+  const LS_KEY = "ir_demo_visible_cols";
+
+  function getVisibleCols(){
+    const raw = localStorage.getItem(LS_KEY);
+    if(!raw) return [...defaultVisible];
+    try{
+      const parsed = JSON.parse(raw);
+      // ensure exists
+      const ok = parsed.filter(k => allCols.some(c=>c.key===k));
+      return ok.length ? ok : [...defaultVisible];
+    }catch{
+      return [...defaultVisible];
+    }
+  }
+  function setVisibleCols(cols){
+    localStorage.setItem(LS_KEY, JSON.stringify(cols));
+  }
+
+  // --- Render grid ---
+  const gridBody = document.getElementById("gridBody");
+  function statusTag(s){
+    if(s === "Active") return '<span class="tag good">● Active</span>';
+    if(s === "Draft") return '<span class="tag warn">● Draft</span>';
+    return '<span class="tag bad">● '+escapeHtml(s)+'</span>';
+  }
+  function escapeHtml(str){
+    return (str ?? "").toString().replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  }
+
+  function applyColumnVisibility(){
+    const visible = new Set(getVisibleCols());
+    // toggle header
+    document.querySelectorAll("thead th").forEach(th=>{
+      const key = th.getAttribute("data-col");
+      th.style.display = visible.has(key) ? "" : "none";
+    });
+    // toggle body cells by data-col
+    document.querySelectorAll("tbody td").forEach(td=>{
+      const key = td.getAttribute("data-col");
+      td.style.display = visible.has(key) ? "" : "none";
+    });
+  }
+
+  function filteredRows(){
+    const q = (document.getElementById("q").value || "").toLowerCase().trim();
+    const tenant = document.getElementById("tenant").value;
+    const env = document.getElementById("env").value;
+    const dc = document.getElementById("dc").value;
+    const type = document.getElementById("type").value;
+
+    return demoRows.filter(r=>{
+      if(tenant && r.tenant !== tenant) return false;
+      if(env && r.env !== env) return false;
+      if(dc && r.dc !== dc) return false;
+      if(type && r.type !== type) return false;
+      if(q){
+        const blob = (r.tenant+" "+r.service+" "+r.endpoint+" "+(r.endpoints||[]).map(e=>e.fqdn+" "+e.ip).join(" ")).toLowerCase();
+        if(!blob.includes(q)) return false;
+      }
+      return true;
+    });
+  }
+
+  function renderGrid(){
+    const rows = filteredRows();
+    gridBody.innerHTML = rows.map(r => {
+      return `
+        <tr data-id="${r.id}">
+          <td data-col="tenant"><b>${escapeHtml(r.tenant)}</b></td>
+          <td data-col="service"><a class="link" href="#" data-open="${r.id}">${escapeHtml(r.service)}</a></td>
+          <td data-col="env"><span class="pill mono" style="padding:5px 10px;">${escapeHtml(r.env)}</span></td>
+          <td data-col="dc">${escapeHtml(r.dc)}</td>
+          <td data-col="network">${escapeHtml(r.network)}</td>
+          <td data-col="type">${escapeHtml(r.type)}</td>
+          <td data-col="endpoint"><span class="mono">${escapeHtml(r.endpoint)}</span></td>
+          <td data-col="status">${statusTag(r.status)}</td>
+          <td data-col="updated"><span class="muted">${escapeHtml(r.updated)}</span></td>
+          <td data-col="actions" class="right">
+            <div class="col-actions">
+              <button class="btn small" data-open="${r.id}">View</button>
+              <button class="btn small" data-history="${r.id}">History</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
+    applyColumnVisibility();
+    updateOverview();
+  }
+
+  // --- Drawer ---
+  const drawerOverlay = document.getElementById("drawerOverlay");
+  const drawerBody = document.getElementById("drawerBody");
+  const drawerTitle = document.getElementById("drawerTitle");
+  const drawerSub = document.getElementById("drawerSub");
+
+  let currentRowId = null;
+  let currentTab = "overview";
+
+  function openDrawer(id, tab="overview"){
+    const row = demoRows.find(x=>x.id===id);
+    if(!row) return;
+    currentRowId = id;
+    currentTab = tab;
+    drawerTitle.textContent = `${row.tenant} · ${row.service}`;
+    drawerSub.textContent = `${row.env} · ${row.dc} · ${row.network} · ${row.type}`;
+    // tabs active
+    document.querySelectorAll("#drawerTabs .tab").forEach(t=>{
+      t.classList.toggle("active", t.getAttribute("data-tab") === currentTab);
+    });
+    renderDrawerTab();
+    drawerOverlay.classList.add("show");
+  }
+  function closeDrawer(){
+    drawerOverlay.classList.remove("show");
+    currentRowId = null;
+  }
+
+  function maskedVault(v){
+    // simple masking for demo
+    if(!v) return "—";
+    const parts = v.split("/");
+    if(parts.length <= 4) return v;
+    return parts.slice(0,4).join("/") + "/…/" + parts.at(-1);
+  }
+
+  function renderDrawerTab(){
+    const row = demoRows.find(x=>x.id===currentRowId);
+    if(!row) return;
+
+    if(currentTab === "overview"){
+      drawerBody.innerHTML = `
+        <div class="kv">
+          <div class="k">Status</div><div class="v">${statusTag(row.status)}</div>
+          <div class="k">Primary endpoint</div><div class="v mono">${escapeHtml(row.endpoint)}</div>
+          <div class="k">Vault ref</div><div class="v mono">${escapeHtml(maskedVault(row.vault))}</div>
+          <div class="k">Last change</div><div class="v">${escapeHtml(row.updated)}</div>
+        </div>
+        <div class="hr"></div>
+        <div class="muted">Secrets are not stored. Only a reference to Vault/KeyVault is stored for runtime access.</div>
+      `;
+      return;
+    }
+    if(currentTab === "endpoints"){
+      const rows = row.endpoints.map(e => `
+        <div class="card" style="margin-bottom:10px; box-shadow:none;">
+          <div class="bd">
+            <div class="kv">
+              <div class="k">FQDN</div><div class="v mono">${escapeHtml(e.fqdn || "—")}</div>
+              <div class="k">IP</div><div class="v mono">${escapeHtml(e.ip || "—")}</div>
+              <div class="k">Port</div><div class="v mono">${escapeHtml(e.port)}</div>
+              <div class="k">Protocol</div><div class="v mono">${escapeHtml(e.proto)}</div>
+              <div class="k">Public</div><div class="v">${e.public ? '<span class="tag warn">Public</span>' : '<span class="tag good">Private</span>'}</div>
+              <div class="k">Base path</div><div class="v mono">${escapeHtml(e.path || "—")}</div>
+            </div>
+          </div>
+        </div>
+      `).join("");
+      drawerBody.innerHTML = rows || `<div class="muted">No endpoints</div>`;
+      return;
+    }
+    if(currentTab === "routes"){
+      drawerBody.innerHTML = (row.routes || []).map(h => `
+        <div class="card" style="margin-bottom:10px; box-shadow:none;">
+          <div class="bd">
+            <div class="row" style="justify-content:space-between; align-items:center;">
+              <span class="tag ${h.direction==='inbound'?'warn':'good'}">${escapeHtml(h.direction)}</span>
+              <span class="muted" style="font-size:12px;">proxy chain</span>
+            </div>
+            <div style="margin-top:8px; font-size:13px;">
+              <span class="mono">${escapeHtml(h.chain)}</span>
+            </div>
+            <div class="muted" style="margin-top:6px; font-size:12px;">${escapeHtml(h.notes || "")}</div>
+          </div>
+        </div>
+      `).join("") || `<div class="muted">No routes</div>`;
+      return;
+    }
+    if(currentTab === "settings"){
+      drawerBody.innerHTML = `
+        <div class="kv">
+          <div class="k">Auth</div><div class="v">${escapeHtml(row.settings?.auth || "—")}</div>
+          <div class="k">Timeouts</div><div class="v mono">${escapeHtml(row.settings?.timeouts || "—")}</div>
+          <div class="k">Retries</div><div class="v mono">${escapeHtml(row.settings?.retries || "—")}</div>
+          <div class="k">Notes</div><div class="v">${escapeHtml(row.settings?.notes || "—")}</div>
+        </div>
+        <div class="hr"></div>
+        <div class="muted">In the real app this tab shows type-specific settings (HTTP/DB/Broker). No secret values here.</div>
+      `;
+      return;
+    }
+    if(currentTab === "history"){
+      drawerBody.innerHTML = `
+        ${(row.history || []).map(h=>`
+          <div class="card" style="margin-bottom:10px; box-shadow:none;">
+            <div class="bd">
+              <div class="row" style="justify-content:space-between; align-items:center;">
+                <span class="tag">v${escapeHtml(h.v)}</span>
+                <span class="muted" style="font-size:12px;">${escapeHtml(h.at)}</span>
+              </div>
+              <div style="margin-top:8px; font-size:13px;"><b>${escapeHtml(h.by)}</b></div>
+              <div class="muted" style="margin-top:6px; font-size:12px;">Reason: ${escapeHtml(h.reason)}</div>
+              <div class="hint" style="margin-top:8px;">MVP suggestion: store JSON snapshot per version, show diff summary, and allow restore for Admin.</div>
+            </div>
+          </div>
+        `).join("")}
+      `;
+      return;
+    }
+  }
+
+  // --- Columns modal ---
+  const columnsOverlay = document.getElementById("columnsOverlay");
+  const colChecklist = document.getElementById("colChecklist");
+  const colSearch = document.getElementById("colSearch");
+
+  function openColumns(){
+    const visible = new Set(getVisibleCols());
+    renderChecklist("");
+    colSearch.value = "";
+    columnsOverlay.classList.add("show");
+    function renderChecklist(filter){
+      const f = (filter||"").toLowerCase().trim();
+      colChecklist.innerHTML = allCols
+        .filter(c => !f || (c.label.toLowerCase().includes(f) || c.key.includes(f) || c.desc.toLowerCase().includes(f)))
+        .map(c => `
+          <label class="ck">
+            <input type="checkbox" data-col="${c.key}" ${visible.has(c.key) ? "checked" : ""}/>
+            <div>
+              <div class="lbl">${escapeHtml(c.label)}</div>
+              <div class="desc">${escapeHtml(c.desc)}</div>
+            </div>
+          </label>
+        `).join("");
+    }
+    colSearch.oninput = () => renderChecklist(colSearch.value);
+  }
+
+  function closeColumns(){ columnsOverlay.classList.remove("show"); }
+
+  // --- Help modal ---
+  const helpOverlay = document.getElementById("helpOverlay");
+  function openHelp(){ helpOverlay.classList.add("show"); }
+  function closeHelp(){ helpOverlay.classList.remove("show"); }
+
+  // --- New modal + "Add new" dropdown behavior ---
+  const newOverlay = document.getElementById("newOverlay");
+  function openNew(){ newOverlay.classList.add("show"); hydrateNewForm(); }
+  function closeNew(){ newOverlay.classList.remove("show"); }
+
+  function buildSelectWithAdd(selectEl, dictKey, placeholder){
+    const dict = dictionaries[dictKey];
+    selectEl.innerHTML = "";
+    const ph = document.createElement("option");
+    ph.value = "";
+    ph.textContent = placeholder;
+    selectEl.appendChild(ph);
+
+    for(const it of dict.items.filter(x=>x.active)){
+      const opt = document.createElement("option");
+      opt.value = it.label;
+      opt.textContent = it.label;
+      selectEl.appendChild(opt);
+    }
+
+    // add "Add new…" option at the end (only if addable)
+    if(dict.addable){
+      const add = document.createElement("option");
+      add.value = "__add__";
+      add.textContent = "+ Add new…";
+      selectEl.appendChild(add);
+
+      selectEl.addEventListener("change", () => {
+        if(selectEl.value === "__add__"){
+          const val = prompt(`Add new to "${dict.name}"\nEnter LABEL (code will be auto-generated in this demo):`);
+          if(!val){ selectEl.value = ""; return; }
+          const label = val.trim();
+          if(!label){ selectEl.value = ""; return; }
+
+          // If already exists, just select it
+          const existing = dict.items.find(x=>x.label.toLowerCase() === label.toLowerCase());
+          if(existing){
+            selectEl.value = existing.label;
+            return;
+          }
+
+          // create item (demo: code = label upper + sanitize)
+          const code = label.toUpperCase().replace(/[^A-Z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,30) || ("ITEM-"+Math.random().toString(16).slice(2,7).toUpperCase());
+          dict.items.unshift({code, label, active:true, updated:new Date().toISOString().slice(0,10)});
+          // rebuild select + pick
+          buildSelectWithAdd(selectEl, dictKey, placeholder);
+          selectEl.value = label;
+
+          // Also refresh dictionaries page if open
+          if(currentDictKey === dictKey){ renderDictItems(dictKey); }
+          renderDictList();
+        }
+      }, { once:false });
+    }
+  }
+
+  function hydrateNewForm(){
+    buildSelectWithAdd(document.getElementById("newTenant"), "tenant", "Tenant…");
+    buildSelectWithAdd(document.getElementById("newEnv"), "environment", "Environment…");
+    buildSelectWithAdd(document.getElementById("newDc"), "datacenter", "Data Center…");
+    buildSelectWithAdd(document.getElementById("newType"), "service_type", "Service Type…");
+    buildSelectWithAdd(document.getElementById("newNetwork"), "network_zone", "Network Zone…");
+  }
+
+  // --- Dictionaries page ---
+  const dictList = document.getElementById("dictList");
+  const dictItems = document.getElementById("dictItems");
+  let currentDictKey = "datacenter";
+
+  function renderDictList(){
+    const keys = Object.keys(dictionaries);
+    dictList.innerHTML = keys.map(k=>{
+      const d = dictionaries[k];
+      return `
+        <div class="item ${k===currentDictKey?'active':''}" data-dict="${k}">
+          <div class="n">${escapeHtml(d.name)}</div>
+          <div class="k mono">${escapeHtml(d.key)} · addable=${d.addable}</div>
+        </div>
+      `;
+    }).join("");
+  }
+  function renderDictItems(key){
+    const d = dictionaries[key];
+    dictItems.innerHTML = d.items.map(it=>`
+      <tr>
+        <td class="mono">${escapeHtml(it.code)}</td>
+        <td>${escapeHtml(it.label)}</td>
+        <td>${it.active ? '<span class="tag good">Active</span>' : '<span class="tag bad">Disabled</span>'}</td>
+        <td class="muted">${escapeHtml(it.updated || "")}</td>
+        <td class="right">
+          <button class="btn small" data-edit-item="${key}:${it.code}">Edit</button>
+          <button class="btn small" data-toggle-item="${key}:${it.code}">${it.active ? "Disable" : "Enable"}</button>
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  // --- Navigation between pages ---
+  function setPage(pageKey){
+    const pages = ["connections","overview","services","dictionaries","audit"];
+    pages.forEach(k=>{
+      const el = document.getElementById("page-"+k);
+      if(el) el.style.display = (k===pageKey) ? "" : "none";
+    });
+
+    document.querySelectorAll(".nav button").forEach(b=>{
+      b.classList.toggle("active", b.getAttribute("data-page") === pageKey);
+    });
+
+    const titleMap = {
+      connections:"Connections",
+      overview:"Overview",
+      services:"Services",
+      dictionaries:"Dictionaries",
+      audit:"Audit / History"
+    };
+    document.getElementById("pageTitle").textContent = titleMap[pageKey] || "Integration Registry";
+    document.getElementById("crumbs").textContent = "Integration Registry / " + (titleMap[pageKey] || pageKey);
+  }
+
+  // --- Overview counters ---
+  function updateOverview(){
+    const rows = filteredRows();
+    document.getElementById("cntActive").textContent = rows.filter(r=>r.status==="Active").length;
+    document.getElementById("cntUat").textContent = rows.filter(r=>r.env==="UAT").length;
+    document.getElementById("cntProd").textContent = rows.filter(r=>r.env==="PROD").length;
+
+    const recent = [...rows]
+      .sort((a,b)=> (a.updated < b.updated ? 1 : -1))
+      .slice(0,5)
+      .map(r=>`<div style="margin-bottom:10px;">
+        <div><b>${escapeHtml(r.tenant)} · ${escapeHtml(r.service)}</b></div>
+        <div class="muted" style="font-size:12px;">${escapeHtml(r.updated)} · <span class="mono">${escapeHtml(r.env)}</span> · ${escapeHtml(r.status)}</div>
+      </div>`).join("");
+    const recentEl = document.getElementById("recent");
+    if(recentEl) recentEl.innerHTML = recent || `<div class="muted">No data</div>`;
+  }
+
+  // --- Wire events ---
+  document.querySelectorAll(".nav button").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const page = btn.getAttribute("data-page");
+      setPage(page);
+
+      if(page === "dictionaries"){
+        renderDictList();
+        renderDictItems(currentDictKey);
+      }
+    });
+  });
+
+  document.getElementById("btnColumns").addEventListener("click", openColumns);
+  document.getElementById("btnCloseColumns").addEventListener("click", closeColumns);
+  document.getElementById("btnResetCols").addEventListener("click", ()=>{
+    setVisibleCols(defaultVisible);
+    closeColumns();
+    renderGrid();
+  });
+  document.getElementById("btnApplyCols").addEventListener("click", ()=>{
+    const keys = [];
+    document.querySelectorAll("#colChecklist input[type=checkbox]").forEach(cb=>{
+      if(cb.checked) keys.push(cb.getAttribute("data-col"));
+    });
+    // ensure actions always visible
+    if(!keys.includes("actions")) keys.push("actions");
+    setVisibleCols(keys);
+    closeColumns();
+    renderGrid();
+  });
+
+  document.getElementById("btnHelp").addEventListener("click", openHelp);
+  document.getElementById("btnCloseHelp").addEventListener("click", closeHelp);
+  document.getElementById("btnOkHelp").addEventListener("click", closeHelp);
+
+  document.getElementById("btnNew").addEventListener("click", openNew);
+  document.getElementById("btnCloseNew").addEventListener("click", closeNew);
+
+  document.getElementById("btnClear").addEventListener("click", ()=>{
+    document.getElementById("q").value="";
+    document.getElementById("tenant").value="";
+    document.getElementById("env").value="";
+    document.getElementById("dc").value="";
+    document.getElementById("type").value="";
+    renderGrid();
+  });
+  ["q","tenant","env","dc","type"].forEach(id=>{
+    document.getElementById(id).addEventListener("input", renderGrid);
+    document.getElementById(id).addEventListener("change", renderGrid);
+  });
+
+  // Grid row click / button click
+  document.addEventListener("click", (e)=>{
+    const openId = e.target?.getAttribute?.("data-open");
+    if(openId){
+      e.preventDefault();
+      openDrawer(openId, "overview");
+      return;
+    }
+    const histId = e.target?.getAttribute?.("data-history");
+    if(histId){
+      e.preventDefault();
+      openDrawer(histId, "history");
+      return;
+    }
+    const tr = e.target.closest?.("tr[data-id]");
+    if(tr && tr.closest("#gridBody")){
+      const id = tr.getAttribute("data-id");
+      if(id) openDrawer(id, "overview");
+    }
+
+    // Dictionaries list click
+    const dItem = e.target.closest?.(".list .item[data-dict]");
+    if(dItem){
+      const key = dItem.getAttribute("data-dict");
+      currentDictKey = key;
+      renderDictList();
+      renderDictItems(key);
+    }
+
+    // Dictionaries item actions
+    const edit = e.target?.getAttribute?.("data-edit-item");
+    if(edit){
+      const [key, code] = edit.split(":");
+      const d = dictionaries[key];
+      const it = d.items.find(x=>x.code===code);
+      const newLabel = prompt("Edit label:", it?.label || "");
+      if(newLabel && it){
+        it.label = newLabel.trim();
+        it.updated = new Date().toISOString().slice(0,10);
+        renderDictItems(key);
+        renderGrid();
+      }
+    }
+    const toggle = e.target?.getAttribute?.("data-toggle-item");
+    if(toggle){
+      const [key, code] = toggle.split(":");
+      const d = dictionaries[key];
+      const it = d.items.find(x=>x.code===code);
+      if(it){
+        it.active = !it.active;
+        it.updated = new Date().toISOString().slice(0,10);
+        renderDictItems(key);
+      }
+    }
+  });
+
+  document.getElementById("btnCloseDrawer").addEventListener("click", closeDrawer);
+  drawerOverlay.addEventListener("click", (e)=>{
+    if(e.target === drawerOverlay) closeDrawer();
+  });
+
+  // Drawer tabs
+  document.getElementById("drawerTabs").addEventListener("click", (e)=>{
+    const tab = e.target?.getAttribute?.("data-tab");
+    if(!tab) return;
+    currentTab = tab;
+    document.querySelectorAll("#drawerTabs .tab").forEach(t=>{
+      t.classList.toggle("active", t.getAttribute("data-tab") === currentTab);
+    });
+    renderDrawerTab();
+  });
+
+  // Mock save
+  document.getElementById("btnMockSave").addEventListener("click", ()=>{
+    alert("Mock saved (demo). In real app: validate + require change_reason + write audit snapshot.");
+  });
+  document.getElementById("btnMockSaveClose").addEventListener("click", ()=>{
+    alert("Mock saved & closed (demo).");
+    closeNew();
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener("keydown", (e)=>{
+    if(e.key === "Escape"){
+      closeDrawer(); closeColumns(); closeHelp(); closeNew();
+    }
+    if(e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey){
+      e.preventDefault();
+      document.getElementById("q").focus();
+    }
+    if((e.key === "c" || e.key === "C") && !e.ctrlKey && !e.metaKey && !e.altKey){
+      openColumns();
+    }
+    if((e.key === "n" || e.key === "N") && !e.ctrlKey && !e.metaKey && !e.altKey){
+      openNew();
+    }
+  });
+
+  // Init
+  function initColumnsModal(){
+    const visible = new Set(getVisibleCols());
+    colChecklist.innerHTML = allCols.map(c => `
+      <label class="ck">
+        <input type="checkbox" data-col="${c.key}" ${visible.has(c.key) ? "checked" : ""}/>
+        <div>
+          <div class="lbl">${escapeHtml(c.label)}</div>
+          <div class="desc">${escapeHtml(c.desc)}</div>
+        </div>
+      </label>
+    `).join("");
+  }
+
+  function init(){
+    initColumnsModal();
+    renderGrid();
+    renderDictList();
+    renderDictItems(currentDictKey);
+    setPage("connections");
+  }
+  init();
+</script>
+</body>
+</html>
