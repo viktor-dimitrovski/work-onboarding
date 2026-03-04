@@ -197,7 +197,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       hasRole,
       setSession,
     }),
-    [accessToken, isLoading, refreshToken, user, setSession],
+    // login, logout, hasRole are recreated each render but depend on the state values already listed
+      [accessToken, isLoading, refreshToken, user, setSession],
   );
 
   useEffect(() => {

@@ -190,7 +190,7 @@ export default function ComplianceHubPage() {
                 {canAdmin ? (
                   <Button
                     type="button"
-                    variant="link"
+                    variant="ghost"
                     className="px-2 h-auto"
                     onClick={() => router.push('/compliance-hub/admin/library')}
                   >

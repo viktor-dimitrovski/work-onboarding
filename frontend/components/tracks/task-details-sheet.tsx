@@ -404,7 +404,7 @@ export function TaskDetailsSheet({ open, onOpenChange, task, phase, onUpdateTask
                         const nextQuestions = [
                           ...questions,
                           {
-                            type: 'single',
+                            type: 'single' as const,
                             prompt: 'New question',
                             options: ['Option 1', 'Option 2'],
                             correct_option_ids: [0],

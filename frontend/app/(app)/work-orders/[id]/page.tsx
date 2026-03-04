@@ -1131,7 +1131,7 @@ export default function WorkOrderEditorPage() {
             >
               Import
             </Button>
-            <Button onClick={save} disabled={saving || !canWrite}>
+            <Button onClick={() => save()} disabled={saving || !canWrite}>
               {saving ? 'Saving…' : 'Save'}
             </Button>
           </div>

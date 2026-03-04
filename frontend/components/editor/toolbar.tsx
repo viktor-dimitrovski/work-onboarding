@@ -1,11 +1,14 @@
 "use client";
 
 import {
-  FORMAT_ELEMENT_COMMAND,
   FORMAT_TEXT_COMMAND,
   REDO_COMMAND,
   UNDO_COMMAND,
+  $getSelection,
+  $isRangeSelection,
 } from 'lexical';
+import { $setBlocksType } from '@lexical/selection';
+import { $createHeadingNode, HeadingTagType } from '@lexical/rich-text';
 import { INSERT_ORDERED_LIST_COMMAND, INSERT_UNORDERED_LIST_COMMAND, REMOVE_LIST_COMMAND } from '@lexical/list';
 import { TOGGLE_LINK_COMMAND } from '@lexical/link';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
@@ -16,6 +19,15 @@ const TOOLBAR_BUTTON = 'h-8 px-2 text-xs';
 
 export function EditorToolbar() {
   const [editor] = useLexicalComposerContext();
+
+  const setHeading = (tag: HeadingTagType) => {
+    editor.update(() => {
+      const selection = $getSelection();
+      if ($isRangeSelection(selection)) {
+        $setBlocksType(selection, () => $createHeadingNode(tag));
+      }
+    });
+  };
 
   const insertLink = () => {
     const url = window.prompt('Link URL');
@@ -75,7 +87,7 @@ export function EditorToolbar() {
         type='button'
         variant='ghost'
         className={cn(TOOLBAR_BUTTON)}
-        onClick={() => editor.dispatchCommand(FORMAT_ELEMENT_COMMAND, 'h2')}
+        onClick={() => setHeading('h2')}
       >
         H2
       </Button>
@@ -83,7 +95,7 @@ export function EditorToolbar() {
         type='button'
         variant='ghost'
         className={cn(TOOLBAR_BUTTON)}
-        onClick={() => editor.dispatchCommand(FORMAT_ELEMENT_COMMAND, 'h3')}
+        onClick={() => setHeading('h3')}
       >
         H3
       </Button>

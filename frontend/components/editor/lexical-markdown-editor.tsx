@@ -68,7 +68,8 @@ export function LexicalMarkdownEditor({
         lastValueRef.current = value;
       },
     }),
-    [],
+    // Initial config is intentionally created only once; value updates are handled via the onChange plugin
+      [],
   );
 
   return (

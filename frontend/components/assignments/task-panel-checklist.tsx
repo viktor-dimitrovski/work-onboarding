@@ -27,16 +27,21 @@ export function TaskPanelChecklist({ task, onToggleItem, updatingItemId, disable
   const [commentOpen, setCommentOpen] = useState<Record<string, boolean>>({});
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
 
+  // Reset drafts when switching tasks — existingComments is intentionally excluded from deps
   useEffect(() => {
     setCommentOpen({});
     setCommentDrafts(existingComments);
   }, [task.id]);
 
   const summary = useMemo(() => {
-    const required = checklistItems.filter((item) => item.required !== false);
-    const requiredCompleted = required.filter((item) => completedIds.has(item.id)).length;
+    const meta = (task.metadata?.checklist as Record<string, unknown>) || {};
+    const items = (meta.items as ChecklistItem[]) || [];
+    const state = (task.metadata?.checklist_state as Record<string, unknown>) || {};
+    const completed = new Set((state.completed_item_ids as string[]) || []);
+    const required = items.filter((item) => item.required !== false);
+    const requiredCompleted = required.filter((item) => completed.has(item.id)).length;
     return { requiredCount: required.length, requiredCompleted };
-  }, [checklistItems, completedIds]);
+  }, [task.metadata]);
 
   if (checklistItems.length === 0) {
     return (
