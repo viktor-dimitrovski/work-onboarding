@@ -19,6 +19,7 @@ DEFAULT_MODULES = {
     'settings',
     'billing',
     'releases',
+    'integration_registry'
 }
 
 MODULE_PERMISSIONS: dict[str, set[str]] = {

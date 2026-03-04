@@ -1,58 +1,73 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --------------------------------------------
-# Trigger backend deploy on VPS
-# --------------------------------------------
+# Deploy backend: package locally → upload via scp/pscp → extract + restart on server.
+# No git on server. No deploy.env on server needed.
 #
-# This is a thin wrapper that calls:
-#   ops/vps/deploy-backend.sh
-#
-# Requirements:
-# - Git Bash
-# - ssh (Git for Windows)
+# Usage:  bash ops/local/deploy-backend.sh [--env ops/ops.env]
+# Or:     run-deploy-backend.bat
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/common.sh"
 
-usage() {
-  cat <<'EOF'
-Usage:
-  bash ops/local/deploy-backend.sh --env ops/ops.env [--branch main] [--skip-install] [--skip-migrate]
-EOF
-}
-
 ENV_FILE="${ROOT_DIR}/ops/ops.env"
-BRANCH=""
-SKIP_INSTALL="false"
-SKIP_MIGRATE="false"
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --env) ENV_FILE="${2:-}"; shift 2 ;;
-    --branch) BRANCH="${2:-}"; shift 2 ;;
-    --skip-install) SKIP_INSTALL="true"; shift 1 ;;
-    --skip-migrate) SKIP_MIGRATE="true"; shift 1 ;;
-    --help|-h) usage; exit 0 ;;
+    --env) ENV_FILE="$2"; shift 2 ;;
+    --help|-h) echo "Usage: deploy-backend.sh [--env ops/ops.env]"; exit 0 ;;
     *) die "Unknown arg: $1" ;;
   esac
 done
 
 load_env_file "${ENV_FILE}"
-require_cmd ssh
+require_cmd "${OPS_SSH_CMD:-ssh}"
+require_cmd "${OPS_SCP_CMD:-scp}"
+
+APP_DIR="${OPS_REMOTE_APP_DIR}"
+SVC="${OPS_BACKEND_SERVICE:-solvebox-hub-backend}"
+APP_USER="${OPS_APP_USER:-solvebox}"
+VENV="${APP_DIR}/.venv"
 
 SSH_ARGS=()
-while IFS= read -r line; do SSH_ARGS+=("$line"); done < <(ssh_base_args)
+while IFS= read -r l; do SSH_ARGS+=("$l"); done < <(ssh_base_args)
 UAH="$(user_at_host)"
 
-branch="${BRANCH:-${OPS_GIT_BRANCH:-main}}"
+ts="$(date +%Y%m%d_%H%M%S)"
+ARCHIVE="backend-${ts}.tar.gz"
+LOCAL="${ROOT_DIR}/ops/_backups/${ARCHIVE}"
+mkdir -p "${ROOT_DIR}/ops/_backups"
+trap 'rm -f "${LOCAL}"' EXIT
 
-remote_cmd="cd '${OPS_REMOTE_APP_DIR}' && sudo bash ops/vps/deploy-backend.sh --branch '${branch}'"
-if [[ "${SKIP_INSTALL}" == "true" ]]; then remote_cmd+=" --skip-install"; fi
-if [[ "${SKIP_MIGRATE}" == "true" ]]; then remote_cmd+=" --skip-migrate"; fi
+# ── 1. Package ─────────────────────────────────────────────────────────────
+log INFO "Packaging backend..."
+tar -C "${ROOT_DIR}/backend" \
+  --exclude='__pycache__' \
+  --exclude='*.pyc' \
+  --exclude='*.pyo' \
+  --exclude='.venv' \
+  --exclude='venv' \
+  --exclude='.env' \
+  --exclude='*.egg-info' \
+  --exclude='.pytest_cache' \
+  -czf "${LOCAL}" .
+log INFO "Archive: ${LOCAL} ($(du -sh "${LOCAL}" | cut -f1))"
 
-log INFO "Deploying backend on VPS (branch=${branch})"
-ssh "${SSH_ARGS[@]}" "${UAH}" "${remote_cmd}"
-log INFO "Backend deploy finished."
+# ── 2. Upload ──────────────────────────────────────────────────────────────
+log INFO "Uploading to ${UAH}:/tmp/${ARCHIVE} ..."
+"${OPS_SCP_CMD:-scp}" "${SSH_ARGS[@]}" "${LOCAL}" "${UAH}:/tmp/${ARCHIVE}"
 
+# ── 3. Extract + pip install + restart ────────────────────────────────────
+log INFO "Deploying on server..."
+"${OPS_SSH_CMD:-ssh}" "${SSH_ARGS[@]}" "${UAH}" "
+set -euo pipefail
+sudo mkdir -p '${APP_DIR}/backend'
+sudo tar -C '${APP_DIR}/backend' -xzf '/tmp/${ARCHIVE}'
+sudo rm -f '/tmp/${ARCHIVE}'
+sudo chown -R '${APP_USER}:${APP_USER}' '${APP_DIR}/backend'
+sudo -u '${APP_USER}' '${VENV}/bin/pip' install -q -r '${APP_DIR}/backend/requirements.txt'
+sudo systemctl restart '${SVC}'
+sudo systemctl status '${SVC}' --no-pager -l | tail -8
+"
+
+log INFO "Backend deploy done."

@@ -1,5 +1,8 @@
 @echo off
 setlocal
+REM DB sync: local pg_dump -> upload to VPS -> remote restore.
+REM Paths (VPS app dir, backup dir) are in ops/ops.env: OPS_REMOTE_APP_DIR, OPS_REMOTE_BACKUP_DIR.
+REM Example: OPS_REMOTE_APP_DIR=/opt/apps/solvebox-hub, OPS_REMOTE_BACKUP_DIR=/var/backups/solvebox-hub/db
 
 set "GITBASH=C:\Program Files\Git\bin\bash.exe"
 if not exist "%GITBASH%" (

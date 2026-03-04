@@ -52,13 +52,11 @@ export default function IrDictionariesPage() {
       .get<IrDictionary[]>('/integration-registry/dictionaries', accessToken)
       .then((dicts) => {
         setDictionaries(dicts);
-        if (dicts.length > 0 && !selectedDict) {
-          setSelectedDict(dicts[0]);
-        }
+        setSelectedDict((prev) => prev ?? (dicts.length > 0 ? dicts[0] : null));
       })
       .catch((e) => setError(e.message || 'Failed to load dictionaries'))
       .finally(() => setLoadingDicts(false));
-  }, [accessToken, selectedDict]);
+  }, [accessToken]);
 
   useEffect(() => { loadDictionaries(); }, [loadDictionaries]);
 

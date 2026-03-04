@@ -20,10 +20,9 @@ Options:
   --help                  Show help
 
 Notes:
-  - Tries to load config from (in order):
-      1) deploy/ubuntu/deploy.env (if repo exists on server)
-      2) OPS_* env vars (if provided)
-      3) /etc/onboarding/backend.env (DATABASE_URL)
+  - Loads DB config from backend.env (DATABASE_URL). Tries in order:
+      1) /etc/solvebox-hub/backend.env
+      2) /etc/solvebox/backend.env
 EOF
 }
 
@@ -53,16 +52,26 @@ require_cmd psql
 require_cmd pg_dump
 require_cmd systemctl
 
-# 1) Load config
-DEPLOY_ENV="${ROOT_DIR}/deploy/ubuntu/deploy.env"
-BACKEND_ENV="/etc/onboarding/backend.env"
+# 1) Load config from backend.env (no deploy.env — use DATABASE_URL)
+BACKEND_ENV=""
+for candidate in /etc/solvebox-hub/backend.env /etc/solvebox/backend.env; do
+  if [[ -f "$candidate" ]]; then
+    BACKEND_ENV="$candidate"
+    break
+  fi
+done
 
-load_kv_env_file "${DEPLOY_ENV}"
+if [[ -n "${BACKEND_ENV}" ]]; then
+  log INFO "Loading config from ${BACKEND_ENV}"
+  load_kv_env_file "${BACKEND_ENV}"
+else
+  log WARN "No backend.env at /etc/solvebox-hub/backend.env or /etc/solvebox/backend.env"
+fi
 
 APP_DIR="${OPS_REMOTE_APP_DIR:-${APP_DIR:-${ROOT_DIR}}}"
-BACKEND_SERVICE="${OPS_BACKEND_SERVICE:-onboarding-backend}"
-FRONTEND_SERVICE="${OPS_FRONTEND_SERVICE:-onboarding-frontend}"
-REMOTE_BACKUP_DIR="${OPS_REMOTE_BACKUP_DIR:-/var/backups/onboarding/db}"
+BACKEND_SERVICE="${OPS_BACKEND_SERVICE:-solvebox-hub-backend}"
+FRONTEND_SERVICE="${OPS_FRONTEND_SERVICE:-solvebox-hub-frontend}"
+REMOTE_BACKUP_DIR="${OPS_REMOTE_BACKUP_DIR:-/var/backups/solvebox-hub/db}"
 
 POSTGRES_OS_USER="${POSTGRES_OS_USER:-postgres}"
 DB_NAME="${DB_NAME:-}"
@@ -71,13 +80,7 @@ DB_PASSWORD="${DB_PASSWORD:-}"
 DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-5432}"
 
-if [[ -z "${DB_NAME}" || -z "${DB_USER}" || -z "${DB_PASSWORD}" ]]; then
-  if [[ -f "${BACKEND_ENV}" ]]; then
-    load_kv_env_file "${BACKEND_ENV}"
-  fi
-fi
-
-# Fallback: parse DATABASE_URL if deploy.env wasn't used
+# Parse DATABASE_URL if we have it (backend.env usually has DATABASE_URL, not DB_NAME/DB_USER/DB_PASSWORD)
 if [[ -z "${DB_NAME}" || -z "${DB_USER}" || -z "${DB_PASSWORD}" ]]; then
   if [[ -n "${DATABASE_URL:-}" ]]; then
     read -r DB_USER DB_PASSWORD DB_HOST DB_PORT DB_NAME < <(
@@ -95,9 +98,13 @@ PY
   fi
 fi
 
-[[ -n "${DB_NAME}" && -n "${DB_USER}" && -n "${DB_PASSWORD}" ]] || die "DB config not resolved. Set DB_NAME/DB_USER/DB_PASSWORD in deploy.env or backend.env."
+if [[ -z "${DB_NAME}" || -z "${DB_USER}" || -z "${DB_PASSWORD}" ]]; then
+  die "DB config not resolved. On the VPS create /etc/solvebox-hub/backend.env (or /etc/solvebox/backend.env) with DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DBNAME"
+fi
 
-install -d -m 0750 -o root -g root "${REMOTE_BACKUP_DIR}"
+install -d -m 0755 -o "${POSTGRES_OS_USER}" -g root "${REMOTE_BACKUP_DIR}"
+# Make uploaded dump readable by the postgres OS user
+chmod 644 "${DUMP_PATH}" 2>/dev/null || true
 
 ts="$(date +%Y%m%d_%H%M%S)"
 pre_backup="${REMOTE_BACKUP_DIR}/pre-restore-${DB_NAME}-${ts}.dump"
@@ -134,13 +141,13 @@ sudo -u "${POSTGRES_OS_USER}" env PGPASSWORD="${DB_PASSWORD}" \
   pg_restore --no-owner --no-acl --clean --if-exists -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" "${DUMP_PATH}"
 
 if [[ "${RUN_MIGRATE}" == "true" ]]; then
-  if [[ -f "/etc/onboarding/backend.env" && -d "${APP_DIR}/backend" && -x "${APP_DIR}/.venv/bin/alembic" ]]; then
+  if [[ -n "${BACKEND_ENV}" && -f "${BACKEND_ENV}" && -d "${APP_DIR}/backend" && -x "${APP_DIR}/.venv/bin/alembic" ]]; then
     log INFO "Running alembic upgrade head (post-restore)"
     # shellcheck disable=SC1091
-    set -a; source /etc/onboarding/backend.env; set +a
-    sudo -u "${APP_USER:-onboarding}" bash -lc "cd '${APP_DIR}/backend' && '${APP_DIR}/.venv/bin/alembic' upgrade head" || true
+    set -a; source "${BACKEND_ENV}"; set +a
+    sudo -u "${APP_USER:-solvebox}" bash -lc "cd '${APP_DIR}/backend' && '${APP_DIR}/.venv/bin/alembic' upgrade head" || true
   else
-    log WARN "Skipping migrations (alembic not found)."
+    log WARN "Skipping migrations (alembic not found or backend.env missing)."
   fi
 fi
 

@@ -624,7 +624,7 @@ def create_instance(
     _write_audit(
         db,
         tenant_id=tenant_id,
-        entity_type="ir_instance",
+        entity_type="ir_connection",
         entity_id=inst.id,
         version=1,
         action="create",
@@ -704,7 +704,7 @@ def update_instance(
     _write_audit(
         db,
         tenant_id=instance.tenant_id,
-        entity_type="ir_instance",
+        entity_type="ir_connection",
         entity_id=instance.id,
         version=instance.version,
         action="update",
@@ -790,7 +790,7 @@ def clone_instance_to_prod(
     _write_audit(
         db,
         tenant_id=new_inst.tenant_id,
-        entity_type="ir_instance",
+        entity_type="ir_connection",
         entity_id=new_inst.id,
         version=1,
         action="create",
@@ -994,7 +994,10 @@ def list_audit_log(
 ) -> tuple[list[IrAuditLog], int]:
     q = select(IrAuditLog).where(IrAuditLog.tenant_id == tenant_id)
     if entity_type:
-        q = q.where(IrAuditLog.entity_type == entity_type)
+        if entity_type == "ir_connection":
+            q = q.where(IrAuditLog.entity_type.in_(["ir_connection", "ir_instance"]))
+        else:
+            q = q.where(IrAuditLog.entity_type == entity_type)
     if entity_id:
         q = q.where(IrAuditLog.entity_id == entity_id)
 
@@ -1014,7 +1017,7 @@ def get_instance_history(
             select(IrAuditLog)
             .where(
                 IrAuditLog.tenant_id == tenant_id,
-                IrAuditLog.entity_type == "ir_instance",
+                IrAuditLog.entity_type.in_(["ir_connection", "ir_instance"]),
                 IrAuditLog.entity_id == instance_id,
             )
             .order_by(IrAuditLog.version.desc())

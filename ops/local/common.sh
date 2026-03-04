@@ -25,11 +25,18 @@ load_env_file() {
   # shellcheck disable=SC1090
   set -a; source "$file"; set +a
 
-  # Resolve/convert SSH key early in the parent shell so failures stop the script.
-  # (Errors inside process-substitution used by ssh_base_args may not propagate.)
+  # Resolve SSH key (and optionally convert .ppk -> OpenSSH) so failures stop the script.
   if [[ -n "${OPS_SSH_KEYFILE:-}" ]]; then
     OPS_SSH_KEYFILE="$(resolve_ssh_keyfile "${OPS_SSH_KEYFILE}")"
     export OPS_SSH_KEYFILE
+  fi
+  # When using a .ppk key we use PuTTY's plink/pscp (no conversion). Otherwise ssh/scp.
+  if [[ "${OPS_SSH_KEYFILE:-}" == *.ppk ]]; then
+    export OPS_SSH_CMD=plink
+    export OPS_SCP_CMD=pscp
+  else
+    export OPS_SSH_CMD=ssh
+    export OPS_SCP_CMD=scp
   fi
 }
 
@@ -40,14 +47,19 @@ resolve_ssh_keyfile() {
     return 0
   fi
 
-  # OpenSSH (ssh/scp) cannot read PuTTY .ppk keys and will fail with:
-  # "Load key ...: error in libcrypto"
+  # .ppk keys: use PuTTY plink/pscp natively (no conversion), or fall back to puttygen conversion.
   if [[ "${keyfile}" == *.ppk ]]; then
+    if command -v plink >/dev/null 2>&1 && command -v pscp >/dev/null 2>&1; then
+      # Use .ppk directly with plink/pscp — no conversion.
+      log INFO "Using PuTTY .ppk key with plink/pscp (no conversion)" >&2
+      printf '%s' "${keyfile}"
+      return 0
+    fi
+    # Fall back: convert .ppk to OpenSSH for use with ssh/scp.
     if command -v puttygen >/dev/null 2>&1; then
       local cache_dir="${ROOT_DIR}/ops/_keys"
       mkdir -p "${cache_dir}"
 
-      # Make a safe filename even if keyfile is a Windows path like C:\Users\...\key.ppk
       local safe
       safe="$(printf '%s' "${keyfile}" | tr -c 'a-zA-Z0-9._-' '_')"
       safe="${safe%.ppk}"
@@ -55,40 +67,27 @@ resolve_ssh_keyfile() {
 
       if [[ ! -f "${converted}" || "${keyfile}" -nt "${converted}" ]]; then
         log INFO "Converting PuTTY .ppk to OpenSSH key -> ${converted}" >&2
-        local input="${keyfile}"
         if command -v cygpath >/dev/null 2>&1; then
-          # If keyfile is a Windows path, convert to a POSIX path so both msys and Windows puttygen can read it.
-          input="$(cygpath -u "${keyfile}" 2>/dev/null || printf '%s' "${keyfile}")"
+          local input_win converted_win
+          input_win="$(cygpath -w "${keyfile}" 2>/dev/null || printf '%s' "${keyfile}")"
+          converted_win="$(cygpath -w "${converted}" 2>/dev/null || printf '%s' "${converted}")"
+          puttygen "${input_win}" -O private-openssh -o "${converted_win}" 2>/dev/null || true
         else
-          # Best-effort conversion: C:\Users\me\key.ppk -> /c/Users/me/key.ppk
+          local input="${keyfile}"
           if [[ "${keyfile}" =~ ^([A-Za-z]):\\\\ ]]; then
             local drive="${BASH_REMATCH[1],,}"
             input="/${drive}/${keyfile:3}"
             input="${input//\\//}"
           fi
+          puttygen "${input}" -O private-openssh -o "${converted}" 2>/dev/null || true
         fi
-
-        # Run puttygen in a way that doesn't crash the script on failure (we validate output afterwards).
-        if ! puttygen "${input}" -O private-openssh -o "${converted}" >/dev/null 2>&1; then
-          # Some puttygen builds are picky about path formats; retry with cygpath windows output if available.
-          if command -v cygpath >/dev/null 2>&1; then
-            local converted_win
-            converted_win="$(cygpath -w "${converted}" 2>/dev/null || true)"
-            if [[ -n "${converted_win}" ]]; then
-              puttygen "${input}" -O private-openssh -o "${converted_win}" >/dev/null 2>&1 || true
-            fi
-          fi
-        fi
-
-        [[ -f "${converted}" ]] || die $'Failed to convert PuTTY .ppk key to OpenSSH key.\n\nChecks:\n- OPS_SSH_KEYFILE must point to an existing .ppk file.\n- Ensure puttygen can read it (try using a POSIX path like /c/Users/... in ops.env).\n- If the key is encrypted, re-export it in PuTTYgen with a passphrase you can supply.\n\nExpected output key path:\n'"${converted}"
-        chmod 600 "${converted}" >/dev/null 2>&1 || true
+        [[ -f "${converted}" ]] || die $'Failed to convert .ppk to OpenSSH.\n\nUse PuTTY plink/pscp (install full PuTTY suite) to use .ppk directly, or fix puttygen conversion.'
+        chmod 600 "${converted}" 2>/dev/null || true
       fi
-
       printf '%s' "${converted}"
       return 0
     fi
-
-    die $'OPS_SSH_KEYFILE points to a PuTTY .ppk key, but these ops scripts use OpenSSH (ssh/scp).\n\nFix:\n- Convert the key to OpenSSH (PuTTYgen: Load key → Conversions → Export OpenSSH key) and set OPS_SSH_KEYFILE to the exported file.\n- OR install PuTTYgen CLI (puttygen) so the scripts can auto-convert .ppk keys.'
+    die $'OPS_SSH_KEYFILE is a .ppk key. Install PuTTY (plink + pscp) to use it directly, or install puttygen to auto-convert to OpenSSH.'
   fi
 
   printf '%s' "${keyfile}"
@@ -97,7 +96,13 @@ resolve_ssh_keyfile() {
 ssh_base_args() {
   local port="${OPS_SSH_PORT:-22}"
   local keyfile="${OPS_SSH_KEYFILE:-}"
-  local args=(-p "$port")
+  local args=()
+  if [[ "${keyfile}" == *.ppk ]]; then
+    # No -batch: first connection to a new host will prompt to accept the host key (then it's cached).
+    args=(-P "$port")
+  else
+    args=(-p "$port")
+  fi
   if [[ -n "${keyfile}" ]]; then
     args+=(-i "${keyfile}")
   fi

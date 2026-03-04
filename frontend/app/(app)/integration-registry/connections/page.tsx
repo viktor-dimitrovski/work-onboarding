@@ -7,7 +7,8 @@ import { Columns, Plus, Search, X, AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useTenant } from '@/lib/tenant-context';
 import { api } from '@/lib/api';
-import type { IrCryptoSettings, IrInstanceListItem, IrInstanceListResponse, IrGridPrefs } from '@/lib/types';
+import type { IrInstanceListItem, IrInstanceListResponse, IrGridPrefs } from '@/lib/types';
+import { useIrCrypto } from '../crypto-context';
 import {
   irEnvTone,
   irStatusTone,
@@ -20,7 +21,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { LoadingState } from '@/components/common/loading-state';
 import { EmptyState } from '@/components/common/empty-state';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ConnectionDrawer } from '@/components/integration-registry/connection-drawer';
+import { ConnectionForm } from '@/components/integration-registry/connection-form';
 import { ColumnPicker } from '@/components/integration-registry/column-picker';
 
 const PAGE_SIZE = 50;
@@ -47,7 +50,9 @@ export default function IrConnectionsPage() {
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get('highlight'));
   const [drawerTab, setDrawerTab] = useState<string>('overview');
-  const [encryptionLocked, setEncryptionLocked] = useState(false);
+  const [newDrawerOpen, setNewDrawerOpen] = useState(false);
+  const { crypto: cryptoState } = useIrCrypto();
+  const encryptionLocked = cryptoState ? !cryptoState.unlocked : false;
 
   const prefsLoaded = useRef(false);
 
@@ -70,14 +75,6 @@ export default function IrConnectionsPage() {
           setVisibleCols(prefs.visible_columns);
         }
       })
-      .catch(() => {});
-  }, [accessToken]);
-
-  useEffect(() => {
-    if (!accessToken) return;
-    api
-      .get<IrCryptoSettings>('/integration-registry/settings', accessToken)
-      .then((data) => setEncryptionLocked(!data.unlocked))
       .catch(() => {});
   }, [accessToken]);
 
@@ -130,10 +127,7 @@ export default function IrConnectionsPage() {
           {hasPermission('ir:write') && (
             <Button
               size="sm"
-              onClick={() => {
-                setSelectedId(null);
-                setDrawerTab('form');
-              }}
+              onClick={() => setNewDrawerOpen(true)}
               disabled={encryptionLocked}
             >
               <Plus className="h-4 w-4 mr-1" />
@@ -373,6 +367,27 @@ export default function IrConnectionsPage() {
           onRefresh={loadData}
         />
       )}
+
+      {/* New connection drawer */}
+      <Sheet open={newDrawerOpen} onOpenChange={setNewDrawerOpen}>
+        <SheetContent side="right" className="flex h-full w-full max-w-2xl flex-col">
+          <SheetHeader>
+            <SheetTitle>New Connection</SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto py-4">
+            {accessToken && newDrawerOpen && (
+              <ConnectionForm
+                accessToken={accessToken}
+                onSaved={() => {
+                  setNewDrawerOpen(false);
+                  loadData();
+                }}
+                onCancel={() => setNewDrawerOpen(false)}
+              />
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* Column picker */}
       <ColumnPicker

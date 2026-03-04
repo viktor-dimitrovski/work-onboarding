@@ -6,6 +6,7 @@ const backendBase = rawBackendBase.replace(/:\/\/localhost(?=[:/]|$)/, '://127.0
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  output: 'standalone',
   async rewrites() {
     return [
       {

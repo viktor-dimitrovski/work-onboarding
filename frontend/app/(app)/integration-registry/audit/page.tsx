@@ -23,6 +23,12 @@ const ACTION_TONE: Record<string, string> = {
   delete: 'bg-red-100 text-red-600 border-red-200',
 };
 
+const ENTITY_LABEL: Record<string, string> = {
+  ir_connection: 'Connection',
+  ir_instance: 'Connection',
+  ir_service: 'Service',
+};
+
 export default function IrAuditPage() {
   const router = useRouter();
   const { accessToken } = useAuth();
@@ -82,7 +88,7 @@ export default function IrAuditPage() {
               className="h-9 rounded-md border border-input bg-background px-2.5 text-sm min-w-[160px]"
             >
               <option value="">All entity types</option>
-              <option value="ir_instance">Instance</option>
+              <option value="ir_connection">Connection</option>
               <option value="ir_service">Service</option>
             </select>
           </div>
@@ -141,7 +147,7 @@ export default function IrAuditPage() {
                             {log.action}
                           </Badge>
                         </td>
-                        <td className="py-3 px-4 font-mono text-xs text-muted-foreground">{log.entity_type}</td>
+                        <td className="py-3 px-4 text-xs text-muted-foreground">{ENTITY_LABEL[log.entity_type] ?? log.entity_type}</td>
                         <td className="py-3 px-4 font-mono text-xs text-muted-foreground">{shortId(log.entity_id)}</td>
                         <td className="py-3 px-4 text-center text-xs">{log.version}</td>
                         <td className="py-3 px-4 text-sm max-w-xs truncate">{log.change_reason}</td>

@@ -699,27 +699,6 @@ export default function WorkOrderEditorPage() {
     [isNew, overviewView, servicesView],
   );
 
-  const startImportFile = useCallback(
-    async (file: File) => {
-      try {
-        const text = await file.text();
-        if (!text.trim()) {
-          setError('Selected file is empty.');
-          return;
-        }
-        if (hasUnsavedChanges) {
-          setPendingImportText(text);
-          setImportConfirmOpen(true);
-          return;
-        }
-        applyImportedWorkOrderText(text);
-      } catch {
-        setError('Failed to read file.');
-      }
-    },
-    [applyImportedWorkOrderText, hasUnsavedChanges],
-  );
-
   const previewMarkdown = useMemo(
     () =>
       buildMarkdown({
@@ -747,6 +726,27 @@ export default function WorkOrderEditorPage() {
   const hasUnsavedChanges = useMemo(
     () => previewMarkdown.trim() !== (lastSavedMarkdown || '').trim(),
     [lastSavedMarkdown, previewMarkdown],
+  );
+
+  const startImportFile = useCallback(
+    async (file: File) => {
+      try {
+        const text = await file.text();
+        if (!text.trim()) {
+          setError('Selected file is empty.');
+          return;
+        }
+        if (hasUnsavedChanges) {
+          setPendingImportText(text);
+          setImportConfirmOpen(true);
+          return;
+        }
+        applyImportedWorkOrderText(text);
+      } catch {
+        setError('Failed to read file.');
+      }
+    },
+    [applyImportedWorkOrderText, hasUnsavedChanges],
   );
   const saveLabel = saving ? 'Saving…' : hasUnsavedChanges ? 'Unsaved changes' : 'Saved';
   const localDraftLabel =

@@ -12,7 +12,7 @@ export default function LoginPage() {
         </div>
         <div>
           <h1 className="text-base font-semibold tracking-tight text-foreground sm:text-lg">
-            Onboarding Hub
+            Solve Box
           </h1>
           <p className="text-xs text-muted-foreground mt-0.5">
             Tracks, assessments, and much more.

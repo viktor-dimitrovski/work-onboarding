@@ -1,58 +1,87 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --------------------------------------------
-# Trigger frontend deploy on VPS
-# --------------------------------------------
+# Deploy frontend: build locally (Next.js standalone) → upload → extract + restart on server.
+# No git on server. No node_modules upload (standalone build is self-contained).
 #
-# This is a thin wrapper that calls:
-#   ops/vps/deploy-frontend.sh
-#
-# Requirements:
-# - Git Bash
-# - ssh (Git for Windows)
+# Usage:  bash ops/local/deploy-frontend.sh [--env ops/ops.env]
+# Or:     run-deploy-frontend.bat
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/common.sh"
 
-usage() {
-  cat <<'EOF'
-Usage:
-  bash ops/local/deploy-frontend.sh --env ops/ops.env [--branch main] [--skip-install] [--skip-build]
-EOF
-}
-
 ENV_FILE="${ROOT_DIR}/ops/ops.env"
-BRANCH=""
-SKIP_INSTALL="false"
-SKIP_BUILD="false"
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --env) ENV_FILE="${2:-}"; shift 2 ;;
-    --branch) BRANCH="${2:-}"; shift 2 ;;
-    --skip-install) SKIP_INSTALL="true"; shift 1 ;;
-    --skip-build) SKIP_BUILD="true"; shift 1 ;;
-    --help|-h) usage; exit 0 ;;
+    --env) ENV_FILE="$2"; shift 2 ;;
+    --help|-h) echo "Usage: deploy-frontend.sh [--env ops/ops.env]"; exit 0 ;;
     *) die "Unknown arg: $1" ;;
   esac
 done
 
 load_env_file "${ENV_FILE}"
-require_cmd ssh
+require_cmd "${OPS_SSH_CMD:-ssh}"
+require_cmd "${OPS_SCP_CMD:-scp}"
+require_cmd node
+require_cmd npm
+
+APP_DIR="${OPS_REMOTE_APP_DIR}"
+SVC="${OPS_FRONTEND_SERVICE:-solvebox-hub-frontend}"
+APP_USER="${OPS_APP_USER:-solvebox}"
 
 SSH_ARGS=()
-while IFS= read -r line; do SSH_ARGS+=("$line"); done < <(ssh_base_args)
+while IFS= read -r l; do SSH_ARGS+=("$l"); done < <(ssh_base_args)
 UAH="$(user_at_host)"
 
-branch="${BRANCH:-${OPS_GIT_BRANCH:-main}}"
+FRONTEND_DIR="${ROOT_DIR}/frontend"
 
-remote_cmd="cd '${OPS_REMOTE_APP_DIR}' && sudo bash ops/vps/deploy-frontend.sh --branch '${branch}'"
-if [[ "${SKIP_INSTALL}" == "true" ]]; then remote_cmd+=" --skip-install"; fi
-if [[ "${SKIP_BUILD}" == "true" ]]; then remote_cmd+=" --skip-build"; fi
+# ── 1. Check deps ─────────────────────────────────────────────────────────
+cd "${FRONTEND_DIR}"
+if [[ ! -d node_modules ]]; then
+  die "node_modules not found. Run 'npm install' in the frontend folder first, then re-run this script."
+fi
+log INFO "Step 1/5: node_modules present, skipping install."
 
-log INFO "Deploying frontend on VPS (branch=${branch})"
-ssh "${SSH_ARGS[@]}" "${UAH}" "${remote_cmd}"
-log INFO "Frontend deploy finished."
+# ── 2. Build ───────────────────────────────────────────────────────────────
+log INFO "Step 2/5: Building Next.js standalone (this takes 2-5 minutes, please wait)..."
+NEXT_TELEMETRY_DISABLED=1 \
+NEXT_PUBLIC_API_BASE_URL="${OPS_NEXT_PUBLIC_API_BASE_URL:-/api/v1}" \
+BACKEND_API_URL="${OPS_BACKEND_API_URL:-http://127.0.0.1:8001}" \
+npm run build
+log INFO "Step 2/5: Build complete."
 
+# ── 3. Prepare standalone bundle ──────────────────────────────────────────
+# Next.js standalone output lives in .next/standalone but needs static assets copied in.
+log INFO "Step 3/5: Preparing standalone bundle..."
+cp -r "${FRONTEND_DIR}/.next/static"  "${FRONTEND_DIR}/.next/standalone/.next/static"
+cp -r "${FRONTEND_DIR}/public"        "${FRONTEND_DIR}/.next/standalone/public"
+
+ts="$(date +%Y%m%d_%H%M%S)"
+ARCHIVE="frontend-${ts}.tar.gz"
+LOCAL="${ROOT_DIR}/ops/_backups/${ARCHIVE}"
+mkdir -p "${ROOT_DIR}/ops/_backups"
+trap 'rm -f "${LOCAL}"' EXIT
+
+tar -C "${FRONTEND_DIR}/.next/standalone" -czf "${LOCAL}" .
+log INFO "Step 3/5: Bundle ready — $(du -sh "${LOCAL}" | cut -f1)"
+
+# ── 4. Upload ──────────────────────────────────────────────────────────────
+log INFO "Step 4/5: Uploading to ${UAH}:/tmp/${ARCHIVE} ..."
+"${OPS_SCP_CMD:-scp}" "${SSH_ARGS[@]}" "${LOCAL}" "${UAH}:/tmp/${ARCHIVE}"
+log INFO "Step 4/5: Upload complete."
+
+# ── 5. Extract + restart ───────────────────────────────────────────────────
+log INFO "Step 5/5: Deploying on server (extract + restart)..."
+"${OPS_SSH_CMD:-ssh}" "${SSH_ARGS[@]}" "${UAH}" "
+set -euo pipefail
+sudo mkdir -p '${APP_DIR}/frontend'
+sudo tar -C '${APP_DIR}/frontend' -xzf '/tmp/${ARCHIVE}'
+sudo rm -f '/tmp/${ARCHIVE}'
+sudo chown -R '${APP_USER}:${APP_USER}' '${APP_DIR}/frontend'
+sudo systemctl restart '${SVC}'
+sudo systemctl status '${SVC}' --no-pager -l | tail -8
+"
+
+log INFO "Step 5/5: Server restarted."
+log INFO "Frontend deploy done."
