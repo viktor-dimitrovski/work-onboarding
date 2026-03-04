@@ -616,11 +616,9 @@ export function WorkOrderContentTab({
               >
                 <div className='flex items-start justify-between gap-2'>
                   <div className='flex items-start gap-2'>
-                    <StatusIcon
-                      className={cn('mt-0.5 h-4 w-4', statusColor)}
-                      title={section.status.reason}
-                      aria-label={section.status.reason}
-                    />
+                    <span title={section.status.reason} aria-label={section.status.reason}>
+                      <StatusIcon className={cn('mt-0.5 h-4 w-4', statusColor)} />
+                    </span>
                     <div>
                       <p className='text-sm font-medium'>{section.title}</p>
                       <p className='mt-1 line-clamp-1 text-xs text-muted-foreground'>

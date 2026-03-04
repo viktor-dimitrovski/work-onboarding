@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { LoadingState } from '@/components/common/loading-state';
@@ -8,7 +8,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { AuthUser } from '@/lib/types';
 
-export default function OAuthCallbackPage() {
+function OAuthCallbackInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { setSession } = useAuth();
@@ -44,4 +44,12 @@ export default function OAuthCallbackPage() {
   }
 
   return <LoadingState label='Signing you in...' />;
+}
+
+export default function OAuthCallbackPage() {
+  return (
+    <Suspense fallback={<LoadingState label='Signing you in...' />}>
+      <OAuthCallbackInner />
+    </Suspense>
+  );
 }

@@ -409,7 +409,7 @@ export function TaskDetailsSheet({ open, onOpenChange, task, phase, onUpdateTask
                             options: ['Option 1', 'Option 2'],
                             correct_option_ids: [0],
                             points: 5,
-                            difficulty: 'medium',
+                            difficulty: 'medium' as const,
                           },
                         ];
                         updateQuizQuestions(nextQuestions);

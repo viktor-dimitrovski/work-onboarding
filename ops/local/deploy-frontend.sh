@@ -55,7 +55,9 @@ log INFO "Step 2/5: Build complete."
 # Next.js standalone output lives in .next/standalone but needs static assets copied in.
 log INFO "Step 3/5: Preparing standalone bundle..."
 cp -r "${FRONTEND_DIR}/.next/static"  "${FRONTEND_DIR}/.next/standalone/.next/static"
-cp -r "${FRONTEND_DIR}/public"        "${FRONTEND_DIR}/.next/standalone/public"
+if [[ -d "${FRONTEND_DIR}/public" ]]; then
+  cp -r "${FRONTEND_DIR}/public" "${FRONTEND_DIR}/.next/standalone/public"
+fi
 
 ts="$(date +%Y%m%d_%H%M%S)"
 ARCHIVE="frontend-${ts}.tar.gz"

@@ -238,7 +238,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    refreshTimerRef.current = window.setTimeout(() => {
+    refreshTimerRef.current = setTimeout(() => {
       void refreshSession();
     }, delay);
 
