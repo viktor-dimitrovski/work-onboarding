@@ -106,7 +106,14 @@ ssh deploy@46.62.200.124
 ```bash
 sudo mkdir -p /opt/apps/solvebox-hub
 sudo mkdir -p /var/backups/solvebox-hub/db
-sudo chown deploy:deploy /opt/apps/solvebox-hub
+```
+
+Создај го корисникот под кој ќе работи апликацијата (задолжително — инаку сервисите паѓаат со status=217/USER):
+
+```bash
+sudo groupadd --system solvebox
+sudo useradd --system --no-create-home --gid solvebox --shell /usr/sbin/nologin solvebox
+sudo chown -R solvebox:solvebox /opt/apps/solvebox-hub
 ```
 
 Создај конфиг за backend (ова е `/etc/solvebox-hub/backend.env` — постојан, серверски):
@@ -133,7 +140,7 @@ REFRESH_TOKEN_EXPIRE_DAYS=7
 Заштити го фајлот:
 
 ```bash
-sudo chown root:solvebox-hub /etc/solvebox-hub/backend.env
+sudo chown root:solvebox /etc/solvebox-hub/backend.env
 sudo chmod 640 /etc/solvebox-hub/backend.env
 ```
 
@@ -150,16 +157,17 @@ PORT=3001
 ```
 
 ```bash
-sudo chown root:solvebox-hub /etc/solvebox-hub/frontend.env
+sudo chown root:solvebox /etc/solvebox-hub/frontend.env
 sudo chmod 640 /etc/solvebox-hub/frontend.env
 ```
 
 ### 4.3 Python venv
 
+Виртуелната околина се креира со `sudo` (директориумот е сопственост на `solvebox`, па без root немаш право да пишуваш):
+
 ```bash
-cd /opt/apps/solvebox-hub
-python3 -m venv .venv
-sudo chown -R solvebox-hub:solvebox-hub /opt/apps/solvebox-hub
+sudo bash -c 'cd /opt/apps/solvebox-hub && python3 -m venv .venv'
+sudo chown -R solvebox:solvebox /opt/apps/solvebox-hub/.venv
 ```
 
 ### 4.4 Systemd сервиси
@@ -173,8 +181,8 @@ After=network.target postgresql.service
 
 [Service]
 Type=simple
-User=solvebox-hub
-Group=solvebox-hub
+User=solvebox
+Group=solvebox
 WorkingDirectory=/opt/apps/solvebox-hub/backend
 EnvironmentFile=/etc/solvebox-hub/backend.env
 Environment=PYTHONUNBUFFERED=1
@@ -195,8 +203,8 @@ After=network.target solvebox-hub-backend.service
 
 [Service]
 Type=simple
-User=solvebox-hub
-Group=solvebox-hub
+User=solvebox
+Group=solvebox
 WorkingDirectory=/opt/apps/solvebox-hub/frontend
 EnvironmentFile=/etc/solvebox-hub/frontend.env
 Environment=NODE_ENV=production
@@ -222,26 +230,39 @@ sudo systemctl enable --now solvebox-hub-backend solvebox-hub-frontend
 sudo nano /etc/nginx/sites-available/solvebox-hub.conf
 ```
 
+За мулти-тенант (еден домен + сите субдомени како тенанти), користи `server_name` со wildcard и trusted headers за да апликацијата правилно одреди тенант од Host:
+
 ```nginx
 server {
     listen 80;
-    server_name твој-домен.com _;
+    # Apex + сите субдомени (тенанти: acme.hub.123.org; резервирани: admin.hub.123.org)
+    server_name hub.123.org *.hub.123.org;
 
-    # Frontend (Next.js)
+    client_max_body_size 25m;
+
     location / {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
     }
 
-    # Backend API
     location /api/ {
         proxy_pass http://127.0.0.1:8001;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
     }
 }
 ```
+
+Замени `hub.123.org` со твојот домен. Во `backend.env` на серверот постави: `BASE_DOMAINS=hub.123.org`, `RESERVED_SUBDOMAINS=admin,billing,docs,status,api`, `TRUST_PROXY_HEADERS=true`. Погледни и `docs/deployment/nginx-multitenant.conf.example`.
 
 ```bash
 sudo ln -s /etc/nginx/sites-available/solvebox-hub.conf /etc/nginx/sites-enabled/

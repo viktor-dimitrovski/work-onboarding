@@ -14,9 +14,6 @@ export default function LoginPage() {
           <h1 className="text-base font-semibold tracking-tight text-foreground sm:text-lg">
             Solve Box
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Tracks, assessments, and much more.
-          </p>
         </div>
       </header>
 
