@@ -52,6 +52,16 @@ type TenantModule = {
   source: string;
 };
 
+type TenantMemberRow = {
+  id: string;
+  user_id: string;
+  email: string;
+  full_name: string | null;
+  roles: string[];
+  status: string;
+  created_at: string;
+};
+
 const MODULE_KEYS = ['tracks', 'assignments', 'assessments', 'reports', 'users', 'settings', 'billing', 'releases'];
 
 type AdminSectionId = 'tenants' | 'tenant' | 'plans' | 'billing';
@@ -168,6 +178,8 @@ export default function AdminTenantsPage() {
 
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
+  const [tenantMembers, setTenantMembers] = useState<TenantMemberRow[]>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
 
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [editPlanName, setEditPlanName] = useState('');
@@ -268,6 +280,25 @@ export default function AdminTenantsPage() {
       }
     };
     void loadModules();
+  }, [accessToken, selectedTenantId]);
+
+  useEffect(() => {
+    const loadMembers = async () => {
+      if (!accessToken || !selectedTenantId) {
+        setTenantMembers([]);
+        return;
+      }
+      setMembersLoading(true);
+      try {
+        const response = await api.get<TenantMemberRow[]>(`/admin/tenants/${selectedTenantId}/members`, accessToken);
+        setTenantMembers(response);
+      } catch {
+        setTenantMembers([]);
+      } finally {
+        setMembersLoading(false);
+      }
+    };
+    void loadMembers();
   }, [accessToken, selectedTenantId]);
 
   useEffect(() => {
@@ -389,6 +420,14 @@ export default function AdminTenantsPage() {
     }
   };
 
+  const reloadMembers = async () => {
+    if (!accessToken || !selectedTenantId) return;
+    try {
+      const response = await api.get<TenantMemberRow[]>(`/admin/tenants/${selectedTenantId}/members`, accessToken);
+      setTenantMembers(response);
+    } catch { /* ignore */ }
+  };
+
   const inviteAdmin = async () => {
     if (!accessToken || !selectedTenantId || !inviteEmail || !inviteName) return;
     setError(null);
@@ -400,8 +439,35 @@ export default function AdminTenantsPage() {
       );
       setInviteEmail('');
       setInviteName('');
+      await reloadMembers();
     } catch (inviteError) {
       setError(inviteError instanceof Error ? inviteError.message : 'Failed to invite admin');
+    }
+  };
+
+  const toggleMemberStatus = async (member: TenantMemberRow) => {
+    if (!accessToken || !selectedTenantId) return;
+    const newStatus = member.status === 'active' ? 'disabled' : 'active';
+    try {
+      const updated = await api.patch<TenantMemberRow>(
+        `/admin/tenants/${selectedTenantId}/members/${member.id}`,
+        { status: newStatus },
+        accessToken,
+      );
+      setTenantMembers((prev) => prev.map((m) => (m.id === member.id ? updated : m)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update member');
+    }
+  };
+
+  const removeMember = async (member: TenantMemberRow) => {
+    if (!accessToken || !selectedTenantId) return;
+    if (!confirm(`Remove ${member.email} from this tenant? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/admin/tenants/${selectedTenantId}/members/${member.id}`, accessToken);
+      setTenantMembers((prev) => prev.filter((m) => m.id !== member.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove member');
     }
   };
 
@@ -925,33 +991,104 @@ export default function AdminTenantsPage() {
                           </TabsContent>
 
                           <TabsContent value='admins'>
-                            <div className='rounded-lg border bg-white p-4'>
-                              <div className='flex flex-wrap items-start justify-between gap-3'>
-                                <div>
-                                  <p className='text-sm font-semibold'>Invite tenant admin</p>
-                                  <p className='mt-1 text-xs text-muted-foreground'>Create or link the first tenant admin.</p>
+                            <div className='space-y-4'>
+                              <div className='rounded-lg border bg-white p-4'>
+                                <div className='flex flex-wrap items-start justify-between gap-3'>
+                                  <div>
+                                    <p className='text-sm font-semibold'>Tenant members</p>
+                                    <p className='mt-1 text-xs text-muted-foreground'>
+                                      Users with access to <span className='font-medium'>{selectedTenant.slug}</span>. You can disable or remove members.
+                                    </p>
+                                  </div>
+                                  <Badge variant='muted' className='text-[10px]'>
+                                    {tenantMembers.length} member{tenantMembers.length !== 1 ? 's' : ''}
+                                  </Badge>
                                 </div>
-                                <Badge variant='muted' className='text-[10px]'>
-                                  Tenant: {selectedTenant.slug}
-                                </Badge>
+
+                                {membersLoading ? (
+                                  <p className='mt-4 text-sm text-muted-foreground'>Loading members...</p>
+                                ) : tenantMembers.length === 0 ? (
+                                  <p className='mt-4 text-sm text-muted-foreground'>No members yet. Invite one below.</p>
+                                ) : (
+                                  <div className='mt-4 overflow-x-auto'>
+                                    <table className='w-full text-sm'>
+                                      <thead>
+                                        <tr className='border-b text-left text-muted-foreground'>
+                                          <th className='px-3 py-2 font-medium'>User</th>
+                                          <th className='px-3 py-2 font-medium'>Roles</th>
+                                          <th className='px-3 py-2 font-medium'>Status</th>
+                                          <th className='px-3 py-2 text-right font-medium'>Actions</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {tenantMembers.map((member) => (
+                                          <tr key={member.id} className='border-b last:border-b-0'>
+                                            <td className='px-3 py-2'>
+                                              <div className='font-medium leading-5'>{member.full_name || '—'}</div>
+                                              <div className='text-xs text-muted-foreground'>{member.email}</div>
+                                            </td>
+                                            <td className='px-3 py-2'>
+                                              <div className='flex flex-wrap gap-1'>
+                                                {member.roles.map((r) => (
+                                                  <span key={r} className='inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600'>
+                                                    {r.replaceAll('_', ' ')}
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            </td>
+                                            <td className='px-3 py-2'>
+                                              <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${member.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                {member.status}
+                                              </span>
+                                            </td>
+                                            <td className='px-3 py-2 text-right'>
+                                              <div className='flex items-center justify-end gap-2'>
+                                                <Button
+                                                  variant='outline'
+                                                  size='sm'
+                                                  onClick={() => toggleMemberStatus(member)}
+                                                >
+                                                  {member.status === 'active' ? 'Disable' : 'Enable'}
+                                                </Button>
+                                                <Button
+                                                  variant='outline'
+                                                  size='sm'
+                                                  className='text-destructive hover:text-destructive'
+                                                  onClick={() => removeMember(member)}
+                                                >
+                                                  Remove
+                                                </Button>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
                               </div>
 
-                              <div className='mt-4 grid gap-3 sm:grid-cols-2'>
-                                <div className='space-y-2 sm:col-span-2'>
-                                  <Label>Email</Label>
-                                  <Input type='email' value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
-                                </div>
-                                <div className='space-y-2 sm:col-span-2'>
-                                  <Label>Full name</Label>
-                                  <Input value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
-                                </div>
-                                <p className='sm:col-span-2 text-xs text-muted-foreground'>
-                                  New users will receive an invitation email with a set-password link. Existing users will be notified they were added to this tenant.
-                                </p>
-                                <div className='sm:col-span-2 flex items-center justify-end pt-1'>
-                                  <Button onClick={inviteAdmin} disabled={!inviteEmail || !inviteName}>
-                                    Invite admin
-                                  </Button>
+                              <div className='rounded-lg border bg-white p-4'>
+                                <p className='text-sm font-semibold'>Invite tenant admin</p>
+                                <p className='mt-1 text-xs text-muted-foreground'>Add a new admin to this tenant.</p>
+
+                                <div className='mt-4 grid gap-3 sm:grid-cols-2'>
+                                  <div className='space-y-2 sm:col-span-2'>
+                                    <Label>Email</Label>
+                                    <Input type='email' value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
+                                  </div>
+                                  <div className='space-y-2 sm:col-span-2'>
+                                    <Label>Full name</Label>
+                                    <Input value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
+                                  </div>
+                                  <p className='sm:col-span-2 text-xs text-muted-foreground'>
+                                    New users will receive an invitation email with a set-password link. Existing users will be notified they were added to this tenant.
+                                  </p>
+                                  <div className='sm:col-span-2 flex items-center justify-end pt-1'>
+                                    <Button onClick={inviteAdmin} disabled={!inviteEmail || !inviteName}>
+                                      Invite admin
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
                             </div>

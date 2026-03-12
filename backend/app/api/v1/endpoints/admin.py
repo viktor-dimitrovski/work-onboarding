@@ -23,6 +23,8 @@ from app.schemas.tenant import (
     TenantChangePlan,
     TenantCreate,
     TenantListResponse,
+    TenantMemberOut,
+    TenantMemberStatusUpdate,
     TenantModuleOut,
     TenantModuleUpdate,
     TenantOut,
@@ -396,6 +398,103 @@ def invite_tenant_admin(
         )
 
     return {'status': 'ok'}
+
+
+# ── Tenant member management ──────────────────────────────────────────
+
+
+@router.get('/tenants/{tenant_id}/members', response_model=list[TenantMemberOut], dependencies=[Depends(require_product_admin_host)])
+def list_tenant_members(
+    tenant_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> list[TenantMemberOut]:
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+    if not tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Tenant not found')
+
+    set_tenant_id(db, str(tenant_id))
+    memberships = db.scalars(
+        select(TenantMembership).where(TenantMembership.tenant_id == tenant_id)
+    ).all()
+
+    items: list[TenantMemberOut] = []
+    for m in memberships:
+        user = db.scalar(select(User).where(User.id == m.user_id))
+        if not user:
+            continue
+        items.append(TenantMemberOut(
+            id=m.id,
+            user_id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            roles=m.roles(),
+            status=m.status,
+            created_at=m.created_at,
+        ))
+    return items
+
+
+@router.patch('/tenants/{tenant_id}/members/{membership_id}', response_model=TenantMemberOut, dependencies=[Depends(require_product_admin_host)])
+def update_tenant_member(
+    tenant_id: UUID,
+    membership_id: UUID,
+    payload: TenantMemberStatusUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> TenantMemberOut:
+    if payload.status not in ('active', 'disabled'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status must be 'active' or 'disabled'")
+
+    set_tenant_id(db, str(tenant_id))
+    membership = db.scalar(
+        select(TenantMembership).where(
+            TenantMembership.id == membership_id,
+            TenantMembership.tenant_id == tenant_id,
+        )
+    )
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Membership not found')
+
+    membership.status = payload.status
+    db.commit()
+    db.refresh(membership)
+
+    user = db.scalar(select(User).where(User.id == membership.user_id))
+    return TenantMemberOut(
+        id=membership.id,
+        user_id=membership.user_id,
+        email=user.email if user else '',
+        full_name=user.full_name if user else None,
+        roles=membership.roles(),
+        status=membership.status,
+        created_at=membership.created_at,
+    )
+
+
+@router.delete(
+    '/tenants/{tenant_id}/members/{membership_id}',
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    dependencies=[Depends(require_product_admin_host)],
+)
+def remove_tenant_member(
+    tenant_id: UUID,
+    membership_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> None:
+    set_tenant_id(db, str(tenant_id))
+    membership = db.scalar(
+        select(TenantMembership).where(
+            TenantMembership.id == membership_id,
+            TenantMembership.tenant_id == tenant_id,
+        )
+    )
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Membership not found')
+    db.delete(membership)
+    db.commit()
 
 
 @router.get('/users/{user_id}/memberships', response_model=list[UserTenantMembershipOut], dependencies=[Depends(require_product_admin_host)])

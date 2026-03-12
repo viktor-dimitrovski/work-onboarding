@@ -6,10 +6,12 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_active_user
+from app.api.deps import get_current_active_user, get_user_role_names
 from app.core.config import settings
-from app.db.session import get_db
+from app.db.session import get_db, set_tenant_id
 from app.models.rbac import User
+from app.models.tenant import Tenant, TenantMembership
+from app.multitenancy.tenant_resolution import resolve_host
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
@@ -41,6 +43,20 @@ def _to_user_summary(user: User) -> UserSummary:
     )
 
 
+def _resolve_tenant_from_request(request: Request, db: Session) -> Tenant | None:
+    """If the request originates from a tenant subdomain, return the Tenant. Otherwise None."""
+    host = (request.headers.get('host') or request.headers.get('x-forwarded-host') or '').strip()
+    if not host:
+        return None
+    base_domains = [d.strip().lower() for d in settings.BASE_DOMAINS.split(',') if d.strip()]
+    reserved = {s.strip().lower() for s in settings.RESERVED_SUBDOMAINS.split(',') if s.strip()}
+    product_map = {k: k for k in reserved}
+    resolution = resolve_host(host, base_domains=base_domains, reserved=reserved, product_map=product_map)
+    if resolution.kind != 'tenant' or not resolution.tenant_slug:
+        return None
+    return db.scalar(select(Tenant).where(Tenant.slug == resolution.tenant_slug, Tenant.is_active.is_(True)))
+
+
 @router.post('/login', response_model=TokenResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
     client_ip = request.client.host if request.client else 'unknown'
@@ -63,6 +79,34 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         )
         db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid credentials')
+
+    tenant = _resolve_tenant_from_request(request, db)
+    if tenant:
+        is_super = 'super_admin' in get_user_role_names(user)
+        if not is_super:
+            set_tenant_id(db, str(tenant.id))
+            membership = db.scalar(
+                select(TenantMembership).where(
+                    TenantMembership.tenant_id == tenant.id,
+                    TenantMembership.user_id == user.id,
+                    TenantMembership.status == 'active',
+                )
+            )
+            if not membership:
+                audit_service.log_action(
+                    db,
+                    actor_user_id=user.id,
+                    action='user_login',
+                    entity_type='auth',
+                    status='failure',
+                    details={'email': user.email, 'reason': 'not_tenant_member', 'tenant': tenant.slug},
+                    ip_address=client_ip,
+                )
+                db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail='You do not have access to this organization. Contact your administrator.',
+                )
 
     login_rate_limiter.reset(client_ip)
     access_token, refresh_token = auth_service.issue_token_pair(

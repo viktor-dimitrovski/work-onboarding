@@ -119,3 +119,17 @@ class UserTenantMembershipOut(BaseModel):
     tenant: TenantSummaryOut
     status: str
     roles: list[str] = Field(default_factory=list)
+
+
+class TenantMemberOut(BaseModel):
+    id: UUID
+    user_id: UUID
+    email: str
+    full_name: str | None = None
+    roles: list[str] = Field(default_factory=list)
+    status: str
+    created_at: datetime
+
+
+class TenantMemberStatusUpdate(BaseModel):
+    status: str = Field(description="'active' or 'disabled'")
