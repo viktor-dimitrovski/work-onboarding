@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from app.schemas.common import BaseSchema, PaginationMeta
 
@@ -22,6 +22,8 @@ class TenantCreate(BaseModel):
     tenant_type: str = 'company'
     is_active: bool = True
     plan_id: UUID | None = None
+    admin_email: EmailStr | None = None
+    admin_full_name: str | None = None
 
 
 class TenantUpdate(BaseModel):
@@ -92,9 +94,8 @@ class TenantChangePlan(BaseModel):
 
 
 class TenantAdminInvite(BaseModel):
-    email: str
+    email: EmailStr
     full_name: str
-    password: str | None = None
 
 
 class TenantContextOut(BaseModel):

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
@@ -26,6 +26,14 @@ const schema = z
 type Values = z.infer<typeof schema>;
 
 export default function SetPasswordPage() {
+  return (
+    <Suspense>
+      <SetPasswordInner />
+    </Suspense>
+  );
+}
+
+function SetPasswordInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get('token') ?? '';

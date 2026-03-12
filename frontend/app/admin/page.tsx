@@ -163,10 +163,11 @@ export default function AdminTenantsPage() {
   const [newTenantSlug, setNewTenantSlug] = useState('');
   const [newTenantType, setNewTenantType] = useState('company');
   const [newTenantPlan, setNewTenantPlan] = useState<string>('');
+  const [newTenantAdminEmail, setNewTenantAdminEmail] = useState('');
+  const [newTenantAdminName, setNewTenantAdminName] = useState('');
 
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
-  const [invitePassword, setInvitePassword] = useState('');
 
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [editPlanName, setEditPlanName] = useState('');
@@ -335,17 +336,23 @@ export default function AdminTenantsPage() {
     if (!accessToken || !newTenantName || !newTenantSlug) return;
     setError(null);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: newTenantName,
         slug: newTenantSlug,
         tenant_type: newTenantType,
         plan_id: newTenantPlan || null,
       };
+      if (newTenantAdminEmail) {
+        payload.admin_email = newTenantAdminEmail;
+        payload.admin_full_name = newTenantAdminName || null;
+      }
       const created = await api.post<TenantRow>('/admin/tenants', payload, accessToken);
       setTenants((prev) => [created, ...prev]);
       setNewTenantName('');
       setNewTenantSlug('');
       setNewTenantPlan('');
+      setNewTenantAdminEmail('');
+      setNewTenantAdminName('');
       setSelectedTenantId(created.id);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : 'Failed to create tenant');
@@ -388,12 +395,11 @@ export default function AdminTenantsPage() {
     try {
       await api.post(
         `/admin/tenants/${selectedTenantId}/admins`,
-        { email: inviteEmail, full_name: inviteName, password: invitePassword || null },
+        { email: inviteEmail, full_name: inviteName },
         accessToken,
       );
       setInviteEmail('');
       setInviteName('');
-      setInvitePassword('');
     } catch (inviteError) {
       setError(inviteError instanceof Error ? inviteError.message : 'Failed to invite admin');
     }
@@ -746,6 +752,29 @@ export default function AdminTenantsPage() {
                                 </div>
                               </div>
 
+                              <div className='grid gap-3 sm:grid-cols-2'>
+                                <div className='space-y-2'>
+                                  <Label>Admin email <span className='text-muted-foreground font-normal'>(optional)</span></Label>
+                                  <Input
+                                    type='email'
+                                    placeholder='admin@company.com'
+                                    value={newTenantAdminEmail}
+                                    onChange={(event) => setNewTenantAdminEmail(event.target.value)}
+                                  />
+                                </div>
+                                <div className='space-y-2'>
+                                  <Label>Admin full name</Label>
+                                  <Input
+                                    placeholder='Jane Doe'
+                                    value={newTenantAdminName}
+                                    onChange={(event) => setNewTenantAdminName(event.target.value)}
+                                  />
+                                </div>
+                              </div>
+                              {newTenantAdminEmail && (
+                                <p className='text-xs text-muted-foreground'>An invitation email with a set-password link will be sent to this admin.</p>
+                              )}
+
                               <div className='flex items-center justify-end gap-2 pt-1'>
                                 <Button onClick={createTenant} disabled={!newTenantName || !newTenantSlug}>
                                   Create tenant
@@ -910,20 +939,15 @@ export default function AdminTenantsPage() {
                               <div className='mt-4 grid gap-3 sm:grid-cols-2'>
                                 <div className='space-y-2 sm:col-span-2'>
                                   <Label>Email</Label>
-                                  <Input value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
+                                  <Input type='email' value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
                                 </div>
-                                <div className='space-y-2'>
+                                <div className='space-y-2 sm:col-span-2'>
                                   <Label>Full name</Label>
                                   <Input value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
                                 </div>
-                                <div className='space-y-2'>
-                                  <Label>Password (new user only)</Label>
-                                  <Input
-                                    type='password'
-                                    value={invitePassword}
-                                    onChange={(event) => setInvitePassword(event.target.value)}
-                                  />
-                                </div>
+                                <p className='sm:col-span-2 text-xs text-muted-foreground'>
+                                  New users will receive an invitation email with a set-password link. Existing users will be notified they were added to this tenant.
+                                </p>
                                 <div className='sm:col-span-2 flex items-center justify-end pt-1'>
                                   <Button onClick={inviteAdmin} disabled={!inviteEmail || !inviteName}>
                                     Invite admin

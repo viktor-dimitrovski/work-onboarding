@@ -7,7 +7,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
-from app.core.security import hash_password
 from app.db.session import get_db, set_tenant_id
 from app.core.config import settings
 from app.models.rbac import User
@@ -15,6 +14,7 @@ from app.models.tenant import Tenant, TenantMembership
 from app.modules.billing.models import Plan, Subscription, TenantModule
 from app.modules.billing.service import sync_modules_from_plan
 from app.multitenancy.deps import require_product_admin_host
+from app.services import auth_service, email_service
 from app.schemas.tenant import (
     PlanCreate,
     PlanUpdate,
@@ -106,7 +106,57 @@ def create_tenant(
         )
         sync_modules_from_plan(db, tenant_id=tenant.id, plan=plan)
 
+    raw_token: str | None = None
+    admin_user: User | None = None
+    is_new_admin = False
+    if payload.admin_email:
+        set_tenant_id(db, str(tenant.id))
+        admin_email = payload.admin_email.lower()
+        admin_user = db.scalar(select(User).where(User.email == admin_email))
+        if not admin_user:
+            admin_user = User(
+                email=admin_email,
+                full_name=payload.admin_full_name or admin_email,
+                hashed_password=None,
+                is_active=True,
+                password_change_required=True,
+            )
+            db.add(admin_user)
+            db.flush()
+            is_new_admin = True
+
+        db.add(TenantMembership(
+            tenant_id=tenant.id,
+            user_id=admin_user.id,
+            role='tenant_admin',
+            roles_json=['tenant_admin'],
+            status='active',
+        ))
+
+        if is_new_admin:
+            raw_token = auth_service.create_password_set_token(db, user=admin_user, purpose='invitation', expires_hours=72)
+
     db.commit()
+
+    if admin_user and is_new_admin and raw_token:
+        set_password_url = f'{settings.FRONTEND_BASE_URL.rstrip("/")}/set-password?token={raw_token}'
+        email_service.send_invitation(
+            to_email=admin_user.email,
+            to_name=admin_user.full_name or '',
+            tenant_name=tenant.name,
+            set_password_url=set_password_url,
+            roles=['tenant_admin'],
+        )
+    elif admin_user and not is_new_admin:
+        base = settings.BASE_DOMAINS.split(',')[0].strip()
+        email_service.send_tenant_welcome(
+            to_email=admin_user.email,
+            to_name=admin_user.full_name or '',
+            tenant_name=tenant.name,
+            tenant_url=f'https://{slug}.{base}/dashboard',
+            roles=['tenant_admin'],
+        )
+
     return TenantOut.model_validate(tenant)
 
 
@@ -288,19 +338,19 @@ def invite_tenant_admin(
     if not tenant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Tenant not found')
 
+    is_new = False
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
     if not user:
-        if not payload.password:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Password required for new user')
         user = User(
             email=payload.email.lower(),
             full_name=payload.full_name,
-            hashed_password=hash_password(payload.password),
+            hashed_password=None,
             is_active=True,
             password_change_required=True,
         )
         db.add(user)
         db.flush()
+        is_new = True
 
     set_tenant_id(db, str(tenant_id))
     membership = db.scalar(
@@ -319,7 +369,32 @@ def invite_tenant_admin(
                 status='active',
             )
         )
+
+    raw_token: str | None = None
+    if is_new:
+        raw_token = auth_service.create_password_set_token(db, user=user, purpose='invitation', expires_hours=72)
+
     db.commit()
+
+    if is_new and raw_token:
+        set_password_url = f'{settings.FRONTEND_BASE_URL.rstrip("/")}/set-password?token={raw_token}'
+        email_service.send_invitation(
+            to_email=user.email,
+            to_name=user.full_name or '',
+            tenant_name=tenant.name,
+            set_password_url=set_password_url,
+            roles=['tenant_admin'],
+        )
+    elif not is_new:
+        base = settings.BASE_DOMAINS.split(',')[0].strip()
+        email_service.send_tenant_welcome(
+            to_email=user.email,
+            to_name=user.full_name or '',
+            tenant_name=tenant.name,
+            tenant_url=f'https://{tenant.slug}.{base}/dashboard',
+            roles=['tenant_admin'],
+        )
+
     return {'status': 'ok'}
 
 

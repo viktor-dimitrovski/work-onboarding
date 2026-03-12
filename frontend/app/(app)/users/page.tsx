@@ -95,43 +95,41 @@ function TenantRolesEditor({
           Roles ({safeValue.length})
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align='start' className='w-64'>
+      <DropdownMenuContent align='start' className='w-64 max-h-[70vh] overflow-y-auto'>
         <DropdownMenuLabel>Tenant roles</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <ScrollArea className='max-h-80'>
-          {tenantRoleGroups.map((group, groupIdx) => {
-            const selectedInGroup = group.roles.filter((r) => safeValue.includes(r));
-            const countLabel = selectedInGroup.length > 0 ? ` (${selectedInGroup.length}/${group.roles.length})` : '';
-            return (
-              <div key={group.label}>
-                {groupIdx > 0 && <DropdownMenuSeparator />}
-                <DropdownMenuLabel className='text-xs font-semibold text-muted-foreground'>
-                  {group.label}{countLabel}
-                </DropdownMenuLabel>
-                {group.roles.map((role) => {
-                  const checked = safeValue.includes(role);
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={role}
-                      checked={checked}
-                      onSelect={(e) => e.preventDefault()}
-                      onCheckedChange={(nextChecked) => {
-                        if (nextChecked) {
-                          onChange(Array.from(new Set([...safeValue, role])));
-                          return;
-                        }
-                        if (safeValue.length <= 1) return;
-                        onChange(safeValue.filter((r) => r !== role));
-                      }}
-                    >
-                      {role.replaceAll('_', ' ')}
-                    </DropdownMenuCheckboxItem>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </ScrollArea>
+        {tenantRoleGroups.map((group, groupIdx) => {
+          const selectedInGroup = group.roles.filter((r) => safeValue.includes(r));
+          const countLabel = selectedInGroup.length > 0 ? ` (${selectedInGroup.length}/${group.roles.length})` : '';
+          return (
+            <div key={group.label}>
+              {groupIdx > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuLabel className='text-xs font-semibold text-muted-foreground'>
+                {group.label}{countLabel}
+              </DropdownMenuLabel>
+              {group.roles.map((role) => {
+                const checked = safeValue.includes(role);
+                return (
+                  <DropdownMenuCheckboxItem
+                    key={role}
+                    checked={checked}
+                    onSelect={(e) => e.preventDefault()}
+                    onCheckedChange={(nextChecked) => {
+                      if (nextChecked) {
+                        onChange(Array.from(new Set([...safeValue, role])));
+                        return;
+                      }
+                      if (safeValue.length <= 1) return;
+                      onChange(safeValue.filter((r) => r !== role));
+                    }}
+                  >
+                    {role.replaceAll('_', ' ')}
+                  </DropdownMenuCheckboxItem>
+                );
+              })}
+            </div>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );
