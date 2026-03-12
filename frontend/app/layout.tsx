@@ -17,8 +17,8 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: 'Onboarding Hub — Tracks, assessments, and much more',
-  description: 'Internal platform: onboarding hub, tracks, assessments, progress, and role readiness.',
+  title: 'SolveBox Hub — Tracks, assessments, and much more',
+  description: 'Internal platform: SolveBox Hub, tracks, assessments, progress, and role readiness.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -22,27 +22,12 @@ export const tenantRoleGroups: TenantRoleGroup[] = [
   {
     label: 'Administration',
     moduleKey: null,
-    roles: ['tenant_admin', 'supervisor'],
+    roles: ['tenant_admin'],
   },
   {
-    label: 'Compliance',
-    moduleKey: 'compliance',
-    roles: ['compliance_viewer', 'compliance_editor', 'compliance_admin'],
-  },
-  {
-    label: 'Integration Registry',
-    moduleKey: 'integration_registry',
-    roles: ['ir_viewer', 'ir_editor', 'ir_approver', 'ir_admin'],
-  },
-  {
-    label: 'Billing',
-    moduleKey: 'billing',
-    roles: ['billing_viewer', 'billing_manager'],
-  },
-  {
-    label: 'Releases',
-    moduleKey: 'releases',
-    roles: ['release_viewer', 'release_editor'],
+    label: 'Assignments',
+    moduleKey: 'assignments',
+    roles: ['assignments_viewer', 'assignments_editor', 'assignments_reviewer'],
   },
   {
     label: 'Tracks',
@@ -60,6 +45,26 @@ export const tenantRoleGroups: TenantRoleGroup[] = [
     roles: ['reports_viewer'],
   },
   {
+    label: 'Compliance',
+    moduleKey: 'compliance',
+    roles: ['compliance_viewer', 'compliance_editor', 'compliance_admin'],
+  },
+  {
+    label: 'Integration Registry',
+    moduleKey: 'integration_registry',
+    roles: ['ir_viewer', 'ir_editor', 'ir_approver', 'ir_admin'],
+  },
+  {
+    label: 'Releases',
+    moduleKey: 'releases',
+    roles: ['release_viewer', 'release_editor'],
+  },
+  {
+    label: 'Billing',
+    moduleKey: 'billing',
+    roles: ['billing_viewer', 'billing_manager'],
+  },
+  {
     label: 'Settings',
     moduleKey: 'settings',
     roles: ['settings_manager'],
@@ -70,7 +75,9 @@ export const tenantRoleOptions = tenantRoleGroups.flatMap((g) => g.roles);
 
 const ROLE_DISPLAY_NAMES: Record<string, string> = {
   tenant_admin: 'Tenant Admin',
-  supervisor: 'Supervisor',
+  assignments_viewer: 'Assignments Viewer',
+  assignments_editor: 'Assignments Editor',
+  assignments_reviewer: 'Assignments Reviewer',
   compliance_viewer: 'Compliance Viewer',
   compliance_editor: 'Compliance Editor',
   compliance_admin: 'Compliance Administrator',

@@ -457,10 +457,16 @@ def invite_tenant_admin(
     extra_roles = [r for r in extra_roles if r != 'tenant_admin']
     all_roles = list(dict.fromkeys(['tenant_admin'] + extra_roles))
 
-    tenant_module_rows = db.scalars(
-        select(TenantModule).where(TenantModule.tenant_id == tenant_id, TenantModule.enabled == True)  # noqa: E712
+    # Use plan-aware module resolution so plan-default modules (no override row)
+    # are correctly counted as enabled when validating roles.
+    _all_module_rows = db.scalars(
+        select(TenantModule).where(TenantModule.tenant_id == tenant_id)
     ).all()
-    tenant_modules = {m.module_key for m in tenant_module_rows}
+    _plan_defs = _plan_defaults(db, tenant_id)
+    tenant_modules = {
+        m.module_key for m in _build_module_list(list(_all_module_rows), _plan_defs)
+        if m.enabled
+    }
     invalid = validate_roles_for_tenant(all_roles, tenant_modules)
     if invalid:
         raise HTTPException(

@@ -41,18 +41,6 @@ MODULE_PERMISSIONS: dict[str, set[str]] = {
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
-    # Cross-module oversight role — replaces legacy 'manager'
-    'supervisor': {
-        'tracks:read',
-        'assignments:read',
-        'assignments:write',
-        'assignments:review',
-        'assessments:read',
-        'assessments:write',
-        'assessments:take',
-        'reports:read',
-        'users:read',
-    },
     'tenant_admin': {
         'users:read',
         'users:write',
@@ -69,6 +57,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     'release_viewer': {'releases:read'},
     'release_editor': {'releases:read', 'releases:write'},
     'tracks_editor': {'tracks:read', 'tracks:write'},
+    'assignments_viewer': {'assignments:read'},
+    'assignments_editor': {'assignments:read', 'assignments:write'},
+    'assignments_reviewer': {'assignments:read', 'assignments:write', 'assignments:review'},
     'assessments_editor': {'assessments:read', 'assessments:write', 'assessments:take'},
     'reports_viewer': {'reports:read'},
     'settings_manager': {'settings:manage'},
@@ -87,6 +78,9 @@ ROLE_MODULE_REQUIREMENTS: dict[str, str] = {
     'release_viewer': 'releases',
     'release_editor': 'releases',
     'tracks_editor': 'tracks',
+    'assignments_viewer': 'assignments',
+    'assignments_editor': 'assignments',
+    'assignments_reviewer': 'assignments',
     'assessments_editor': 'assessments',
     'reports_viewer': 'reports',
     'settings_manager': 'settings',
@@ -105,25 +99,29 @@ def validate_roles_for_tenant(roles: list[str], tenant_enabled_modules: set[str]
 
 ROLE_LABELS: dict[str, dict[str, str]] = {
     'company': {
-        'supervisor': 'supervisor',
         'tenant_admin': 'tenant_admin',
         'billing_viewer': 'billing_viewer',
         'billing_manager': 'billing_manager',
         'release_viewer': 'release_viewer',
         'release_editor': 'release_editor',
         'tracks_editor': 'tracks_editor',
+        'assignments_viewer': 'assignments_viewer',
+        'assignments_editor': 'assignments_editor',
+        'assignments_reviewer': 'assignments_reviewer',
         'assessments_editor': 'assessments_editor',
         'reports_viewer': 'reports_viewer',
         'settings_manager': 'settings_manager',
     },
     'education': {
-        'supervisor': 'supervisor',
         'tenant_admin': 'tenant_admin',
         'billing_viewer': 'billing_viewer',
         'billing_manager': 'billing_manager',
         'release_viewer': 'release_viewer',
         'release_editor': 'release_editor',
         'tracks_editor': 'tracks_editor',
+        'assignments_viewer': 'assignments_viewer',
+        'assignments_editor': 'assignments_editor',
+        'assignments_reviewer': 'assignments_reviewer',
         'assessments_editor': 'assessments_editor',
         'reports_viewer': 'reports_viewer',
         'settings_manager': 'settings_manager',

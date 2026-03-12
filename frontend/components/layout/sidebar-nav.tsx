@@ -299,7 +299,7 @@ export function SidebarNav() {
           {!collapsed && (
             <div className='leading-tight'>
               <div className='text-[11px] font-medium text-slate-500'>Internal</div>
-              <div className='text-sm font-semibold text-slate-900'>Onboarding Hub</div>
+              <div className='text-sm font-semibold text-slate-900'>SolveBox Hub</div>
             </div>
           )}
         </div>

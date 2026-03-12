@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     GITHUB_APP_ID: int | None = None
     GITHUB_APP_PRIVATE_KEY: str | None = None
     GITHUB_APP_PRIVATE_KEY_FILE: str | None = None
-    GITHUB_COMMITTER_NAME: str = 'Onboarding Hub'
+    GITHUB_COMMITTER_NAME: str = 'SolveBox Hub'
     GITHUB_COMMITTER_EMAIL: str = 'onboarding-hub@users.noreply.github.com'
 
     BASE_DOMAINS: str = 'app.com'

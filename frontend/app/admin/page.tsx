@@ -1080,7 +1080,8 @@ export default function AdminTenantsPage() {
                         <Tabs defaultValue='modules'>
                           <TabsList className='w-full justify-start'>
                             <TabsTrigger value='modules'>Modules</TabsTrigger>
-                            <TabsTrigger value='admins'>Admins</TabsTrigger>
+                            <TabsTrigger value='members'>Members</TabsTrigger>
+                            <TabsTrigger value='invite'>Invite user</TabsTrigger>
                           </TabsList>
 
                           <TabsContent value='modules'>
@@ -1202,14 +1203,13 @@ export default function AdminTenantsPage() {
                             </div>
                           </TabsContent>
 
-                          <TabsContent value='admins'>
-                            <div className='space-y-4'>
-                              <div className='rounded-lg border bg-white p-4'>
+                          <TabsContent value='members'>
+                            <div className='rounded-lg border bg-white p-4'>
                                 <div className='flex flex-wrap items-start justify-between gap-3'>
                                   <div>
                                     <p className='text-sm font-semibold'>Tenant members</p>
                                     <p className='mt-1 text-xs text-muted-foreground'>
-                                      Users with access to <span className='font-medium'>{selectedTenant.slug}</span>. You can disable or remove members.
+                                      All users with access to <span className='font-medium'>{selectedTenant.slug}</span>. Edit roles, disable, or remove members.
                                     </p>
                                   </div>
                                   <Badge variant='muted' className='text-[10px]'>
@@ -1357,11 +1357,15 @@ export default function AdminTenantsPage() {
                                     </table>
                                   </div>
                                 )}
-                              </div>
+                            </div>
+                          </TabsContent>
 
-                              <div className='rounded-lg border bg-white p-4'>
-                                <p className='text-sm font-semibold'>Invite tenant admin</p>
-                                <p className='mt-1 text-xs text-muted-foreground'>Add a new admin to this tenant.</p>
+                          <TabsContent value='invite'>
+                            <div className='rounded-lg border bg-white p-4'>
+                                <p className='text-sm font-semibold'>Invite user</p>
+                                <p className='mt-1 text-xs text-muted-foreground'>
+                                  Invite a new or existing user to this tenant. Assign <span className='font-medium'>tenant_admin</span> to give user-management access, and add module roles to scope what they can access and delegate.
+                                </p>
 
                                 <div className='mt-4 grid gap-3 sm:grid-cols-2'>
                                   <div className='space-y-2 sm:col-span-2'>
@@ -1443,11 +1447,10 @@ export default function AdminTenantsPage() {
                                   </p>
                                   <div className='sm:col-span-2 flex items-center justify-end pt-1'>
                                     <Button onClick={inviteAdmin} disabled={!inviteEmail || !inviteName}>
-                                      Invite admin
+                                      Send invite
                                     </Button>
                                   </div>
                                 </div>
-                              </div>
                             </div>
                           </TabsContent>
                         </Tabs>
