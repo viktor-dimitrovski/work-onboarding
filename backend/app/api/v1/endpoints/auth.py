@@ -261,7 +261,9 @@ def password_reset_request(payload: PasswordResetRequest, db: Session = Depends(
     if user:
         raw_token = auth_service.create_password_set_token(db, user=user, purpose='password_reset', expires_hours=24)
         db.commit()
-        reset_url = f'{settings.FRONTEND_BASE_URL.rstrip("/")}/reset-password?token={raw_token}'
+        base = settings.BASE_DOMAINS.split(',')[0].strip()
+        subdomain = settings.DEFAULT_TENANT_SLUG or 'default'
+        reset_url = f'https://{subdomain}.{base}/reset-password?token={raw_token}'
         email_service.send_password_reset(
             to_email=user.email,
             to_name=user.full_name or '',

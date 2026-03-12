@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_active_user
+from app.api.deps import get_current_active_user, get_user_role_names
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.audit import AuditLog
 from app.models.rbac import User
 from app.models.tenant import TenantMembership
 from app.multitenancy.deps import TenantContext, require_tenant_membership
-from app.multitenancy.permissions import require_access
+from app.multitenancy.permissions import ROLE_MODULE_REQUIREMENTS, enabled_modules, require_access, validate_roles_for_tenant
 from app.schemas.audit import AuditLogListResponse, AuditLogOut
 from app.schemas.common import PaginationMeta
 from app.schemas.user import TenantMembershipUpdate, UserAddExisting, UserCreate, UserListResponse, UserOut
@@ -21,9 +21,33 @@ from app.services import audit_service, auth_service, email_service, user_servic
 router = APIRouter(prefix='/users', tags=['users'])
 
 
-def _tenant_url(slug: str) -> str:
+def _tenant_url(slug: str, path: str = '/dashboard') -> str:
     base = settings.BASE_DOMAINS.split(',')[0].strip()
-    return f'https://{slug}.{base}/dashboard'
+    return f'https://{slug}.{base}{path}'
+
+
+def _check_roles_allowed(roles: list[str], ctx: TenantContext, current_user: User) -> None:
+    """Raise 400 if any role requires a module that is disabled for the tenant,
+    or if the caller tries to grant module-specific roles they don't hold.
+    Super_admin bypasses all checks."""
+    if 'super_admin' in get_user_role_names(current_user):
+        return
+    invalid = validate_roles_for_tenant(roles, enabled_modules(ctx))
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f'Roles not allowed (module disabled): {", ".join(invalid)}',
+        )
+    caller_roles = set(ctx.roles or [])
+    escalated = [
+        r for r in roles
+        if r in ROLE_MODULE_REQUIREMENTS and r not in caller_roles
+    ]
+    if escalated:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f'Cannot grant roles you do not hold: {", ".join(escalated)}',
+        )
 
 
 def _to_user_out(
@@ -91,6 +115,7 @@ def create_user(
     if not tenant_roles:
         tenant_roles = [payload.tenant_role.strip().lower()] if payload.tenant_role else ['member']
     tenant_roles = list(dict.fromkeys(tenant_roles))
+    _check_roles_allowed(tenant_roles, ctx, current_user)
 
     user = db.scalar(select(User).where(User.email == email))
     created = False
@@ -144,7 +169,7 @@ def create_user(
     db.commit()
 
     if created and raw_token:
-        set_password_url = f'{settings.FRONTEND_BASE_URL.rstrip("/")}/set-password?token={raw_token}'
+        set_password_url = f'{_tenant_url(ctx.tenant.slug, "/set-password")}?token={raw_token}'
         email_service.send_invitation(
             to_email=user.email,
             to_name=user.full_name or '',
@@ -180,6 +205,7 @@ def add_existing_user_to_tenant(
     if not tenant_roles:
         tenant_roles = [payload.tenant_role.strip().lower()] if payload.tenant_role else ['member']
     tenant_roles = list(dict.fromkeys(tenant_roles))
+    _check_roles_allowed(tenant_roles, ctx, current_user)
 
     membership = db.scalar(
         select(TenantMembership).where(
@@ -231,6 +257,9 @@ def update_tenant_membership(
     ctx: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('users', 'users:write')),
 ) -> UserOut:
+    if str(user_id) == str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Cannot modify your own roles')
+
     membership = db.scalar(
         select(TenantMembership).where(
             TenantMembership.tenant_id == ctx.tenant.id,
@@ -245,13 +274,19 @@ def update_tenant_membership(
         roles = list(dict.fromkeys(roles))
         if not roles:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='At least one tenant role is required')
+        _check_roles_allowed(roles, ctx, current_user)
         membership.roles_json = roles
         membership.role = roles[0]
     elif payload.role is not None:
+        _check_roles_allowed([payload.role.strip().lower()], ctx, current_user)
         membership.role = payload.role.strip().lower()
         membership.roles_json = [membership.role]
     if payload.status is not None:
         membership.status = payload.status
+    if payload.full_name is not None:
+        user_for_name = db.scalar(select(User).where(User.id == membership.user_id))
+        if user_for_name:
+            user_for_name.full_name = payload.full_name
 
     updated_roles = membership.roles()
     audit_service.log_action(

@@ -14,48 +14,59 @@ export const roleOptions = ['super_admin', 'admin', 'mentor', 'employee', 'hr_vi
 
 export type TenantRoleGroup = {
   label: string;
+  moduleKey: string | null;
   roles: string[];
 };
 
 export const tenantRoleGroups: TenantRoleGroup[] = [
   {
     label: 'General',
+    moduleKey: null,
     roles: ['member', 'manager', 'mentor', 'tenant_admin'],
   },
   {
     label: 'Compliance',
+    moduleKey: 'compliance',
     roles: ['compliance_viewer', 'compliance_editor', 'compliance_admin'],
   },
   {
     label: 'Integration Registry',
+    moduleKey: 'integration_registry',
     roles: ['ir_viewer', 'ir_editor', 'ir_approver', 'ir_admin'],
   },
   {
     label: 'Billing',
+    moduleKey: 'billing',
     roles: ['billing_viewer', 'billing_manager'],
   },
   {
     label: 'Releases',
+    moduleKey: 'releases',
     roles: ['release_viewer', 'release_editor'],
   },
   {
     label: 'Tracks',
+    moduleKey: 'tracks',
     roles: ['tracks_editor'],
   },
   {
     label: 'Assessments',
+    moduleKey: 'assessments',
     roles: ['assessments_editor'],
   },
   {
     label: 'Reports',
+    moduleKey: 'reports',
     roles: ['reports_viewer'],
   },
   {
     label: 'Settings',
+    moduleKey: 'settings',
     roles: ['settings_manager'],
   },
   {
     label: 'Education',
+    moduleKey: null,
     roles: ['parent'],
   },
 ];

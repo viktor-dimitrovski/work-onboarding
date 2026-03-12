@@ -16,6 +16,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { tenantRoleGroups } from '@/lib/constants';
 
 type TenantRow = {
   id: string;
@@ -178,8 +179,11 @@ export default function AdminTenantsPage() {
 
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
+  const [inviteRoles, setInviteRoles] = useState<string[]>([]);
   const [tenantMembers, setTenantMembers] = useState<TenantMemberRow[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [editMemberName, setEditMemberName] = useState('');
 
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [editPlanName, setEditPlanName] = useState('');
@@ -204,6 +208,18 @@ export default function AdminTenantsPage() {
   );
 
   const planLookup = useMemo(() => new Map(plans.map((plan) => [plan.id, plan])), [plans]);
+
+  const enabledModuleKeys = useMemo(
+    () => new Set(modules.filter((m) => m.enabled).map((m) => m.module_key)),
+    [modules],
+  );
+  const availableInviteRoles = useMemo(
+    () =>
+      tenantRoleGroups
+        .filter((g) => g.moduleKey !== null && enabledModuleKeys.has(g.moduleKey))
+        .flatMap((g) => g.roles),
+    [enabledModuleKeys],
+  );
 
   useEffect(() => {
     if (selectedTenantId) {
@@ -434,11 +450,12 @@ export default function AdminTenantsPage() {
     try {
       await api.post(
         `/admin/tenants/${selectedTenantId}/admins`,
-        { email: inviteEmail, full_name: inviteName },
+        { email: inviteEmail, full_name: inviteName, roles: inviteRoles },
         accessToken,
       );
       setInviteEmail('');
       setInviteName('');
+      setInviteRoles([]);
       await reloadMembers();
     } catch (inviteError) {
       setError(inviteError instanceof Error ? inviteError.message : 'Failed to invite admin');
@@ -468,6 +485,37 @@ export default function AdminTenantsPage() {
       setTenantMembers((prev) => prev.filter((m) => m.id !== member.id));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to remove member');
+    }
+  };
+
+  const startEditMember = (member: TenantMemberRow) => {
+    setEditingMemberId(member.id);
+    setEditMemberName(member.full_name || '');
+  };
+
+  const cancelEditMember = () => {
+    setEditingMemberId(null);
+    setEditMemberName('');
+  };
+
+  const saveMemberName = async () => {
+    if (!accessToken || !selectedTenantId || !editingMemberId) return;
+    const trimmed = editMemberName.trim();
+    if (trimmed.length < 2) {
+      setError('Name must be at least 2 characters');
+      return;
+    }
+    setError(null);
+    try {
+      const updated = await api.patch<TenantMemberRow>(
+        `/admin/tenants/${selectedTenantId}/members/${editingMemberId}`,
+        { full_name: trimmed },
+        accessToken,
+      );
+      setTenantMembers((prev) => prev.map((m) => (m.id === editingMemberId ? updated : m)));
+      cancelEditMember();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update member name');
     }
   };
 
@@ -1024,8 +1072,43 @@ export default function AdminTenantsPage() {
                                         {tenantMembers.map((member) => (
                                           <tr key={member.id} className='border-b last:border-b-0'>
                                             <td className='px-3 py-2'>
-                                              <div className='font-medium leading-5'>{member.full_name || '—'}</div>
-                                              <div className='text-xs text-muted-foreground'>{member.email}</div>
+                                              {editingMemberId === member.id ? (
+                                                <div className='flex items-center gap-2'>
+                                                  <Input
+                                                    value={editMemberName}
+                                                    onChange={(e) => setEditMemberName(e.target.value)}
+                                                    placeholder='Full name'
+                                                    className='h-8 max-w-[180px]'
+                                                    autoFocus
+                                                    onKeyDown={(e) => {
+                                                      if (e.key === 'Enter') saveMemberName();
+                                                      if (e.key === 'Escape') cancelEditMember();
+                                                    }}
+                                                  />
+                                                  <Button variant='ghost' size='sm' onClick={saveMemberName}>
+                                                    Save
+                                                  </Button>
+                                                  <Button variant='ghost' size='sm' onClick={cancelEditMember}>
+                                                    Cancel
+                                                  </Button>
+                                                </div>
+                                              ) : (
+                                                <div className='flex items-center gap-2'>
+                                                  <div>
+                                                    <div className='font-medium leading-5'>{member.full_name || '—'}</div>
+                                                    <div className='text-xs text-muted-foreground'>{member.email}</div>
+                                                  </div>
+                                                  <Button
+                                                    variant='ghost'
+                                                    size='sm'
+                                                    className='h-7 w-7 p-0 text-muted-foreground hover:text-foreground'
+                                                    onClick={() => startEditMember(member)}
+                                                    title='Edit name'
+                                                  >
+                                                    <Pencil className='h-3.5 w-3.5' />
+                                                  </Button>
+                                                </div>
+                                              )}
                                             </td>
                                             <td className='px-3 py-2'>
                                               <div className='flex flex-wrap gap-1'>
@@ -1081,6 +1164,33 @@ export default function AdminTenantsPage() {
                                     <Label>Full name</Label>
                                     <Input value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
                                   </div>
+                                  {availableInviteRoles.length > 0 && (
+                                    <div className='space-y-2 sm:col-span-2'>
+                                      <Label>Additional roles</Label>
+                                      <p className='text-xs text-muted-foreground'>
+                                        The admin will always get <span className='font-medium'>tenant_admin</span>. Select additional module roles they should be able to manage.
+                                      </p>
+                                      <div className='mt-1 flex flex-wrap gap-2'>
+                                        {availableInviteRoles.map((role) => (
+                                          <label key={role} className='flex items-center gap-1.5 text-xs'>
+                                            <input
+                                              type='checkbox'
+                                              className='h-3.5 w-3.5'
+                                              checked={inviteRoles.includes(role)}
+                                              onChange={(e) =>
+                                                setInviteRoles((prev) =>
+                                                  e.target.checked
+                                                    ? [...prev, role]
+                                                    : prev.filter((r) => r !== role),
+                                                )
+                                              }
+                                            />
+                                            {role.replaceAll('_', ' ')}
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                   <p className='sm:col-span-2 text-xs text-muted-foreground'>
                                     New users will receive an invitation email with a set-password link. Existing users will be notified they were added to this tenant.
                                   </p>

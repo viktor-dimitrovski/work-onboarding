@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Pencil } from 'lucide-react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -26,6 +27,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
 import { formatDateTime, tenantRoleGroups, tenantRoleOptions } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
+import { useTenant } from '@/lib/tenant-context';
 import type { UserRow } from '@/lib/types';
 
 interface UserListResponse {
@@ -82,12 +84,25 @@ function TenantRolesEditor({
   value,
   onChange,
   disabled,
+  enabledModules,
+  callerRoles,
 }: {
   value: string[];
   onChange: (next: string[]) => void;
   disabled?: boolean;
+  enabledModules?: string[];
+  callerRoles?: string[];
 }) {
   const safeValue = normalizeTenantRoles(value);
+  const modules = enabledModules ? new Set(enabledModules) : null;
+  const callerSet = callerRoles ? new Set(callerRoles) : null;
+  const visibleGroups = tenantRoleGroups
+    .filter((g) => g.moduleKey === null || !modules || modules.has(g.moduleKey))
+    .map((g) => {
+      if (!g.moduleKey || !callerSet) return g;
+      return { ...g, roles: g.roles.filter((r) => callerSet.has(r)) };
+    })
+    .filter((g) => g.roles.length > 0);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -98,7 +113,7 @@ function TenantRolesEditor({
       <DropdownMenuContent align='start' className='w-64 max-h-[70vh] overflow-y-auto'>
         <DropdownMenuLabel>Tenant roles</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {tenantRoleGroups.map((group, groupIdx) => {
+        {visibleGroups.map((group, groupIdx) => {
           const selectedInGroup = group.roles.filter((r) => safeValue.includes(r));
           const countLabel = selectedInGroup.length > 0 ? ` (${selectedInGroup.length}/${group.roles.length})` : '';
           return (
@@ -136,7 +151,11 @@ function TenantRolesEditor({
 }
 
 export default function UsersPage() {
-  const { accessToken } = useAuth();
+  const { accessToken, user: authUser } = useAuth();
+  const { context: tenantCtx } = useTenant();
+  const enabledModules = tenantCtx?.modules;
+  const callerRoles = tenantCtx?.roles;
+  const isSuperAdmin = authUser?.roles?.includes('super_admin' as never);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -149,6 +168,8 @@ export default function UsersPage() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [activityRows, setActivityRows] = useState<AuditLogOut[]>([]);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editUserName, setEditUserName] = useState('');
 
   const form = useForm<AddUserValues>({
     resolver: zodResolver(addUserSchema),
@@ -243,6 +264,36 @@ export default function UsersPage() {
     }
   };
 
+  const startEditUser = (user: UserRow) => {
+    setEditingUserId(user.id);
+    setEditUserName(user.full_name || '');
+  };
+
+  const cancelEditUser = () => {
+    setEditingUserId(null);
+    setEditUserName('');
+  };
+
+  const saveUserName = async () => {
+    if (!accessToken || !editingUserId) return;
+    const trimmed = editUserName.trim();
+    if (trimmed.length < 2) {
+      setError('Name must be at least 2 characters');
+      return;
+    }
+    setError(null);
+    try {
+      setRowSavingId(editingUserId);
+      const updated = await api.put<UserRow>(`/users/${editingUserId}/membership`, { full_name: trimmed }, accessToken);
+      setUsers((prev) => prev.map((u) => (u.id === editingUserId ? { ...u, full_name: updated.full_name } : u)));
+      cancelEditUser();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Failed to update user name');
+    } finally {
+      setRowSavingId(null);
+    }
+  };
+
   const removeFromTenant = async (user: UserRow) => {
     if (!accessToken) return;
     // eslint-disable-next-line no-alert
@@ -332,15 +383,17 @@ export default function UsersPage() {
                     onChange={(event) => setRoleFilter(event.target.value)}
                   >
                     <option value=''>All tenant roles</option>
-                    {tenantRoleGroups.map((group) => (
-                      <optgroup key={group.label} label={group.label}>
-                        {group.roles.map((role) => (
-                          <option key={role} value={role}>
-                            {role.replaceAll('_', ' ')}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
+                    {tenantRoleGroups
+                      .filter((g) => g.moduleKey === null || !enabledModules || enabledModules.includes(g.moduleKey))
+                      .map((group) => (
+                        <optgroup key={group.label} label={group.label}>
+                          {group.roles.map((role) => (
+                            <option key={role} value={role}>
+                              {role.replaceAll('_', ' ')}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
                   </select>
                   {(query || roleFilter) && (
                     <Button
@@ -391,8 +444,43 @@ export default function UsersPage() {
                           return (
                             <tr key={user.id} className='border-b last:border-b-0'>
                               <td className='px-3 py-2'>
-                                <div className='font-medium leading-5'>{user.full_name}</div>
-                                <div className='text-xs text-muted-foreground'>{user.email}</div>
+                                {editingUserId === user.id ? (
+                                  <div className='flex items-center gap-2'>
+                                    <Input
+                                      value={editUserName}
+                                      onChange={(e) => setEditUserName(e.target.value)}
+                                      placeholder='Full name'
+                                      className='h-8 max-w-[180px]'
+                                      autoFocus
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') saveUserName();
+                                        if (e.key === 'Escape') cancelEditUser();
+                                      }}
+                                    />
+                                    <Button variant='ghost' size='sm' onClick={saveUserName} disabled={saving}>
+                                      Save
+                                    </Button>
+                                    <Button variant='ghost' size='sm' onClick={cancelEditUser} disabled={saving}>
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className='flex items-center gap-2'>
+                                    <div>
+                                      <div className='font-medium leading-5'>{user.full_name || '—'}</div>
+                                      <div className='text-xs text-muted-foreground'>{user.email}</div>
+                                    </div>
+                                    <Button
+                                      variant='ghost'
+                                      size='sm'
+                                      className='h-7 w-7 p-0 text-muted-foreground hover:text-foreground'
+                                      onClick={() => startEditUser(user)}
+                                      title='Edit name'
+                                    >
+                                      <Pencil className='h-3.5 w-3.5' />
+                                    </Button>
+                                  </div>
+                                )}
                               </td>
                               <td className='px-3 py-2'>
                                 <div className='flex flex-wrap items-center gap-2'>
@@ -404,6 +492,8 @@ export default function UsersPage() {
                                   <TenantRolesEditor
                                     disabled={saving}
                                     value={selectedRoles}
+                                    enabledModules={enabledModules}
+                                    callerRoles={isSuperAdmin ? undefined : callerRoles}
                                     onChange={(next) =>
                                       setEditedTenantRoles((prev) => ({ ...prev, [user.id]: next }))
                                     }
@@ -502,6 +592,8 @@ export default function UsersPage() {
                   <div className='flex items-center gap-2'>
                     <TenantRolesEditor
                       value={normalizeTenantRoles(form.watch('tenant_roles'))}
+                      enabledModules={enabledModules}
+                      callerRoles={isSuperAdmin ? undefined : callerRoles}
                       onChange={(next) => form.setValue('tenant_roles', next, { shouldValidate: true })}
                     />
                     <div className='flex flex-wrap gap-1'>

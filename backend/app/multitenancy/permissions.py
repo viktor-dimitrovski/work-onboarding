@@ -66,29 +66,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'reports:read',
     },
     'tenant_admin': {
-        'tracks:read',
-        'tracks:write',
-        'assignments:read',
-        'assignments:write',
-        'assignments:submit',
-        'assignments:review',
-        'releases:read',
-        'releases:write',
-        'assessments:read',
-        'assessments:write',
-        'assessments:take',
-        'reports:read',
-        'compliance:read',
-        'compliance:write',
         'users:read',
         'users:write',
-        'settings:manage',
-        'billing:read',
-        'billing:manage',
-        'ir:read',
-        'ir:write',
-        'ir:approve',
-        'ir:admin',
     },
     'compliance_viewer': {'compliance:read'},
     'compliance_editor': {'compliance:read', 'compliance:write'},
@@ -107,6 +86,35 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     'reports_viewer': {'reports:read'},
     'settings_manager': {'settings:manage'},
 }
+
+ROLE_MODULE_REQUIREMENTS: dict[str, str] = {
+    'compliance_viewer': 'compliance',
+    'compliance_editor': 'compliance',
+    'compliance_admin': 'compliance',
+    'ir_viewer': 'integration_registry',
+    'ir_editor': 'integration_registry',
+    'ir_approver': 'integration_registry',
+    'ir_admin': 'integration_registry',
+    'billing_viewer': 'billing',
+    'billing_manager': 'billing',
+    'release_viewer': 'releases',
+    'release_editor': 'releases',
+    'tracks_editor': 'tracks',
+    'assessments_editor': 'assessments',
+    'reports_viewer': 'reports',
+    'settings_manager': 'settings',
+}
+
+
+def validate_roles_for_tenant(roles: list[str], tenant_enabled_modules: set[str]) -> list[str]:
+    """Return role names that require a module not enabled for the tenant."""
+    invalid: list[str] = []
+    for role in roles:
+        required_module = ROLE_MODULE_REQUIREMENTS.get(role)
+        if required_module and required_module not in tenant_enabled_modules:
+            invalid.append(role)
+    return invalid
+
 
 ROLE_LABELS: dict[str, dict[str, str]] = {
     'company': {

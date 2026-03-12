@@ -14,6 +14,7 @@ from app.models.tenant import Tenant, TenantMembership
 from app.modules.billing.models import Plan, Subscription, TenantModule
 from app.modules.billing.service import sync_modules_from_plan
 from app.multitenancy.deps import require_product_admin_host
+from app.multitenancy.permissions import ROLE_MODULE_REQUIREMENTS, validate_roles_for_tenant
 from app.services import auth_service, email_service
 from app.schemas.tenant import (
     PlanCreate,
@@ -141,7 +142,8 @@ def create_tenant(
     db.commit()
 
     if admin_user and is_new_admin and raw_token:
-        set_password_url = f'{settings.FRONTEND_BASE_URL.rstrip("/")}/set-password?token={raw_token}'
+        base = settings.BASE_DOMAINS.split(',')[0].strip()
+        set_password_url = f'https://{slug}.{base}/set-password?token={raw_token}'
         email_service.send_invitation(
             to_email=admin_user.email,
             to_name=admin_user.full_name or '',
@@ -340,6 +342,21 @@ def invite_tenant_admin(
     if not tenant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Tenant not found')
 
+    extra_roles = [r.strip().lower() for r in (payload.roles or []) if r.strip()]
+    extra_roles = [r for r in extra_roles if r != 'tenant_admin']
+    all_roles = list(dict.fromkeys(['tenant_admin'] + extra_roles))
+
+    tenant_module_rows = db.scalars(
+        select(TenantModule).where(TenantModule.tenant_id == tenant_id, TenantModule.enabled == True)  # noqa: E712
+    ).all()
+    tenant_modules = {m.module_key for m in tenant_module_rows}
+    invalid = validate_roles_for_tenant(all_roles, tenant_modules)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f'Roles not allowed (module disabled): {", ".join(invalid)}',
+        )
+
     is_new = False
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
     if not user:
@@ -366,8 +383,8 @@ def invite_tenant_admin(
             TenantMembership(
                 tenant_id=tenant_id,
                 user_id=user.id,
-                role='tenant_admin',
-                roles_json=['tenant_admin'],
+                role=all_roles[0],
+                roles_json=all_roles,
                 status='active',
             )
         )
@@ -379,13 +396,14 @@ def invite_tenant_admin(
     db.commit()
 
     if is_new and raw_token:
-        set_password_url = f'{settings.FRONTEND_BASE_URL.rstrip("/")}/set-password?token={raw_token}'
+        base = settings.BASE_DOMAINS.split(',')[0].strip()
+        set_password_url = f'https://{tenant.slug}.{base}/set-password?token={raw_token}'
         email_service.send_invitation(
             to_email=user.email,
             to_name=user.full_name or '',
             tenant_name=tenant.name,
             set_password_url=set_password_url,
-            roles=['tenant_admin'],
+            roles=all_roles,
         )
     elif not is_new:
         base = settings.BASE_DOMAINS.split(',')[0].strip()
@@ -394,7 +412,7 @@ def invite_tenant_admin(
             to_name=user.full_name or '',
             tenant_name=tenant.name,
             tenant_url=f'https://{tenant.slug}.{base}/dashboard',
-            roles=['tenant_admin'],
+            roles=all_roles,
         )
 
     return {'status': 'ok'}
@@ -443,7 +461,7 @@ def update_tenant_member(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles('super_admin')),
 ) -> TenantMemberOut:
-    if payload.status not in ('active', 'disabled'):
+    if payload.status is not None and payload.status not in ('active', 'disabled'):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status must be 'active' or 'disabled'")
 
     set_tenant_id(db, str(tenant_id))
@@ -456,7 +474,12 @@ def update_tenant_member(
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Membership not found')
 
-    membership.status = payload.status
+    if payload.status is not None:
+        membership.status = payload.status
+    if payload.full_name is not None:
+        user = db.scalar(select(User).where(User.id == membership.user_id))
+        if user:
+            user.full_name = payload.full_name
     db.commit()
     db.refresh(membership)
 

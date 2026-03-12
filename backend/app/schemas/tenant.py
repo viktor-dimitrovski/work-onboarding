@@ -96,6 +96,7 @@ class TenantChangePlan(BaseModel):
 class TenantAdminInvite(BaseModel):
     email: EmailStr
     full_name: str
+    roles: list[str] = Field(default_factory=list, description='Additional tenant roles beyond tenant_admin')
 
 
 class TenantContextOut(BaseModel):
@@ -132,4 +133,5 @@ class TenantMemberOut(BaseModel):
 
 
 class TenantMemberStatusUpdate(BaseModel):
-    status: str = Field(description="'active' or 'disabled'")
+    status: str | None = Field(default=None, description="'active' or 'disabled'")
+    full_name: str | None = Field(default=None, min_length=2, max_length=255, description="Update the user's display name")

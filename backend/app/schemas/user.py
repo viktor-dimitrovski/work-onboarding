@@ -25,6 +25,7 @@ class TenantMembershipUpdate(BaseModel):
     role: str | None = Field(default=None, min_length=1, max_length=50)
     roles: list[str] | None = None
     status: str | None = Field(default=None, min_length=1, max_length=20)
+    full_name: str | None = Field(default=None, min_length=2, max_length=255)
 
 
 class UserUpdate(BaseModel):
