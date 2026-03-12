@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     STRIPE_API_KEY: str | None = None
     STRIPE_WEBHOOK_SECRET: str | None = None
 
+    POSTMARK_SERVER_TOKEN: str | None = None
+    NOTIFICATIONS_FROM_EMAIL: str = 'notifications@solvebox.org'
+
     CELERY_BROKER_URL: str = 'redis://localhost:6379/0'
     CELERY_RESULT_BACKEND: str = 'redis://localhost:6379/0'
     BILLING_OUTBOX_INTERVAL_SECONDS: int = 15
@@ -106,6 +109,17 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [item.strip() for item in self.CORS_ORIGINS.split(',') if item.strip()]
+
+    @property
+    def cors_origin_regex(self) -> str | None:
+        """Build a regex that matches the apex + all subdomains for each base domain.
+        e.g. BASE_DOMAINS=solvebox.org → matches https://solvebox.org and https://*.solvebox.org"""
+        domains = [d.strip().lower() for d in self.BASE_DOMAINS.split(',') if d.strip()]
+        if not domains:
+            return None
+        escaped = [d.replace('.', r'\.') for d in domains]
+        parts = [rf'https?://([a-zA-Z0-9-]+\.)?{d}(:\d+)?' for d in escaped]
+        return '^(' + '|'.join(parts) + ')$'
 
 
 @lru_cache

@@ -86,6 +86,18 @@ class BillingInvoiceOut(BaseSchema):
     lines: list[BillingInvoiceLineOut] = Field(default_factory=list)
 
 
+class BillingLimitItem(BaseModel):
+    limit_key: str
+    limit: int
+    current: int
+    remaining: int
+    allowed: bool
+
+
+class BillingLimitsResponse(BaseModel):
+    items: list[BillingLimitItem] = Field(default_factory=list)
+
+
 class BillingCheckoutSessionRequest(BaseModel):
     plan_price_id: UUID
 
@@ -154,5 +166,14 @@ class PlanPriceCreate(BaseModel):
     billing_interval: str = Field(default='month')
     currency: str = Field(default='usd', min_length=3, max_length=10)
     amount: Decimal = Decimal('0')
+    provider_price_id: str | None = None
+    nickname: str | None = None
+
+
+class PlanPriceUpdate(BaseModel):
+    provider: str | None = Field(default=None, min_length=2, max_length=30)
+    billing_interval: str | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=10)
+    amount: Decimal | None = None
     provider_price_id: str | None = None
     nickname: str | None = None

@@ -2,7 +2,7 @@ from app.models.assignment import AssignmentPhase, AssignmentTask, MentorReview,
 from app.models.audit import AuditLog
 from app.models.comment import Comment
 from app.models.rbac import Role, User, UserRole
-from app.models.token import RefreshToken
+from app.models.token import PasswordSetToken, RefreshToken
 from app.models.track import TaskResource, TrackPhase, TrackTask, TrackTemplate, TrackVersion
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     'MentorReview',
     'OnboardingAssignment',
     'QuizAttempt',
+    'PasswordSetToken',
     'RefreshToken',
     'Role',
     'TaskResource',

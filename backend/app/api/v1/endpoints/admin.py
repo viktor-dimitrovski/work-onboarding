@@ -13,20 +13,22 @@ from app.core.config import settings
 from app.models.rbac import User
 from app.models.tenant import Tenant, TenantMembership
 from app.modules.billing.models import Plan, Subscription, TenantModule
+from app.modules.billing.service import sync_modules_from_plan
 from app.multitenancy.deps import require_product_admin_host
 from app.schemas.tenant import (
     PlanCreate,
     PlanUpdate,
     PlanOut,
     TenantAdminInvite,
+    TenantChangePlan,
     TenantCreate,
     TenantListResponse,
     TenantModuleOut,
     TenantModuleUpdate,
     TenantOut,
     TenantUpdate,
-  TenantSummaryOut,
-  UserTenantMembershipOut,
+    TenantSummaryOut,
+    UserTenantMembershipOut,
 )
 from app.schemas.common import PaginationMeta
 
@@ -93,6 +95,7 @@ def create_tenant(
         plan = db.scalar(select(Plan).where(Plan.id == payload.plan_id))
         if not plan:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Plan not found')
+        set_tenant_id(db, str(tenant.id))
         db.add(
             Subscription(
                 tenant_id=tenant.id,
@@ -101,6 +104,7 @@ def create_tenant(
                 starts_at=datetime.now(timezone.utc),
             )
         )
+        sync_modules_from_plan(db, tenant_id=tenant.id, plan=plan)
 
     db.commit()
     return TenantOut.model_validate(tenant)
@@ -174,6 +178,30 @@ def update_plan(
     return PlanOut.model_validate(plan)
 
 
+@router.delete('/plans/{plan_id}', status_code=status.HTTP_204_NO_CONTENT, response_model=None, dependencies=[Depends(require_product_admin_host)])
+def delete_plan(
+    plan_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> None:
+    plan = db.scalar(select(Plan).where(Plan.id == plan_id))
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Plan not found')
+    active_subs = db.scalar(
+        select(func.count()).select_from(Subscription).where(
+            Subscription.plan_id == plan_id,
+            Subscription.status.in_(['active', 'trialing']),
+        )
+    ) or 0
+    if active_subs > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f'Cannot delete plan with {active_subs} active subscription(s). Deactivate it instead.',
+        )
+    db.delete(plan)
+    db.commit()
+
+
 @router.get('/tenants/{tenant_id}/modules', response_model=list[TenantModuleOut], dependencies=[Depends(require_product_admin_host)])
 def list_tenant_modules(
     tenant_id: UUID,
@@ -206,6 +234,47 @@ def update_tenant_modules(
     db.commit()
     rows = db.scalars(select(TenantModule).where(TenantModule.tenant_id == tenant_id)).all()
     return [TenantModuleOut(module_key=row.module_key, enabled=row.enabled, source=row.source) for row in rows]
+
+
+@router.put('/tenants/{tenant_id}/plan', response_model=PlanOut, dependencies=[Depends(require_product_admin_host)])
+def change_tenant_plan(
+    tenant_id: UUID,
+    payload: TenantChangePlan,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> PlanOut:
+    tenant = db.scalar(select(Tenant).where(Tenant.id == tenant_id))
+    if not tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Tenant not found')
+
+    plan = db.scalar(select(Plan).where(Plan.id == payload.plan_id, Plan.is_active == True))  # noqa: E712
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Plan not found or inactive')
+
+    set_tenant_id(db, str(tenant_id))
+
+    # Cancel current active subscription(s) and create a new one for the new plan.
+    active_subs = db.scalars(
+        select(Subscription).where(
+            Subscription.tenant_id == tenant_id,
+            Subscription.status.in_(['active', 'trialing']),
+        )
+    ).all()
+    now = datetime.now(timezone.utc)
+    for sub in active_subs:
+        sub.status = 'canceled'
+        sub.ends_at = now
+
+    db.add(Subscription(
+        tenant_id=tenant_id,
+        plan_id=plan.id,
+        status='active',
+        starts_at=now,
+    ))
+
+    sync_modules_from_plan(db, tenant_id=tenant_id, plan=plan)
+    db.commit()
+    return PlanOut.model_validate(plan)
 
 
 @router.post('/tenants/{tenant_id}/admins', dependencies=[Depends(require_product_admin_host)])

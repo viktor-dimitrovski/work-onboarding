@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -7,7 +8,53 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.modules.billing.models import Invoice, LedgerEntry, Meter, MeterRate, Plan, PlanPrice, Subscription
+from app.modules.billing.models import (
+    Invoice, LedgerEntry, Meter, MeterRate, Plan, PlanPrice, Subscription, TenantModule,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def sync_modules_from_plan(db: Session, *, tenant_id: UUID, plan: Plan) -> list[TenantModule]:
+    """Sync TenantModule rows from a plan's module_defaults.
+
+    - Modules with source='plan' are re-created to match the new plan.
+    - Modules with source='override' are left untouched.
+    """
+    module_defaults: dict[str, bool] = plan.module_defaults or {}
+    if not module_defaults:
+        return []
+
+    existing = db.scalars(
+        select(TenantModule).where(TenantModule.tenant_id == tenant_id)
+    ).all()
+    override_keys = {m.module_key for m in existing if m.source == 'override'}
+
+    # Remove plan-sourced modules so we can recreate them from the new plan.
+    for mod in existing:
+        if mod.source == 'plan':
+            db.delete(mod)
+    db.flush()
+
+    created: list[TenantModule] = []
+    for module_key, enabled in module_defaults.items():
+        if module_key in override_keys:
+            continue
+        tm = TenantModule(
+            tenant_id=tenant_id,
+            module_key=module_key,
+            enabled=bool(enabled),
+            source='plan',
+        )
+        db.add(tm)
+        created.append(tm)
+    db.flush()
+
+    logger.info(
+        'Synced %d plan-sourced modules for tenant %s from plan %s',
+        len(created), tenant_id, plan.key,
+    )
+    return created
 
 
 class BillingQueries:

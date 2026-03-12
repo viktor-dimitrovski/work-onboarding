@@ -1,7 +1,7 @@
 "use client";
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
@@ -40,6 +40,7 @@ export default function WorkOrdersPage() {
   const [bulkError, setBulkError] = useState<string | null>(null);
 
   const canWrite = hasModule('releases') && hasPermission('releases:write');
+  const lastFetchKey = useRef('');
 
   const load = async (q?: string) => {
     if (!accessToken) return;
@@ -63,6 +64,7 @@ export default function WorkOrdersPage() {
     try {
       const params = status ? `?sync_status=${encodeURIComponent(status)}` : '';
       await api.post(`/work-orders/sync${params}`, {}, accessToken);
+      lastFetchKey.current = '';
       await load(query.trim() || undefined);
     } catch (err) {
       setBulkError(err instanceof Error ? err.message : 'Failed to queue bulk sync');
@@ -72,13 +74,13 @@ export default function WorkOrdersPage() {
   };
 
   useEffect(() => {
-    void load();
-  }, [accessToken]);
+    const key = `${accessToken ?? ''}::${query}`;
+    if (key === lastFetchKey.current) return;
+    lastFetchKey.current = key;
 
-  useEffect(() => {
     const handler = setTimeout(() => {
       void load(query.trim() || undefined);
-    }, 350);
+    }, query ? 350 : 0);
     return () => clearTimeout(handler);
   }, [query, accessToken]);
 

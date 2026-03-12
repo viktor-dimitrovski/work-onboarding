@@ -11,20 +11,56 @@ export const taskTypeOptions = [
 ] as const;
 
 export const roleOptions = ['super_admin', 'admin', 'mentor', 'employee', 'hr_viewer', 'reviewer'] as const;
-export const tenantRoleOptions = [
-  'member',
-  'manager',
-  'mentor',
-  'tenant_admin',
-  'compliance_viewer',
-  'compliance_editor',
-  'compliance_admin',
-  'parent',
-  'ir_viewer',
-  'ir_editor',
-  'ir_approver',
-  'ir_admin',
-] as const;
+
+export type TenantRoleGroup = {
+  label: string;
+  roles: string[];
+};
+
+export const tenantRoleGroups: TenantRoleGroup[] = [
+  {
+    label: 'General',
+    roles: ['member', 'manager', 'mentor', 'tenant_admin'],
+  },
+  {
+    label: 'Compliance',
+    roles: ['compliance_viewer', 'compliance_editor', 'compliance_admin'],
+  },
+  {
+    label: 'Integration Registry',
+    roles: ['ir_viewer', 'ir_editor', 'ir_approver', 'ir_admin'],
+  },
+  {
+    label: 'Billing',
+    roles: ['billing_viewer', 'billing_manager'],
+  },
+  {
+    label: 'Releases',
+    roles: ['release_viewer', 'release_editor'],
+  },
+  {
+    label: 'Tracks',
+    roles: ['tracks_editor'],
+  },
+  {
+    label: 'Assessments',
+    roles: ['assessments_editor'],
+  },
+  {
+    label: 'Reports',
+    roles: ['reports_viewer'],
+  },
+  {
+    label: 'Settings',
+    roles: ['settings_manager'],
+  },
+  {
+    label: 'Education',
+    roles: ['parent'],
+  },
+];
+
+export const tenantRoleOptions = tenantRoleGroups.flatMap((g) => g.roles);
 
 export function statusTone(status: string): string {
   switch (status) {

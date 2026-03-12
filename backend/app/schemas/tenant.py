@@ -87,6 +87,10 @@ class TenantModuleUpdate(BaseModel):
     enabled: bool
 
 
+class TenantChangePlan(BaseModel):
+    plan_id: UUID
+
+
 class TenantAdminInvite(BaseModel):
     email: str
     full_name: str

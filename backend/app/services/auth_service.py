@@ -1,3 +1,4 @@
+import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -10,12 +11,12 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_refresh_token,
+    hash_password,
     hash_token,
     verify_password,
 )
 from app.models.rbac import User, UserRole
-from app.models.token import RefreshToken
-from app.core.security import hash_password
+from app.models.token import PasswordSetToken, RefreshToken
 
 
 class AuthError(Exception):
@@ -143,3 +144,62 @@ def change_password(
     user.password_changed_at = datetime.now(UTC)
     db.flush()
     return True
+
+
+# ── Password-set / invitation token helpers ────────────────────────────────────
+
+def create_password_set_token(
+    db: Session,
+    *,
+    user: User,
+    purpose: str = 'invitation',
+    expires_hours: int = 72,
+) -> str:
+    """Generate a URL-safe random token, persist its hash, and return the raw token."""
+    raw = secrets.token_urlsafe(32)
+    db.add(
+        PasswordSetToken(
+            user_id=user.id,
+            token_hash=hash_token(raw),
+            expires_at=datetime.now(UTC) + timedelta(hours=expires_hours),
+            purpose=purpose,
+        )
+    )
+    db.flush()
+    return raw
+
+
+def consume_password_set_token(
+    db: Session,
+    *,
+    raw_token: str,
+    new_password: str,
+    expected_purpose: str | None = None,
+) -> User:
+    """Validate, consume the token, and set the new password.
+
+    Raises HTTP 400 if the token is missing, expired, already used, or the
+    purpose does not match.  Returns the updated User on success.
+    """
+    token_entity = db.scalar(
+        select(PasswordSetToken).where(PasswordSetToken.token_hash == hash_token(raw_token))
+    )
+    if not token_entity:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid or expired token')
+    if token_entity.used_at is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Token has already been used')
+    if token_entity.expires_at < datetime.now(UTC):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Token has expired')
+    if expected_purpose and token_entity.purpose != expected_purpose:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid token purpose')
+
+    user = db.scalar(select(User).options(joinedload(User.user_roles).joinedload(UserRole.role)).where(User.id == token_entity.user_id))
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='User not found or inactive')
+
+    user.hashed_password = hash_password(new_password)
+    user.password_change_required = False
+    user.password_changed_at = datetime.now(UTC)
+    token_entity.used_at = datetime.now(UTC)
+    db.flush()
+    return user

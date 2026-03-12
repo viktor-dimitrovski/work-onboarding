@@ -5,6 +5,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_active_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.audit import AuditLog
 from app.models.rbac import User
@@ -14,10 +15,15 @@ from app.multitenancy.permissions import require_access
 from app.schemas.audit import AuditLogListResponse, AuditLogOut
 from app.schemas.common import PaginationMeta
 from app.schemas.user import TenantMembershipUpdate, UserAddExisting, UserCreate, UserListResponse, UserOut
-from app.services import audit_service, user_service
+from app.services import audit_service, auth_service, email_service, user_service
 
 
 router = APIRouter(prefix='/users', tags=['users'])
+
+
+def _tenant_url(slug: str) -> str:
+    base = settings.BASE_DOMAINS.split(',')[0].strip()
+    return f'https://{slug}.{base}/dashboard'
 
 
 def _to_user_out(
@@ -130,7 +136,30 @@ def create_user(
             'tenant_roles': tenant_roles,
         },
     )
+
+    raw_token: str | None = None
+    if created:
+        raw_token = auth_service.create_password_set_token(db, user=user, purpose='invitation', expires_hours=72)
+
     db.commit()
+
+    if created and raw_token:
+        set_password_url = f'{settings.FRONTEND_BASE_URL.rstrip("/")}/set-password?token={raw_token}'
+        email_service.send_invitation(
+            to_email=user.email,
+            to_name=user.full_name or '',
+            tenant_name=ctx.tenant.name,
+            set_password_url=set_password_url,
+            roles=tenant_roles,
+        )
+    elif not created:
+        email_service.send_tenant_welcome(
+            to_email=user.email,
+            to_name=user.full_name or '',
+            tenant_name=ctx.tenant.name,
+            tenant_url=_tenant_url(ctx.tenant.slug),
+            roles=tenant_roles,
+        )
 
     return _to_user_out(user, tenant_roles=tenant_roles, tenant_status=membership.status if membership else None)
 
@@ -181,6 +210,15 @@ def add_existing_user_to_tenant(
         details={'email': user.email, 'tenant_roles': tenant_roles},
     )
     db.commit()
+
+    email_service.send_tenant_welcome(
+        to_email=user.email,
+        to_name=user.full_name or '',
+        tenant_name=ctx.tenant.name,
+        tenant_url=_tenant_url(ctx.tenant.slug),
+        roles=tenant_roles,
+    )
+
     return _to_user_out(user, tenant_roles=membership.roles(), tenant_status=membership.status)
 
 
@@ -215,6 +253,7 @@ def update_tenant_membership(
     if payload.status is not None:
         membership.status = payload.status
 
+    updated_roles = membership.roles()
     audit_service.log_action(
         db,
         actor_user_id=current_user.id,
@@ -222,7 +261,7 @@ def update_tenant_membership(
         entity_type='user',
         entity_id=membership.user_id,
         details={
-            'tenant_roles': membership.roles(),
+            'tenant_roles': updated_roles,
             'tenant_status': membership.status,
         },
     )
@@ -231,6 +270,16 @@ def update_tenant_membership(
     user = db.scalar(select(User).where(User.id == membership.user_id))
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found')
+
+    if payload.roles is not None or payload.role is not None:
+        email_service.send_roles_updated(
+            to_email=user.email,
+            to_name=user.full_name or '',
+            tenant_name=ctx.tenant.name,
+            tenant_url=_tenant_url(ctx.tenant.slug),
+            roles=updated_roles,
+        )
+
     return _to_user_out(user, tenant_roles=membership.roles(), tenant_status=membership.status)
 
 

@@ -7,12 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import get_current_active_user
+from app.api.deps import get_current_active_user, require_roles
 from app.db.session import get_db
 from app.models.rbac import User
-from app.multitenancy.deps import TenantContext, require_tenant_membership
+from app.multitenancy.deps import TenantContext, require_product_admin_host, require_tenant_membership
 from app.multitenancy.permissions import require_access
-from app.modules.billing.models import Invoice, PlanPrice
+from app.modules.billing.models import Invoice, PlanPrice, Subscription
+from app.modules.billing.limits import get_all_limits
 from app.modules.billing.providers import get_provider_adapter
 from app.modules.billing.service import BillingAdminService, BillingQueries
 from app.schemas.billing import (
@@ -20,6 +21,8 @@ from app.schemas.billing import (
     BillingCheckoutSessionResponse,
     BillingInvoiceOut,
     BillingInvoiceSummary,
+    BillingLimitItem,
+    BillingLimitsResponse,
     BillingOverviewResponse,
     BillingPlanSummary,
     BillingPortalSessionResponse,
@@ -32,10 +35,12 @@ from app.schemas.billing import (
     MeterRateOut,
     PlanPriceCreate,
     PlanPriceOut,
+    PlanPriceUpdate,
 )
 
 
 router = APIRouter(prefix='/billing', tags=['billing'])
+admin_router = APIRouter(prefix='/billing', tags=['billing-admin'])
 webhook_router = APIRouter(prefix='/billing', tags=['billing'])
 
 
@@ -105,6 +110,27 @@ def billing_invoices(
     return [BillingInvoiceOut.model_validate(row) for row in rows]
 
 
+@router.get('/limits', response_model=BillingLimitsResponse)
+def billing_limits(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('billing', 'billing:read')),
+) -> BillingLimitsResponse:
+    results = get_all_limits(db, ctx.tenant.id)
+    items = [
+        BillingLimitItem(
+            limit_key=r.limit_key,
+            limit=r.limit,
+            current=r.current,
+            remaining=r.remaining,
+            allowed=r.allowed,
+        )
+        for r in results.values()
+    ]
+    return BillingLimitsResponse(items=items)
+
+
 @router.post('/checkout-session', response_model=BillingCheckoutSessionResponse)
 def create_checkout_session(
     payload: BillingCheckoutSessionRequest,
@@ -143,46 +169,46 @@ def create_portal_session(
     return BillingPortalSessionResponse(url=url)
 
 
-@router.get('/admin/meters', response_model=list[MeterOut])
+@admin_router.get('/admin/meters', response_model=list[MeterOut],
+                  dependencies=[Depends(require_product_admin_host)])
 def list_meters(
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
-    __: object = Depends(require_access('billing', 'billing:manage')),
+    _: User = Depends(require_roles('super_admin')),
 ) -> list[MeterOut]:
     rows = BillingAdminService.list_meters(db)
     return [MeterOut.model_validate(row) for row in rows]
 
 
-@router.post('/admin/meters', response_model=MeterOut, status_code=status.HTTP_201_CREATED)
+@admin_router.post('/admin/meters', response_model=MeterOut, status_code=status.HTTP_201_CREATED,
+                   dependencies=[Depends(require_product_admin_host)])
 def create_meter(
     payload: MeterCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
-    __: object = Depends(require_access('billing', 'billing:manage')),
+    _: User = Depends(require_roles('super_admin')),
 ) -> MeterOut:
     meter = BillingAdminService.create_meter(db, payload=payload.model_dump())
     db.commit()
     return MeterOut.model_validate(meter)
 
 
-@router.get('/admin/meters/{meter_id}/rates', response_model=list[MeterRateOut])
+@admin_router.get('/admin/meters/{meter_id}/rates', response_model=list[MeterRateOut],
+                  dependencies=[Depends(require_product_admin_host)])
 def list_meter_rates(
     meter_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
-    __: object = Depends(require_access('billing', 'billing:manage')),
+    _: User = Depends(require_roles('super_admin')),
 ) -> list[MeterRateOut]:
     rows = BillingAdminService.list_rates(db, meter_id=meter_id)
     return [MeterRateOut.model_validate(row) for row in rows]
 
 
-@router.post('/admin/meters/{meter_id}/rates', response_model=MeterRateOut, status_code=status.HTTP_201_CREATED)
+@admin_router.post('/admin/meters/{meter_id}/rates', response_model=MeterRateOut, status_code=status.HTTP_201_CREATED,
+                   dependencies=[Depends(require_product_admin_host)])
 def create_meter_rate(
     meter_id: UUID,
     payload: MeterRateCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
-    __: object = Depends(require_access('billing', 'billing:manage')),
+    _: User = Depends(require_roles('super_admin')),
 ) -> MeterRateOut:
     if str(payload.meter_id) != str(meter_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='meter_id mismatch')
@@ -191,26 +217,57 @@ def create_meter_rate(
     return MeterRateOut.model_validate(rate)
 
 
-@router.get('/admin/plan-prices', response_model=list[PlanPriceOut])
+@admin_router.get('/admin/plan-prices', response_model=list[PlanPriceOut],
+                  dependencies=[Depends(require_product_admin_host)])
 def list_plan_prices(
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
-    __: object = Depends(require_access('billing', 'billing:manage')),
+    _: User = Depends(require_roles('super_admin')),
 ) -> list[PlanPriceOut]:
     rows = BillingAdminService.list_plan_prices(db)
     return [PlanPriceOut.model_validate(row) for row in rows]
 
 
-@router.post('/admin/plan-prices', response_model=PlanPriceOut, status_code=status.HTTP_201_CREATED)
+@admin_router.post('/admin/plan-prices', response_model=PlanPriceOut, status_code=status.HTTP_201_CREATED,
+                   dependencies=[Depends(require_product_admin_host)])
 def create_plan_price(
     payload: PlanPriceCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
-    __: object = Depends(require_access('billing', 'billing:manage')),
+    _: User = Depends(require_roles('super_admin')),
 ) -> PlanPriceOut:
     price = BillingAdminService.create_plan_price(db, payload=payload.model_dump())
     db.commit()
     return PlanPriceOut.model_validate(price)
+
+
+@admin_router.put('/admin/plan-prices/{price_id}', response_model=PlanPriceOut,
+                  dependencies=[Depends(require_product_admin_host)])
+def update_plan_price(
+    price_id: UUID,
+    payload: PlanPriceUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> PlanPriceOut:
+    price = db.scalar(select(PlanPrice).where(PlanPrice.id == price_id))
+    if not price:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Plan price not found')
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(price, field, value)
+    db.commit()
+    return PlanPriceOut.model_validate(price)
+
+
+@admin_router.delete('/admin/plan-prices/{price_id}', status_code=status.HTTP_204_NO_CONTENT,
+                     response_model=None, dependencies=[Depends(require_product_admin_host)])
+def delete_plan_price(
+    price_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles('super_admin')),
+) -> None:
+    price = db.scalar(select(PlanPrice).where(PlanPrice.id == price_id))
+    if not price:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Plan price not found')
+    db.delete(price)
+    db.commit()
 
 
 @webhook_router.post('/webhooks/stripe')

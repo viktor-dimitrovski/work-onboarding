@@ -98,6 +98,14 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     'ir_editor': {'ir:read', 'ir:write'},
     'ir_approver': {'ir:read', 'ir:write', 'ir:approve'},
     'ir_admin': {'ir:read', 'ir:write', 'ir:approve', 'ir:admin'},
+    'billing_viewer': {'billing:read'},
+    'billing_manager': {'billing:read', 'billing:manage'},
+    'release_viewer': {'releases:read'},
+    'release_editor': {'releases:read', 'releases:write'},
+    'tracks_editor': {'tracks:read', 'tracks:write'},
+    'assessments_editor': {'assessments:read', 'assessments:write', 'assessments:take'},
+    'reports_viewer': {'reports:read'},
+    'settings_manager': {'settings:manage'},
 }
 
 ROLE_LABELS: dict[str, dict[str, str]] = {
@@ -106,6 +114,14 @@ ROLE_LABELS: dict[str, dict[str, str]] = {
         'manager': 'manager',
         'mentor': 'mentor',
         'tenant_admin': 'tenant_admin',
+        'billing_viewer': 'billing_viewer',
+        'billing_manager': 'billing_manager',
+        'release_viewer': 'release_viewer',
+        'release_editor': 'release_editor',
+        'tracks_editor': 'tracks_editor',
+        'assessments_editor': 'assessments_editor',
+        'reports_viewer': 'reports_viewer',
+        'settings_manager': 'settings_manager',
     },
     'education': {
         'member': 'student',
@@ -113,6 +129,14 @@ ROLE_LABELS: dict[str, dict[str, str]] = {
         'mentor': 'teacher',
         'tenant_admin': 'tenant_admin',
         'parent': 'parent',
+        'billing_viewer': 'billing_viewer',
+        'billing_manager': 'billing_manager',
+        'release_viewer': 'release_viewer',
+        'release_editor': 'release_editor',
+        'tracks_editor': 'tracks_editor',
+        'assessments_editor': 'assessments_editor',
+        'reports_viewer': 'reports_viewer',
+        'settings_manager': 'settings_manager',
     },
 }
 

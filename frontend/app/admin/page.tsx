@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { ExternalLink, LayoutGrid, Settings2, Users2, Wallet } from 'lucide-react';
+import { ExternalLink, LayoutGrid, Pencil, Settings2, Trash2, Users2, Wallet, X } from 'lucide-react';
 
 import { LoadingState } from '@/components/common/loading-state';
 import { AppShell } from '@/components/layout/app-shell';
@@ -29,6 +29,10 @@ type PlanRow = {
   id: string;
   key: string;
   name: string;
+  tenant_type_scope: string;
+  module_defaults: Record<string, boolean>;
+  limits_json: Record<string, number>;
+  is_active: boolean;
 };
 
 type PlanPriceRow = {
@@ -133,7 +137,7 @@ function NavItem({
 
 export default function AdminTenantsPage() {
   const router = useRouter();
-  const { accessToken, hasRole, isLoading } = useAuth();
+  const { accessToken, hasRole, isAuthenticated, isLoading } = useAuth();
 
   const [tenants, setTenants] = useState<TenantRow[]>([]);
   const [plans, setPlans] = useState<PlanRow[]>([]);
@@ -164,6 +168,19 @@ export default function AdminTenantsPage() {
   const [inviteName, setInviteName] = useState('');
   const [invitePassword, setInvitePassword] = useState('');
 
+  const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
+  const [editPlanName, setEditPlanName] = useState('');
+  const [editPlanScope, setEditPlanScope] = useState('all');
+  const [editPlanActive, setEditPlanActive] = useState(true);
+
+  const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
+  const [editPriceAmount, setEditPriceAmount] = useState('');
+  const [editPriceInterval, setEditPriceInterval] = useState('month');
+  const [editPriceCurrency, setEditPriceCurrency] = useState('');
+  const [editPriceProvider, setEditPriceProvider] = useState('');
+  const [editPriceProviderId, setEditPriceProviderId] = useState('');
+  const [editPriceNickname, setEditPriceNickname] = useState('');
+
   const [activeSection, setActiveSection] = useState<AdminSectionId>('tenants');
   const [navFilter, setNavFilter] = useState('');
   const [tenantFilter, setTenantFilter] = useState('');
@@ -184,10 +201,33 @@ export default function AdminTenantsPage() {
   }, [selectedTenantId]);
 
   useEffect(() => {
-    if (!isLoading && !hasRole('super_admin')) {
+    if (isLoading || typeof window === 'undefined') return;
+    if (!isAuthenticated) return;
+
+    const baseDomain = resolveBaseDomain(window.location.hostname);
+    const isAdminHost = window.location.hostname === `admin.${baseDomain}`;
+    const defaultSlug = process.env.NEXT_PUBLIC_DEFAULT_TENANT_SLUG;
+    const { protocol, port } = window.location;
+    const portSuffix = port ? `:${port}` : '';
+
+    if (!hasRole('super_admin')) {
+      // No super_admin → send to default tenant dashboard.
+      // On admin host, router.replace('/dashboard') would loop back via middleware rewrite.
+      if (isAdminHost && defaultSlug) {
+        window.location.replace(`${protocol}//${defaultSlug}.${baseDomain}${portSuffix}/dashboard`);
+        return;
+      }
       router.replace('/dashboard');
+      return;
     }
-  }, [hasRole, isLoading, router]);
+
+    // Has super_admin but on a tenant host → redirect to admin subdomain.
+    // Backend enforces require_product_admin_host in production, so API calls
+    // would fail from any non-admin host.
+    if (!isAdminHost) {
+      window.location.replace(`${protocol}//admin.${baseDomain}${portSuffix}/admin`);
+    }
+  }, [hasRole, isAuthenticated, isLoading, router]);
 
   useEffect(() => {
     const load = async () => {
@@ -356,6 +396,93 @@ export default function AdminTenantsPage() {
       setInvitePassword('');
     } catch (inviteError) {
       setError(inviteError instanceof Error ? inviteError.message : 'Failed to invite admin');
+    }
+  };
+
+  const startEditPlan = (plan: PlanRow) => {
+    setEditingPlanId(plan.id);
+    setEditPlanName(plan.name);
+    setEditPlanScope(plan.tenant_type_scope);
+    setEditPlanActive(plan.is_active);
+  };
+
+  const cancelEditPlan = () => setEditingPlanId(null);
+
+  const savePlan = async () => {
+    if (!accessToken || !editingPlanId) return;
+    setError(null);
+    try {
+      const updated = await api.put<PlanRow>(
+        `/admin/plans/${editingPlanId}`,
+        { name: editPlanName, tenant_type_scope: editPlanScope, is_active: editPlanActive },
+        accessToken,
+      );
+      setPlans((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setEditingPlanId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update plan');
+    }
+  };
+
+  const deletePlan = async (planId: string) => {
+    if (!accessToken) return;
+    setError(null);
+    try {
+      await api.delete(`/admin/plans/${planId}`, accessToken);
+      setPlans((prev) => prev.filter((p) => p.id !== planId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete plan');
+    }
+  };
+
+  const startEditPrice = (price: PlanPriceRow) => {
+    setEditingPriceId(price.id);
+    setEditPriceAmount(String(price.amount));
+    setEditPriceInterval(price.billing_interval);
+    setEditPriceCurrency(price.currency);
+    setEditPriceProvider(price.provider);
+    setEditPriceProviderId(price.provider_price_id || '');
+    setEditPriceNickname(price.nickname || '');
+  };
+
+  const cancelEditPrice = () => setEditingPriceId(null);
+
+  const savePrice = async () => {
+    if (!accessToken || !editingPriceId) return;
+    const amount = Number(editPriceAmount);
+    if (Number.isNaN(amount)) {
+      setError('Amount must be a number');
+      return;
+    }
+    setError(null);
+    try {
+      const updated = await api.put<PlanPriceRow>(
+        `/billing/admin/plan-prices/${editingPriceId}`,
+        {
+          amount,
+          billing_interval: editPriceInterval,
+          currency: editPriceCurrency,
+          provider: editPriceProvider,
+          provider_price_id: editPriceProviderId || null,
+          nickname: editPriceNickname || null,
+        },
+        accessToken,
+      );
+      setPlanPrices((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setEditingPriceId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update plan price');
+    }
+  };
+
+  const deletePrice = async (priceId: string) => {
+    if (!accessToken) return;
+    setError(null);
+    try {
+      await api.delete(`/billing/admin/plan-prices/${priceId}`, accessToken);
+      setPlanPrices((prev) => prev.filter((p) => p.id !== priceId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete plan price');
     }
   };
 
@@ -873,19 +1000,85 @@ export default function AdminTenantsPage() {
                                 {plans
                                   .slice()
                                   .sort((a, b) => a.name.localeCompare(b.name))
-                                  .map((plan) => (
-                                    <div key={plan.id} className='rounded-md border bg-white p-3'>
-                                      <div className='flex items-start justify-between gap-3'>
-                                        <div>
-                                          <p className='text-sm font-semibold leading-none'>{plan.name}</p>
-                                          <p className='mt-1 text-xs text-muted-foreground'>Key: {plan.key}</p>
+                                  .map((plan) =>
+                                    editingPlanId === plan.id ? (
+                                      <div key={plan.id} className='rounded-md border border-primary bg-primary/5 p-3 space-y-3'>
+                                        <div className='grid gap-2'>
+                                          <div className='space-y-1'>
+                                            <Label className='text-xs'>Name</Label>
+                                            <Input value={editPlanName} onChange={(e) => setEditPlanName(e.target.value)} />
+                                          </div>
+                                          <div className='grid grid-cols-2 gap-2'>
+                                            <div className='space-y-1'>
+                                              <Label className='text-xs'>Scope</Label>
+                                              <select
+                                                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                                                value={editPlanScope}
+                                                onChange={(e) => setEditPlanScope(e.target.value)}
+                                              >
+                                                <option value='all'>all</option>
+                                                <option value='company'>company</option>
+                                                <option value='education'>education</option>
+                                              </select>
+                                            </div>
+                                            <div className='space-y-1'>
+                                              <Label className='text-xs'>Active</Label>
+                                              <select
+                                                className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                                                value={editPlanActive ? 'true' : 'false'}
+                                                onChange={(e) => setEditPlanActive(e.target.value === 'true')}
+                                              >
+                                                <option value='true'>Yes</option>
+                                                <option value='false'>No</option>
+                                              </select>
+                                            </div>
+                                          </div>
                                         </div>
-                                        <Badge variant='outline' className='text-[10px]'>
-                                          {plan.id.slice(0, 8)}
-                                        </Badge>
+                                        <div className='flex items-center justify-end gap-2'>
+                                          <Button variant='outline' size='sm' onClick={cancelEditPlan}>
+                                            <X className='mr-1 h-3 w-3' />
+                                            Cancel
+                                          </Button>
+                                          <Button size='sm' onClick={savePlan}>
+                                            Save
+                                          </Button>
+                                        </div>
                                       </div>
-                                    </div>
-                                  ))}
+                                    ) : (
+                                      <div key={plan.id} className='rounded-md border bg-white p-3'>
+                                        <div className='flex items-start justify-between gap-3'>
+                                          <div>
+                                            <p className='text-sm font-semibold leading-none'>
+                                              {plan.name}
+                                              {!plan.is_active && (
+                                                <Badge variant='outline' className='ml-2 text-[10px]'>Inactive</Badge>
+                                              )}
+                                            </p>
+                                            <p className='mt-1 text-xs text-muted-foreground'>
+                                              Key: {plan.key} · Scope: {plan.tenant_type_scope}
+                                            </p>
+                                          </div>
+                                          <div className='flex items-center gap-1'>
+                                            <Button variant='ghost' size='sm' onClick={() => startEditPlan(plan)} title='Edit plan'>
+                                              <Pencil className='h-3.5 w-3.5' />
+                                            </Button>
+                                            <Button
+                                              variant='ghost'
+                                              size='sm'
+                                              onClick={() => {
+                                                if (window.confirm(`Delete plan "${plan.name}"? Plans with active subscriptions cannot be deleted.`)) {
+                                                  void deletePlan(plan.id);
+                                                }
+                                              }}
+                                              title='Delete plan'
+                                            >
+                                              <Trash2 className='h-3.5 w-3.5 text-destructive' />
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ),
+                                  )}
                               </div>
                             )}
                           </div>
@@ -984,6 +1177,55 @@ export default function AdminTenantsPage() {
                               ) : (
                                 planPrices.map((price) => {
                                   const planName = planLookup.get(price.plan_id)?.name || price.plan_id;
+                                  if (editingPriceId === price.id) {
+                                    return (
+                                      <div key={price.id} className='rounded-lg border border-primary bg-primary/5 p-3 space-y-3'>
+                                        <p className='text-sm font-semibold'>{planName}</p>
+                                        <div className='grid gap-2 md:grid-cols-3'>
+                                          <div className='space-y-1'>
+                                            <Label className='text-xs'>Amount</Label>
+                                            <Input value={editPriceAmount} onChange={(e) => setEditPriceAmount(e.target.value)} />
+                                          </div>
+                                          <div className='space-y-1'>
+                                            <Label className='text-xs'>Interval</Label>
+                                            <select
+                                              className='w-full rounded-md border border-input bg-background px-3 py-2 text-sm'
+                                              value={editPriceInterval}
+                                              onChange={(e) => setEditPriceInterval(e.target.value)}
+                                            >
+                                              <option value='month'>month</option>
+                                              <option value='year'>year</option>
+                                            </select>
+                                          </div>
+                                          <div className='space-y-1'>
+                                            <Label className='text-xs'>Currency</Label>
+                                            <Input value={editPriceCurrency} onChange={(e) => setEditPriceCurrency(e.target.value)} />
+                                          </div>
+                                          <div className='space-y-1'>
+                                            <Label className='text-xs'>Provider</Label>
+                                            <Input value={editPriceProvider} onChange={(e) => setEditPriceProvider(e.target.value)} />
+                                          </div>
+                                          <div className='space-y-1'>
+                                            <Label className='text-xs'>Provider price ID</Label>
+                                            <Input value={editPriceProviderId} onChange={(e) => setEditPriceProviderId(e.target.value)} />
+                                          </div>
+                                          <div className='space-y-1'>
+                                            <Label className='text-xs'>Nickname</Label>
+                                            <Input value={editPriceNickname} onChange={(e) => setEditPriceNickname(e.target.value)} />
+                                          </div>
+                                        </div>
+                                        <div className='flex items-center justify-end gap-2'>
+                                          <Button variant='outline' size='sm' onClick={cancelEditPrice}>
+                                            <X className='mr-1 h-3 w-3' />
+                                            Cancel
+                                          </Button>
+                                          <Button size='sm' onClick={savePrice}>
+                                            Save
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
                                   return (
                                     <div
                                       key={price.id}
@@ -993,13 +1235,33 @@ export default function AdminTenantsPage() {
                                         <p className='font-semibold'>{planName}</p>
                                         <p className='text-xs text-muted-foreground'>
                                           {price.billing_interval} · {price.currency.toUpperCase()} · {price.provider}
+                                          {price.nickname ? ` · ${price.nickname}` : ''}
                                         </p>
                                       </div>
-                                      <div className='text-right'>
-                                        <p className='font-semibold'>{price.amount}</p>
-                                        <p className='text-xs text-muted-foreground'>
-                                          {price.provider_price_id || 'No provider price id'}
-                                        </p>
+                                      <div className='flex items-center gap-3'>
+                                        <div className='text-right'>
+                                          <p className='font-semibold'>{price.amount}</p>
+                                          <p className='text-xs text-muted-foreground'>
+                                            {price.provider_price_id || 'No provider price id'}
+                                          </p>
+                                        </div>
+                                        <div className='flex items-center gap-1'>
+                                          <Button variant='ghost' size='sm' onClick={() => startEditPrice(price)} title='Edit price'>
+                                            <Pencil className='h-3.5 w-3.5' />
+                                          </Button>
+                                          <Button
+                                            variant='ghost'
+                                            size='sm'
+                                            onClick={() => {
+                                              if (window.confirm(`Delete this price mapping for ${planName}?`)) {
+                                                void deletePrice(price.id);
+                                              }
+                                            }}
+                                            title='Delete price'
+                                          >
+                                            <Trash2 className='h-3.5 w-3.5 text-destructive' />
+                                          </Button>
+                                        </div>
                                       </div>
                                     </div>
                                   );

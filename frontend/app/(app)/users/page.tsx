@@ -24,8 +24,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
-import { formatDateTime } from '@/lib/constants';
-import { tenantRoleOptions } from '@/lib/constants';
+import { formatDateTime, tenantRoleGroups, tenantRoleOptions } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
 import type { UserRow } from '@/lib/types';
 
@@ -99,26 +98,40 @@ function TenantRolesEditor({
       <DropdownMenuContent align='start' className='w-64'>
         <DropdownMenuLabel>Tenant roles</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {tenantRoleOptions.map((role) => {
-          const checked = safeValue.includes(role);
-          return (
-            <DropdownMenuCheckboxItem
-              key={role}
-              checked={checked}
-              onSelect={(e) => e.preventDefault()}
-              onCheckedChange={(nextChecked) => {
-                if (nextChecked) {
-                  onChange(Array.from(new Set([...safeValue, role])));
-                  return;
-                }
-                if (safeValue.length <= 1) return;
-                onChange(safeValue.filter((r) => r !== role));
-              }}
-            >
-              {role.replaceAll('_', ' ')}
-            </DropdownMenuCheckboxItem>
-          );
-        })}
+        <ScrollArea className='max-h-80'>
+          {tenantRoleGroups.map((group, groupIdx) => {
+            const selectedInGroup = group.roles.filter((r) => safeValue.includes(r));
+            const countLabel = selectedInGroup.length > 0 ? ` (${selectedInGroup.length}/${group.roles.length})` : '';
+            return (
+              <div key={group.label}>
+                {groupIdx > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuLabel className='text-xs font-semibold text-muted-foreground'>
+                  {group.label}{countLabel}
+                </DropdownMenuLabel>
+                {group.roles.map((role) => {
+                  const checked = safeValue.includes(role);
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={role}
+                      checked={checked}
+                      onSelect={(e) => e.preventDefault()}
+                      onCheckedChange={(nextChecked) => {
+                        if (nextChecked) {
+                          onChange(Array.from(new Set([...safeValue, role])));
+                          return;
+                        }
+                        if (safeValue.length <= 1) return;
+                        onChange(safeValue.filter((r) => r !== role));
+                      }}
+                    >
+                      {role.replaceAll('_', ' ')}
+                    </DropdownMenuCheckboxItem>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </ScrollArea>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -321,10 +334,14 @@ export default function UsersPage() {
                     onChange={(event) => setRoleFilter(event.target.value)}
                   >
                     <option value=''>All tenant roles</option>
-                    {tenantRoleOptions.map((role) => (
-                      <option key={role} value={role}>
-                        {role.replace('_', ' ')}
-                      </option>
+                    {tenantRoleGroups.map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.roles.map((role) => (
+                          <option key={role} value={role}>
+                            {role.replaceAll('_', ' ')}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                   {(query || roleFilter) && (

@@ -3,6 +3,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_active_user
@@ -15,10 +16,11 @@ from app.schemas.auth import (
     LogoutRequest,
     PasswordResetRequest,
     RefreshRequest,
+    SetPasswordRequest,
     TokenResponse,
     UserSummary,
 )
-from app.services import audit_service, auth_service, oauth_service
+from app.services import audit_service, auth_service, email_service, oauth_service
 from app.utils.rate_limit import SimpleRateLimiter
 
 
@@ -194,9 +196,26 @@ def change_password(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Current password is invalid')
 
 
-@router.post('/password-reset-request')
-def password_reset_request(payload: PasswordResetRequest) -> dict[str, str]:
-    return {
-        'message': 'Password reset request accepted. TODO: integrate email provider and reset token flow.',
-        'email': payload.email,
-    }
+@router.post('/password-reset-request', status_code=status.HTTP_204_NO_CONTENT)
+def password_reset_request(payload: PasswordResetRequest, db: Session = Depends(get_db)) -> None:
+    """Generate a password-reset token and send a reset email.
+
+    Always returns 204 regardless of whether the email exists (prevents enumeration).
+    """
+    user = db.scalar(select(User).where(User.email == payload.email.lower(), User.is_active == True))  # noqa: E712
+    if user:
+        raw_token = auth_service.create_password_set_token(db, user=user, purpose='password_reset', expires_hours=24)
+        db.commit()
+        reset_url = f'{settings.FRONTEND_BASE_URL.rstrip("/")}/reset-password?token={raw_token}'
+        email_service.send_password_reset(
+            to_email=user.email,
+            to_name=user.full_name or '',
+            reset_url=reset_url,
+        )
+
+
+@router.post('/set-password', status_code=status.HTTP_204_NO_CONTENT)
+def set_password(payload: SetPasswordRequest, db: Session = Depends(get_db)) -> None:
+    """Consume an invitation or password-reset token and set the new password."""
+    auth_service.consume_password_set_token(db, raw_token=payload.token, new_password=payload.new_password)
+    db.commit()

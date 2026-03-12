@@ -35,20 +35,33 @@ export function middleware(req: NextRequest) {
 
   if (resolution.kind === 'product' && resolution.productKey === 'admin') {
     const adminUrl = req.nextUrl.clone();
+    // Auth routes must pass through as-is so the login page is reachable on the admin subdomain.
+    const isAuthPath = ['/login', '/sign-up', '/forgot-password', '/reset-password', '/set-password'].some((p) =>
+      adminUrl.pathname.startsWith(p),
+    );
+    // API and Next.js internal paths must never be rewritten — they need to reach their real handlers.
+    const isPassThroughPath = adminUrl.pathname.startsWith('/api/') || adminUrl.pathname.startsWith('/_next/');
     // Serve the admin console under /admin regardless of the requested path.
     // This avoids 404s for paths like /dashboard on admin.<baseDomain>.
-    if (adminUrl.pathname !== '/admin') {
+    if (!isAuthPath && !isPassThroughPath && adminUrl.pathname !== '/admin') {
       adminUrl.pathname = '/admin';
+      // Force http for the internal rewrite — the standalone server only listens
+      // on plain HTTP even when the original request arrived over HTTPS via Nginx.
+      adminUrl.protocol = 'http:';
       return NextResponse.rewrite(adminUrl);
     }
   }
 
-  // In production, keep tenant apps from hitting /admin routes.
-  // In local/dev, allow it so you can manage everything from one console.
+  // Tenant hosts should never serve /admin — redirect to the admin subdomain instead.
+  // The admin page itself handles auth and role checks on the correct host.
   if (resolution.kind === 'tenant' && req.nextUrl.pathname.startsWith('/admin')) {
-    if (process.env.NODE_ENV === 'production') {
-      return NextResponse.redirect(new URL('/dashboard', req.url));
+    if (resolution.baseDomain) {
+      const adminUrl = new URL(req.url);
+      adminUrl.hostname = `admin.${resolution.baseDomain}`;
+      adminUrl.pathname = '/admin';
+      return NextResponse.redirect(adminUrl);
     }
+    return NextResponse.redirect(new URL('/dashboard', req.url));
   }
 
   const requestHeaders = new Headers(req.headers);

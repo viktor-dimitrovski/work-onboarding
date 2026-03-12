@@ -384,7 +384,12 @@ function isNavItemVisible(item: ModuleNavItem, ctx: ModuleAccessContext) {
 }
 
 export function getModuleNavItems(module: ModuleDefinition, ctx: ModuleAccessContext) {
-  return module.navItems.filter((item) => isNavItemVisible(item, ctx));
+  const items = module.navItems.filter((item) => isNavItemVisible(item, ctx));
+  if (module.id === 'global-admin' && items.length > 0) {
+    const adminUrl = getAdminConsoleUrl();
+    return items.map((item) => (item.href === '/admin' ? { ...item, href: adminUrl } : item));
+  }
+  return items;
 }
 
 export function getVisibleModules(ctx: ModuleAccessContext) {
@@ -421,7 +426,34 @@ export function getActiveModule(pathname: string | null, modules: ModuleDefiniti
   );
 }
 
+export function getAdminConsoleUrl(): string {
+  if (typeof window === 'undefined') return '/admin';
+  const raw = (process.env.NEXT_PUBLIC_BASE_DOMAINS || '').trim();
+  const baseDomains = raw
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const host = window.location.hostname.toLowerCase();
+  let baseDomain: string | undefined;
+  for (const bd of baseDomains) {
+    if (host === bd || host.endsWith(`.${bd}`)) {
+      baseDomain = bd;
+      break;
+    }
+  }
+  if (!baseDomain) {
+    const parts = host.split('.').filter(Boolean);
+    baseDomain = parts.length >= 2 ? parts.slice(-2).join('.') : host;
+  }
+  const isAlreadyAdmin = host === `admin.${baseDomain}`;
+  if (isAlreadyAdmin) return '/admin';
+  const { protocol, port } = window.location;
+  const portSuffix = port ? `:${port}` : '';
+  return `${protocol}//admin.${baseDomain}${portSuffix}/admin`;
+}
+
 export function getModuleDefaultHref(module: ModuleDefinition, ctx: ModuleAccessContext) {
+  if (module.id === 'global-admin') return getAdminConsoleUrl();
   const items = getModuleNavItems(module, ctx);
   return items[0]?.href ?? module.defaultHref ?? '/modules';
 }

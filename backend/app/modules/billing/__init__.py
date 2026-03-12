@@ -1,4 +1,15 @@
 from app.modules.billing.emitter import BillingEmitter
+from app.modules.billing.limits import (
+    LimitResult,
+    check_ai_classifications,
+    check_ai_pdf_imports,
+    check_file_uploads,
+    check_max_assessments,
+    check_max_tracks,
+    check_max_users,
+    get_all_limits,
+    require_within_limit,
+)
 from app.modules.billing.models import (
     CreditGrant,
     CreditPack,
@@ -15,7 +26,7 @@ from app.modules.billing.models import (
     TenantModule,
     UsageEvent,
 )
-from app.modules.billing.service import BillingAdminService, BillingQueries
+from app.modules.billing.service import BillingAdminService, BillingQueries, sync_modules_from_plan
 
 __all__ = [
     'BillingAdminService',
@@ -26,6 +37,7 @@ __all__ = [
     'Invoice',
     'InvoiceLine',
     'LedgerEntry',
+    'LimitResult',
     'Meter',
     'MeterRate',
     'OutboxEvent',
@@ -35,4 +47,13 @@ __all__ = [
     'Subscription',
     'TenantModule',
     'UsageEvent',
+    'check_ai_classifications',
+    'check_ai_pdf_imports',
+    'check_file_uploads',
+    'check_max_assessments',
+    'check_max_tracks',
+    'check_max_users',
+    'get_all_limits',
+    'require_within_limit',
+    'sync_modules_from_plan',
 ]

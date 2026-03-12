@@ -161,6 +161,20 @@ export const api = {
     });
   },
 
+  requestPasswordReset(email: string) {
+    return request<void>('/auth/password-reset-request', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  setPassword(payload: { token: string; new_password: string }) {
+    return request<void>('/auth/set-password', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   me(token: string) {
     return request('/auth/me', { token });
   },

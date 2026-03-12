@@ -75,7 +75,7 @@ from app.modules.billing.models import (
     TenantModule,
     UsageEvent,
 )
-from app.models.token import RefreshToken
+from app.models.token import PasswordSetToken, RefreshToken
 from app.models.track import TaskResource, TrackPhase, TrackTask, TrackTemplate, TrackVersion
 
 
@@ -136,6 +136,7 @@ __all__ = [
     'MentorReview',
     'OnboardingAssignment',
     'QuizAttempt',
+    'PasswordSetToken',
     'RefreshToken',
     'Role',
     'ReleaseManifest',

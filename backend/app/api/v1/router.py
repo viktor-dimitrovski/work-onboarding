@@ -31,6 +31,7 @@ api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(admin.router, dependencies=[Depends(require_password_change_completed)])
 api_router.include_router(billing.webhook_router)
+api_router.include_router(billing.admin_router, dependencies=[Depends(require_password_change_completed)])
 api_router.include_router(keybindings.router, dependencies=[Depends(require_password_change_completed)])
 
 tenant_deps = [Depends(require_password_change_completed), Depends(require_tenant_membership)]

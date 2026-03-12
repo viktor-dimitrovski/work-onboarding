@@ -19,13 +19,28 @@ const TenantContext = createContext<TenantContextState | undefined>(undefined);
 const tenantContextCacheByToken = new Map<string, TenantContextPayload>();
 const tenantContextInflightByToken = new Map<string, Promise<TenantContextPayload>>();
 
+function isProductHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname.toLowerCase();
+  const reserved = (process.env.NEXT_PUBLIC_RESERVED_SUBDOMAINS || 'admin')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  // Check if the first subdomain label is a reserved name (e.g. admin.solvebox.org → "admin").
+  // This avoids depending on NEXT_PUBLIC_BASE_DOMAINS matching the runtime domain,
+  // since NEXT_PUBLIC_* vars are baked in at build time and may differ from the deploy target.
+  const parts = host.split('.');
+  if (parts.length >= 3 && reserved.includes(parts[0])) return true;
+  return false;
+}
+
 export function TenantProvider({ children }: { children: React.ReactNode }) {
   const { accessToken, isAuthenticated } = useAuth();
   const [context, setContext] = useState<TenantContextPayload | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    if (!isAuthenticated || !accessToken) {
+    if (!isAuthenticated || !accessToken || isProductHost()) {
       setContext(null);
       setIsLoading(false);
       return;
