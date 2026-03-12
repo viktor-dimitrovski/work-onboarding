@@ -8,7 +8,7 @@ from app.api.deps import get_current_active_user
 from app.db.session import get_db
 from app.models.rbac import User
 from app.multitenancy.deps import TenantContext, require_tenant_membership
-from app.multitenancy.permissions import require_access
+from app.multitenancy.permissions import permissions_for_roles, require_access
 from app.schemas.assignment import AssignmentTaskOut, NextTaskResponse
 from app.schemas.progress import (
     ChecklistItemUpdate,
@@ -37,11 +37,11 @@ def submit_task(
     __: object = Depends(require_access('assignments', 'assignments:submit')),
 ) -> TaskSubmissionOut:
     assignment = assignment_service.get_assignment_by_id(db, assignment_id)
-    roles = set(ctx.roles)
-    if {'member', 'parent'} & roles and assignment.employee_id != current_user.id and not {'tenant_admin', 'manager'} & roles:
+    perms = permissions_for_roles(ctx.roles)
+    if 'assignments:write' not in perms and assignment.employee_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail='Employees can only submit their own tasks',
+            detail='You can only submit your own tasks',
         )
 
     submission = progress_service.submit_task(
@@ -98,11 +98,11 @@ def update_checklist_item(
     __: object = Depends(require_access('assignments', 'assignments:submit')),
 ) -> AssignmentTaskOut:
     assignment = assignment_service.get_assignment_by_id(db, assignment_id)
-    roles = set(ctx.roles)
-    if {'member', 'parent'} & roles and assignment.employee_id != current_user.id and not {'tenant_admin', 'manager'} & roles:
+    perms = permissions_for_roles(ctx.roles)
+    if 'assignments:write' not in perms and assignment.employee_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail='Employees can only update their own assignments',
+            detail='You can only update your own assignments',
         )
 
     task = progress_service.update_checklist_item(
@@ -141,7 +141,7 @@ def review_task(
     ctx: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('assignments', 'assignments:review')),
 ) -> MentorReviewOut:
-    roles = set(ctx.roles)
+    perms = permissions_for_roles(ctx.roles)
     review = progress_service.mentor_review_task(
         db,
         assignment_id=assignment_id,
@@ -149,7 +149,7 @@ def review_task(
         mentor_id=current_user.id,
         decision=payload.decision,
         comment=payload.comment,
-        allow_override=bool({'tenant_admin', 'manager'} & roles),
+        allow_override='assignments:write' in perms,
     )
 
     audit_service.log_action(
@@ -176,7 +176,7 @@ def next_task(
     __: object = Depends(require_access('assignments', 'assignments:read')),
 ) -> NextTaskResponse:
     assignment = assignment_service.get_assignment_by_id(db, assignment_id)
-    assignment_service.access_guard(assignment, user_id=current_user.id, roles=set(ctx.roles))
+    assignment_service.access_guard(assignment, user_id=current_user.id, permissions=permissions_for_roles(ctx.roles))
     task = assignment_service.find_next_task(db, assignment)
     return NextTaskResponse(
         assignment_id=assignment_id,
@@ -194,7 +194,7 @@ def quiz_attempts(
     __: object = Depends(require_access('assignments', 'assignments:read')),
 ) -> list[QuizAttemptOut]:
     assignment = assignment_service.get_assignment_by_id(db, assignment_id)
-    assignment_service.access_guard(assignment, user_id=current_user.id, roles=set(ctx.roles))
+    assignment_service.access_guard(assignment, user_id=current_user.id, permissions=permissions_for_roles(ctx.roles))
 
     task = assignment_service.get_assignment_task(db, assignment_id=assignment_id, task_id=task_id)
     if task.task_type != 'quiz':

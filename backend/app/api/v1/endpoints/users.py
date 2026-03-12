@@ -11,7 +11,7 @@ from app.models.audit import AuditLog
 from app.models.rbac import User
 from app.models.tenant import TenantMembership
 from app.multitenancy.deps import TenantContext, require_tenant_membership
-from app.multitenancy.permissions import ROLE_MODULE_REQUIREMENTS, enabled_modules, require_access, validate_roles_for_tenant
+from app.multitenancy.permissions import ROLE_MODULE_REQUIREMENTS, enabled_modules, require_access, require_permission, validate_roles_for_tenant
 from app.schemas.audit import AuditLogListResponse, AuditLogOut
 from app.schemas.common import PaginationMeta
 from app.schemas.user import TenantMembershipUpdate, UserAddExisting, UserCreate, UserListResponse, UserOut
@@ -39,9 +39,12 @@ def _check_roles_allowed(roles: list[str], ctx: TenantContext, current_user: Use
             detail=f'Roles not allowed (module disabled): {", ".join(invalid)}',
         )
     caller_roles = set(ctx.roles or [])
+    # tenant_admin can grant tenant_admin to peers (identity-level, no module escalation).
+    # Every other role — including supervisor — requires the caller to hold it.
+    FREELY_GRANTABLE = {'tenant_admin'}
     escalated = [
         r for r in roles
-        if r in ROLE_MODULE_REQUIREMENTS and r not in caller_roles
+        if r not in FREELY_GRANTABLE and r not in caller_roles
     ]
     if escalated:
         raise HTTPException(
@@ -82,7 +85,7 @@ def list_users(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
     ctx: TenantContext = Depends(require_tenant_membership),
-    __: object = Depends(require_access('users', 'users:read')),
+    __: object = Depends(require_permission('users:read')),
 ) -> UserListResponse:
     users, total = user_service.list_tenant_users(
         db,
@@ -108,13 +111,15 @@ def create_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     ctx: TenantContext = Depends(require_tenant_membership),
-    __: object = Depends(require_access('users', 'users:write')),
+    __: object = Depends(require_permission('users:write')),
 ) -> UserOut:
     email = payload.email.lower()
     tenant_roles = [r.strip().lower() for r in (payload.tenant_roles or []) if r.strip()]
-    if not tenant_roles:
-        tenant_roles = [payload.tenant_role.strip().lower()] if payload.tenant_role else ['member']
+    if not tenant_roles and payload.tenant_role:
+        tenant_roles = [payload.tenant_role.strip().lower()]
     tenant_roles = list(dict.fromkeys(tenant_roles))
+    if not tenant_roles:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='At least one tenant role is required')
     _check_roles_allowed(tenant_roles, ctx, current_user)
 
     user = db.scalar(select(User).where(User.email == email))
@@ -195,16 +200,18 @@ def add_existing_user_to_tenant(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     ctx: TenantContext = Depends(require_tenant_membership),
-    __: object = Depends(require_access('users', 'users:write')),
+    __: object = Depends(require_permission('users:write')),
 ) -> UserOut:
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found')
 
     tenant_roles = [r.strip().lower() for r in (payload.tenant_roles or []) if r.strip()]
-    if not tenant_roles:
-        tenant_roles = [payload.tenant_role.strip().lower()] if payload.tenant_role else ['member']
+    if not tenant_roles and payload.tenant_role:
+        tenant_roles = [payload.tenant_role.strip().lower()]
     tenant_roles = list(dict.fromkeys(tenant_roles))
+    if not tenant_roles:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='At least one tenant role is required')
     _check_roles_allowed(tenant_roles, ctx, current_user)
 
     membership = db.scalar(
@@ -255,7 +262,7 @@ def update_tenant_membership(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     ctx: TenantContext = Depends(require_tenant_membership),
-    __: object = Depends(require_access('users', 'users:write')),
+    __: object = Depends(require_permission('users:write')),
 ) -> UserOut:
     if str(user_id) == str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Cannot modify your own roles')
@@ -324,7 +331,7 @@ def remove_user_from_tenant(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     ctx: TenantContext = Depends(require_tenant_membership),
-    __: object = Depends(require_access('users', 'users:write')),
+    __: object = Depends(require_permission('users:write')),
 ) -> None:
     membership = db.scalar(
         select(TenantMembership).where(

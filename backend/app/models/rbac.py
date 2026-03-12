@@ -39,7 +39,7 @@ class Role(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = 'roles'
     __table_args__ = (
         CheckConstraint(
-            "name in ('super_admin', 'admin', 'mentor', 'employee', 'hr_viewer', 'reviewer')",
+            "name in ('super_admin')",
             name='role_name_values',
         ),
     )

@@ -10,7 +10,7 @@ export const taskTypeOptions = [
   'assessment_test',
 ] as const;
 
-export const roleOptions = ['super_admin', 'admin', 'mentor', 'employee', 'hr_viewer', 'reviewer'] as const;
+export const roleOptions = ['super_admin'] as const;
 
 export type TenantRoleGroup = {
   label: string;
@@ -20,9 +20,9 @@ export type TenantRoleGroup = {
 
 export const tenantRoleGroups: TenantRoleGroup[] = [
   {
-    label: 'General',
+    label: 'Administration',
     moduleKey: null,
-    roles: ['member', 'manager', 'mentor', 'tenant_admin'],
+    roles: ['tenant_admin', 'supervisor'],
   },
   {
     label: 'Compliance',
@@ -64,14 +64,33 @@ export const tenantRoleGroups: TenantRoleGroup[] = [
     moduleKey: 'settings',
     roles: ['settings_manager'],
   },
-  {
-    label: 'Education',
-    moduleKey: null,
-    roles: ['parent'],
-  },
 ];
 
 export const tenantRoleOptions = tenantRoleGroups.flatMap((g) => g.roles);
+
+const ROLE_DISPLAY_NAMES: Record<string, string> = {
+  tenant_admin: 'Tenant Admin',
+  supervisor: 'Supervisor',
+  compliance_viewer: 'Compliance Viewer',
+  compliance_editor: 'Compliance Editor',
+  compliance_admin: 'Compliance Administrator',
+  ir_viewer: 'Integration Registry Viewer',
+  ir_editor: 'Integration Registry Editor',
+  ir_approver: 'Integration Registry Approver',
+  ir_admin: 'Integration Registry Administrator',
+  billing_viewer: 'Billing Viewer',
+  billing_manager: 'Billing Manager',
+  release_viewer: 'Release Viewer',
+  release_editor: 'Release Editor',
+  tracks_editor: 'Tracks Editor',
+  assessments_editor: 'Assessments Editor',
+  reports_viewer: 'Reports Viewer',
+  settings_manager: 'Settings Manager',
+};
+
+export function roleDisplayName(role: string): string {
+  return ROLE_DISPLAY_NAMES[role] ?? role.replaceAll('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export function statusTone(status: string): string {
   switch (status) {

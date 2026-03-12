@@ -17,7 +17,6 @@ import type {
   AdminDashboardReport,
   Assignment,
   EmployeeDashboardReport,
-  MentorDashboardReport,
 } from '@/lib/types';
 
 interface AssignmentListResponse {
@@ -36,47 +35,52 @@ interface NextTaskResponse {
 
 export default function DashboardPage() {
   const { accessToken } = useAuth();
-  const { context: tenantContext } = useTenant();
+  const { context: tenantContext, hasPermission, isLoading: tenantLoading } = useTenant();
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [reportData, setReportData] = useState<
-    AdminDashboardReport | EmployeeDashboardReport | MentorDashboardReport | null
+    AdminDashboardReport | EmployeeDashboardReport | null
   >(null);
   const [nextTask, setNextTask] = useState<NextTaskResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const canReadAssignments = hasPermission('assignments:read');
+  const canReadReports = hasPermission('reports:read');
+  const canWriteAssignments = hasPermission('assignments:write');
+
   const primaryRole = useMemo(() => {
-    const role = tenantContext?.role;
-    if (role === 'tenant_admin' || role === 'manager') return 'admin';
-    if (role === 'mentor') return 'mentor';
-    return 'employee';
-  }, [tenantContext?.role]);
+    if (canWriteAssignments) return 'admin';
+    if (canReadAssignments) return 'employee';
+    return 'none';
+  }, [canReadAssignments, canWriteAssignments]);
 
   useEffect(() => {
+    if (tenantLoading) return;
+
     const run = async () => {
-      if (!accessToken) {
-        return;
-      }
+      if (!accessToken) return;
       setLoading(true);
 
       try {
-        const assignmentResponse = await api.get<AssignmentListResponse>('/assignments?page=1&page_size=5', accessToken);
-        setAssignments(assignmentResponse.items);
+        if (canReadAssignments) {
+          const assignmentResponse = await api.get<AssignmentListResponse>('/assignments?page=1&page_size=5', accessToken);
+          setAssignments(assignmentResponse.items);
 
-        if (primaryRole === 'admin') {
-          setReportData(await api.get<AdminDashboardReport>('/reports/admin-dashboard', accessToken));
-        } else if (primaryRole === 'mentor') {
-          setReportData(await api.get<MentorDashboardReport>('/reports/mentor-dashboard', accessToken));
-        } else {
-          setReportData(await api.get<EmployeeDashboardReport>('/reports/employee-dashboard', accessToken));
+          if (primaryRole === 'employee' && assignmentResponse.items[0]) {
+            setNextTask(
+              await api.get<NextTaskResponse>(
+                `/progress/assignments/${assignmentResponse.items[0].id}/next-task`,
+                accessToken,
+              ),
+            );
+          }
         }
 
-        if (primaryRole === 'employee' && assignmentResponse.items[0]) {
-          setNextTask(
-            await api.get<NextTaskResponse>(
-              `/progress/assignments/${assignmentResponse.items[0].id}/next-task`,
-              accessToken,
-            ),
-          );
+        if (canReadReports) {
+          if (primaryRole === 'admin') {
+            setReportData(await api.get<AdminDashboardReport>('/reports/admin-dashboard', accessToken));
+          } else if (primaryRole === 'employee') {
+            setReportData(await api.get<EmployeeDashboardReport>('/reports/employee-dashboard', accessToken));
+          }
         }
       } finally {
         setLoading(false);
@@ -84,10 +88,21 @@ export default function DashboardPage() {
     };
 
     void run();
-  }, [accessToken, primaryRole]);
+  }, [accessToken, primaryRole, canReadAssignments, canReadReports, tenantLoading]);
 
-  if (loading) {
+  if (loading || tenantLoading) {
     return <LoadingState label='Loading dashboard...' />;
+  }
+
+  if (primaryRole === 'none') {
+    return (
+      <div className='space-y-4'>
+        <p className='text-sm text-muted-foreground'>
+          Your account has administrative access. Use the <strong>Users</strong> section to manage
+          team members and role assignments.
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -99,15 +114,6 @@ export default function DashboardPage() {
             <MetricCard title='Completion rate' value={`${reportData.completion_rate_percent.toFixed(1)}%`} />
             <MetricCard title='Overdue tasks' value={String(reportData.overdue_tasks)} />
             <MetricCard title='Approval queue' value={String(reportData.mentor_approval_queue)} />
-          </>
-        )}
-
-        {primaryRole === 'mentor' && reportData && 'mentee_count' in reportData && (
-          <>
-            <MetricCard title='Assigned mentees' value={String(reportData.mentee_count)} />
-            <MetricCard title='Pending reviews' value={String(reportData.pending_reviews)} />
-            <MetricCard title='Recent feedback' value={String(reportData.recent_feedback)} />
-            <PendingApprovalHint count={reportData.pending_reviews} />
           </>
         )}
 
@@ -151,7 +157,7 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      <Card>
+      {canReadAssignments && <Card>
         <CardHeader>
           <CardTitle>Recent assignments</CardTitle>
           <CardDescription>Latest onboarding assignments visible to your role.</CardDescription>
@@ -197,7 +203,7 @@ export default function DashboardPage() {
             </div>
           )}
         </CardContent>
-      </Card>
+      </Card>}
     </div>
   );
 }
@@ -213,13 +219,3 @@ function MetricCard({ title, value }: { title: string; value: string }) {
   );
 }
 
-function PendingApprovalHint({ count }: { count: number }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardDescription>Pending approvals</CardDescription>
-        <CardTitle className='text-lg'>{count} tasks waiting for review</CardTitle>
-      </CardHeader>
-    </Card>
-  );
-}

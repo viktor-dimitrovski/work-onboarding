@@ -22,11 +22,16 @@ const loginSchema = z.object({
 type LoginValues = z.infer<typeof loginSchema>;
 
 export function LoginForm() {
-  const { login } = useAuth();
+  const { login, logout } = useAuth();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
+
+  const isAdminHost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'admin' ||
+      window.location.hostname.startsWith('admin.'));
 
   const startOAuth = (provider: string) => {
     const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '/api/v1').replace(/\/$/, '');
@@ -44,8 +49,13 @@ export function LoginForm() {
   const onSubmit = form.handleSubmit(async (values) => {
     setError(null);
     try {
-      await login(values.email, values.password);
-      router.replace('/dashboard');
+      const tokenResponse = await login(values.email, values.password);
+      if (isAdminHost && !tokenResponse.user.roles.includes('super_admin')) {
+        await logout();
+        setError('Access denied. This portal is restricted to platform administrators.');
+        return;
+      }
+      router.replace(isAdminHost ? '/admin' : '/dashboard');
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Failed to sign in');
     }

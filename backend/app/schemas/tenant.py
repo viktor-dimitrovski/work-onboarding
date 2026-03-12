@@ -12,6 +12,8 @@ class TenantOut(BaseSchema):
     slug: str
     tenant_type: str
     is_active: bool
+    active_plan_id: UUID | None = None
+    active_plan_name: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -82,6 +84,7 @@ class TenantModuleOut(BaseModel):
     module_key: str
     enabled: bool
     source: str
+    plan_default: bool | None = None
 
 
 class TenantModuleUpdate(BaseModel):
@@ -135,3 +138,4 @@ class TenantMemberOut(BaseModel):
 class TenantMemberStatusUpdate(BaseModel):
     status: str | None = Field(default=None, description="'active' or 'disabled'")
     full_name: str | None = Field(default=None, min_length=2, max_length=255, description="Update the user's display name")
+    roles: list[str] | None = Field(default=None, description='Replace the member\'s tenant roles')

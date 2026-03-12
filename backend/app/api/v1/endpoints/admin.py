@@ -68,8 +68,41 @@ def list_tenants(
     rows = db.scalars(
         select(Tenant).order_by(Tenant.created_at.desc()).offset(offset).limit(page_size)
     ).all()
+
+    # Fetch active subscriptions and plans in bulk to avoid N+1.
+    tenant_ids = [row.id for row in rows]
+    active_subs = db.scalars(
+        select(Subscription)
+        .where(
+            Subscription.tenant_id.in_(tenant_ids),
+            Subscription.status.in_(['active', 'trialing']),
+        )
+    ).all()
+    # Keep the most recent subscription per tenant.
+    sub_by_tenant: dict = {}
+    for sub in active_subs:
+        existing = sub_by_tenant.get(sub.tenant_id)
+        if not existing or sub.starts_at > existing.starts_at:
+            sub_by_tenant[sub.tenant_id] = sub
+
+    plan_ids = {sub.plan_id for sub in sub_by_tenant.values()}
+    plan_by_id: dict = {}
+    if plan_ids:
+        for plan in db.scalars(select(Plan).where(Plan.id.in_(list(plan_ids)))).all():
+            plan_by_id[plan.id] = plan
+
+    items: list[TenantOut] = []
+    for row in rows:
+        out = TenantOut.model_validate(row)
+        sub = sub_by_tenant.get(row.id)
+        if sub:
+            plan = plan_by_id.get(sub.plan_id)
+            out.active_plan_id = sub.plan_id
+            out.active_plan_name = plan.name if plan else None
+        items.append(out)
+
     return TenantListResponse(
-        items=[TenantOut.model_validate(row) for row in rows],
+        items=items,
         meta=PaginationMeta(page=page, page_size=page_size, total=int(total or 0)),
     )
 
@@ -256,6 +289,54 @@ def delete_plan(
     db.commit()
 
 
+_ALL_MODULE_KEYS: list[str] = [
+    'tracks', 'assignments', 'assessments', 'reports', 'users',
+    'settings', 'billing', 'releases', 'compliance', 'integration_registry',
+]
+
+
+def _plan_defaults(db: Session, tenant_id: UUID) -> dict[str, bool]:
+    """Return the active plan's module_defaults for a tenant, or {} if no plan."""
+    sub = db.scalar(
+        select(Subscription)
+        .where(
+            Subscription.tenant_id == tenant_id,
+            Subscription.status.in_(['active', 'trialing']),
+        )
+        .order_by(Subscription.starts_at.desc())
+    )
+    if sub:
+        plan = db.scalar(select(Plan).where(Plan.id == sub.plan_id))
+        if plan and plan.module_defaults:
+            return {k: bool(v) for k, v in plan.module_defaults.items()}
+    return {}
+
+
+def _build_module_list(rows: list[TenantModule], plan_defs: dict[str, bool]) -> list[TenantModuleOut]:
+    """Merge DB rows with plan defaults and return a complete list for all known module keys."""
+    row_map = {r.module_key: r for r in rows}
+    result: list[TenantModuleOut] = []
+    for key in _ALL_MODULE_KEYS:
+        pd = plan_defs.get(key)
+        if key in row_map:
+            row = row_map[key]
+            result.append(TenantModuleOut(
+                module_key=key,
+                enabled=row.enabled,
+                source=row.source,
+                plan_default=pd,
+            ))
+        else:
+            # No DB row — fall back to plan default or False
+            result.append(TenantModuleOut(
+                module_key=key,
+                enabled=bool(pd),
+                source='plan',
+                plan_default=pd,
+            ))
+    return result
+
+
 @router.get('/tenants/{tenant_id}/modules', response_model=list[TenantModuleOut], dependencies=[Depends(require_product_admin_host)])
 def list_tenant_modules(
     tenant_id: UUID,
@@ -264,7 +345,8 @@ def list_tenant_modules(
 ) -> list[TenantModuleOut]:
     set_tenant_id(db, str(tenant_id))
     rows = db.scalars(select(TenantModule).where(TenantModule.tenant_id == tenant_id)).all()
-    return [TenantModuleOut(module_key=row.module_key, enabled=row.enabled, source=row.source) for row in rows]
+    plan_defs = _plan_defaults(db, tenant_id)
+    return _build_module_list(list(rows), plan_defs)
 
 
 @router.put('/tenants/{tenant_id}/modules', response_model=list[TenantModuleOut], dependencies=[Depends(require_product_admin_host)])
@@ -274,20 +356,49 @@ def update_tenant_modules(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles('super_admin')),
 ) -> list[TenantModuleOut]:
+    """Update per-tenant module access.
+
+    For each module in the payload:
+    - If the requested state matches the plan default → remove any override row so the
+      plan-sourced row governs (preserving source='plan' semantics).
+    - If the requested state differs from the plan default (or there is no plan) → upsert
+      a source='override' row.
+
+    source='plan' rows for modules not mentioned in the payload are left untouched.
+    """
     set_tenant_id(db, str(tenant_id))
-    db.query(TenantModule).where(TenantModule.tenant_id == tenant_id).delete()
+    plan_defs = _plan_defaults(db, tenant_id)
+
+    existing = {m.module_key: m for m in db.scalars(
+        select(TenantModule).where(TenantModule.tenant_id == tenant_id)
+    ).all()}
+
     for item in payload:
-        db.add(
-            TenantModule(
-                tenant_id=tenant_id,
-                module_key=item.module_key,
-                enabled=item.enabled,
-                source='override',
-            )
-        )
+        plan_val = plan_defs.get(item.module_key)
+        matches_plan = plan_val is not None and bool(item.enabled) == bool(plan_val)
+
+        if matches_plan:
+            # Remove any override so the plan row (if present) takes over.
+            override = existing.get(item.module_key)
+            if override and override.source == 'override':
+                db.delete(override)
+        else:
+            # Upsert override row.
+            existing_row = existing.get(item.module_key)
+            if existing_row:
+                existing_row.enabled = item.enabled
+                existing_row.source = 'override'
+            else:
+                db.add(TenantModule(
+                    tenant_id=tenant_id,
+                    module_key=item.module_key,
+                    enabled=item.enabled,
+                    source='override',
+                ))
+
     db.commit()
     rows = db.scalars(select(TenantModule).where(TenantModule.tenant_id == tenant_id)).all()
-    return [TenantModuleOut(module_key=row.module_key, enabled=row.enabled, source=row.source) for row in rows]
+    return _build_module_list(list(rows), plan_defs)
 
 
 @router.put('/tenants/{tenant_id}/plan', response_model=PlanOut, dependencies=[Depends(require_product_admin_host)])
@@ -474,6 +585,13 @@ def update_tenant_member(
     if not membership:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Membership not found')
 
+    if payload.roles is not None:
+        roles = [r.strip().lower() for r in payload.roles if isinstance(r, str) and r.strip()]
+        roles = list(dict.fromkeys(roles))
+        if not roles:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='At least one role is required')
+        membership.roles_json = roles
+        membership.role = roles[0]
     if payload.status is not None:
         membership.status = payload.status
     if payload.full_name is not None:

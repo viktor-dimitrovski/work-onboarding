@@ -16,7 +16,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { tenantRoleGroups } from '@/lib/constants';
+import { roleDisplayName, tenantRoleGroups } from '@/lib/constants';
 
 type TenantRow = {
   id: string;
@@ -24,6 +24,8 @@ type TenantRow = {
   slug: string;
   tenant_type: string;
   is_active: boolean;
+  active_plan_id: string | null;
+  active_plan_name: string | null;
 };
 
 type PlanRow = {
@@ -51,6 +53,7 @@ type TenantModule = {
   module_key: string;
   enabled: boolean;
   source: string;
+  plan_default: boolean | null;
 };
 
 type TenantMemberRow = {
@@ -63,7 +66,18 @@ type TenantMemberRow = {
   created_at: string;
 };
 
-const MODULE_KEYS = ['tracks', 'assignments', 'assessments', 'reports', 'users', 'settings', 'billing', 'releases'];
+const MODULE_META: Record<string, { label: string; description: string }> = {
+  tracks:               { label: 'Tracks',               description: 'Onboarding track builder and publishing' },
+  assignments:          { label: 'Assignments',           description: 'Assign tracks to users and track completion' },
+  assessments:          { label: 'Assessments',           description: 'Tests, quizzes and scoring' },
+  reports:              { label: 'Reports',               description: 'Completion and progress reporting' },
+  compliance:           { label: 'Compliance',            description: 'Regulatory compliance practices and gap analysis' },
+  releases:             { label: 'Releases',              description: 'Software release management and keybindings' },
+  integration_registry: { label: 'Integration Registry',  description: 'Third-party integration catalogue and approvals' },
+  billing:              { label: 'Billing',               description: 'Subscription management and usage metering' },
+  users:                { label: 'Users & Teams',         description: 'Member management and role assignment' },
+  settings:             { label: 'Settings',              description: 'Tenant configuration and preferences' },
+};
 
 type AdminSectionId = 'tenants' | 'tenant' | 'plans' | 'billing';
 
@@ -155,6 +169,7 @@ export default function AdminTenantsPage() {
   const [planPrices, setPlanPrices] = useState<PlanPriceRow[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
   const [modules, setModules] = useState<TenantModule[]>([]);
+  const [savedModules, setSavedModules] = useState<TenantModule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -184,6 +199,8 @@ export default function AdminTenantsPage() {
   const [membersLoading, setMembersLoading] = useState(false);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [editMemberName, setEditMemberName] = useState('');
+  const [editingRolesMemberId, setEditingRolesMemberId] = useState<string | null>(null);
+  const [editMemberRoles, setEditMemberRoles] = useState<string[]>([]);
 
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [editPlanName, setEditPlanName] = useState('');
@@ -213,11 +230,23 @@ export default function AdminTenantsPage() {
     () => new Set(modules.filter((m) => m.enabled).map((m) => m.module_key)),
     [modules],
   );
-  const availableInviteRoles = useMemo(
+
+  const modulesAreDirty = useMemo(() => {
+    if (modules.length !== savedModules.length) return true;
+    const savedMap = new Map(savedModules.map((m) => [m.module_key, m.enabled]));
+    return modules.some((m) => savedMap.get(m.module_key) !== m.enabled);
+  }, [modules, savedModules]);
+
+  const modulesHaveOverrides = useMemo(
+    () => modules.some((m) => m.source === 'override'),
+    [modules],
+  );
+
+  const availableInviteGroups = useMemo(
     () =>
-      tenantRoleGroups
-        .filter((g) => g.moduleKey !== null && enabledModuleKeys.has(g.moduleKey))
-        .flatMap((g) => g.roles),
+      tenantRoleGroups.filter(
+        (g) => g.moduleKey !== null && enabledModuleKeys.has(g.moduleKey),
+      ),
     [enabledModuleKeys],
   );
 
@@ -260,7 +289,11 @@ export default function AdminTenantsPage() {
 
   useEffect(() => {
     const load = async () => {
-      if (!accessToken) return;
+      // Wait for auth to settle and verify the user actually has super_admin before
+      // making any API calls. Without this guard a non-super_admin user with a valid
+      // token would hit the admin API, receive a 403, and briefly see the error
+      // before the redirect effect fires.
+      if (!accessToken || isLoading || !isAuthenticated || !hasRole('super_admin')) return;
       setLoading(true);
       setError(null);
       try {
@@ -279,18 +312,15 @@ export default function AdminTenantsPage() {
       }
     };
     void load();
-  }, [accessToken]);
+  }, [accessToken, hasRole, isAuthenticated, isLoading]);
 
   useEffect(() => {
     const loadModules = async () => {
       if (!accessToken || !selectedTenantId) return;
       try {
         const response = await api.get<TenantModule[]>(`/admin/tenants/${selectedTenantId}/modules`, accessToken);
-        if (response.length === 0) {
-          setModules(MODULE_KEYS.map((key) => ({ module_key: key, enabled: true, source: 'default' })));
-        } else {
-          setModules(response);
-        }
+        setModules(response);
+        setSavedModules(response);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Failed to load modules');
       }
@@ -431,9 +461,35 @@ export default function AdminTenantsPage() {
       }));
       const updated = await api.put<TenantModule[]>(`/admin/tenants/${selectedTenantId}/modules`, payload, accessToken);
       setModules(updated);
+      setSavedModules(updated);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Failed to update modules');
     }
+  };
+
+  const resetToPlanModules = async () => {
+    if (!accessToken || !selectedTenantId) return;
+    const tenant = tenants.find((t) => t.id === selectedTenantId);
+    if (!tenant?.active_plan_id) return;
+    setError(null);
+    try {
+      await api.put(`/admin/tenants/${selectedTenantId}/plan`, { plan_id: tenant.active_plan_id }, accessToken);
+      const updated = await api.get<TenantModule[]>(`/admin/tenants/${selectedTenantId}/modules`, accessToken);
+      setModules(updated);
+      setSavedModules(updated);
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : 'Failed to reset modules to plan');
+    }
+  };
+
+  const resetSingleModule = (moduleKey: string) => {
+    setModules((prev) =>
+      prev.map((m) =>
+        m.module_key === moduleKey && m.plan_default !== null
+          ? { ...m, enabled: m.plan_default, source: 'plan' }
+          : m,
+      ),
+    );
   };
 
   const reloadMembers = async () => {
@@ -496,6 +552,36 @@ export default function AdminTenantsPage() {
   const cancelEditMember = () => {
     setEditingMemberId(null);
     setEditMemberName('');
+  };
+
+  const startEditRoles = (member: TenantMemberRow) => {
+    setEditingRolesMemberId(member.id);
+    setEditMemberRoles(member.roles);
+  };
+
+  const cancelEditRoles = () => {
+    setEditingRolesMemberId(null);
+    setEditMemberRoles([]);
+  };
+
+  const saveRoles = async () => {
+    if (!accessToken || !selectedTenantId || !editingRolesMemberId) return;
+    if (editMemberRoles.length === 0) {
+      setError('At least one role is required');
+      return;
+    }
+    setError(null);
+    try {
+      const updated = await api.patch<TenantMemberRow>(
+        `/admin/tenants/${selectedTenantId}/members/${editingRolesMemberId}`,
+        { roles: editMemberRoles },
+        accessToken,
+      );
+      setTenantMembers((prev) => prev.map((m) => (m.id === editingRolesMemberId ? updated : m)));
+      cancelEditRoles();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update roles');
+    }
   };
 
   const saveMemberName = async () => {
@@ -999,42 +1085,120 @@ export default function AdminTenantsPage() {
 
                           <TabsContent value='modules'>
                             <div className='rounded-lg border bg-white p-4'>
+                              {/* Header */}
                               <div className='flex flex-wrap items-start justify-between gap-3'>
                                 <div>
-                                  <p className='text-sm font-semibold'>Enabled modules</p>
+                                  <div className='flex items-center gap-2'>
+                                    <p className='text-sm font-semibold'>Module access</p>
+                                    {selectedTenant.active_plan_name && (
+                                      <span className='rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700'>
+                                        {selectedTenant.active_plan_name}
+                                      </span>
+                                    )}
+                                  </div>
                                   <p className='mt-1 text-xs text-muted-foreground'>
-                                    Toggle modules for this tenant. This grid layout is meant to scale as more settings are added.
+                                    Enable or disable product modules for this tenant. Users can only access modules that are enabled here, regardless of their role assignments.
                                   </p>
                                 </div>
-                                <Button size='sm' onClick={saveModules}>
-                                  Save modules
-                                </Button>
+                                <div className='flex items-center gap-2'>
+                                  {selectedTenant.active_plan_name && modulesHaveOverrides && (
+                                    <Button
+                                      variant='outline'
+                                      size='sm'
+                                      onClick={resetToPlanModules}
+                                      title='Remove all manual overrides and restore the plan defaults'
+                                    >
+                                      Reset to plan
+                                    </Button>
+                                  )}
+                                  <Button
+                                    size='sm'
+                                    disabled={!modulesAreDirty}
+                                    onClick={saveModules}
+                                  >
+                                    Save changes
+                                  </Button>
+                                </div>
                               </div>
 
+                              {/* Module cards */}
                               <div className='mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
-                                {modules.map((module) => (
-                                  <label
-                                    key={module.module_key}
-                                    className='flex items-center justify-between gap-3 rounded-md border bg-white px-3 py-2 text-sm hover:bg-muted/30'
-                                  >
-                                    <span className='font-medium'>{module.module_key}</span>
-                                    <input
-                                      type='checkbox'
-                                      className='h-4 w-4'
-                                      checked={module.enabled}
-                                      onChange={(event) =>
-                                        setModules((prev) =>
-                                          prev.map((item) =>
-                                            item.module_key === module.module_key
-                                              ? { ...item, enabled: event.target.checked }
-                                              : item,
-                                          ),
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                ))}
+                                {modules.map((module) => {
+                                  const meta = MODULE_META[module.module_key] ?? { label: module.module_key, description: '' };
+                                  const isOverride = module.source === 'override';
+                                  return (
+                                    <div
+                                      key={module.module_key}
+                                      className={[
+                                        'group relative flex items-start gap-3 rounded-md border px-3 py-3 text-sm transition-colors',
+                                        module.enabled ? 'border-border bg-white' : 'border-border bg-muted/20',
+                                      ].join(' ')}
+                                    >
+                                      <div className='flex-1 min-w-0'>
+                                        <div className='flex items-center gap-2 flex-wrap'>
+                                          <span className='font-medium leading-none'>{meta.label}</span>
+                                          {isOverride ? (
+                                            <span className='inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700'>
+                                              Custom
+                                              {module.plan_default !== null && (
+                                                <button
+                                                  type='button'
+                                                  onClick={() => resetSingleModule(module.module_key)}
+                                                  title='Reset to plan default'
+                                                  className='ml-0.5 hover:text-amber-900'
+                                                >
+                                                  <X className='h-2.5 w-2.5' />
+                                                </button>
+                                              )}
+                                            </span>
+                                          ) : (
+                                            <span className='rounded-full border border-muted bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground'>
+                                              Plan
+                                            </span>
+                                          )}
+                                        </div>
+                                        {meta.description && (
+                                          <p className='mt-1 text-[11px] text-muted-foreground leading-snug'>{meta.description}</p>
+                                        )}
+                                      </div>
+                                      {/* Toggle switch */}
+                                      <button
+                                        type='button'
+                                        role='switch'
+                                        aria-checked={module.enabled}
+                                        onClick={() =>
+                                          setModules((prev) =>
+                                            prev.map((item) => {
+                                              if (item.module_key !== module.module_key) return item;
+                                              const newEnabled = !item.enabled;
+                                              const matchesPlan = item.plan_default !== null && newEnabled === item.plan_default;
+                                              return { ...item, enabled: newEnabled, source: matchesPlan ? 'plan' : 'override' };
+                                            }),
+                                          )
+                                        }
+                                        className={[
+                                          'relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-150',
+                                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1',
+                                          module.enabled ? 'bg-primary' : 'bg-input',
+                                        ].join(' ')}
+                                      >
+                                        <span
+                                          className={[
+                                            'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform duration-150',
+                                            module.enabled ? 'translate-x-4' : 'translate-x-0',
+                                          ].join(' ')}
+                                        />
+                                      </button>
+                                    </div>
+                                  );
+                                })}
                               </div>
+
+                              {modulesAreDirty && (
+                                <p className='mt-3 text-[11px] text-muted-foreground'>
+                                  You have unsaved changes. Click <span className='font-medium'>Save changes</span> to apply.
+                                </p>
+                              )}
                             </div>
                           </TabsContent>
 
@@ -1111,13 +1275,57 @@ export default function AdminTenantsPage() {
                                               )}
                                             </td>
                                             <td className='px-3 py-2'>
-                                              <div className='flex flex-wrap gap-1'>
-                                                {member.roles.map((r) => (
-                                                  <span key={r} className='inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600'>
-                                                    {r.replaceAll('_', ' ')}
-                                                  </span>
-                                                ))}
-                                              </div>
+                                              {editingRolesMemberId === member.id ? (
+                                                <div className='space-y-2'>
+                                                  <div className='grid gap-1.5 sm:grid-cols-2'>
+                                                    {tenantRoleGroups
+                                                      .filter((g) => g.moduleKey === null || enabledModuleKeys.has(g.moduleKey))
+                                                      .map((group) => (
+                                                        <div key={group.label} className='rounded border bg-muted/20 px-2 py-1.5'>
+                                                          <p className='mb-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide'>{group.label}</p>
+                                                          {group.roles.map((role) => (
+                                                            <label key={role} className='flex items-center gap-1.5 text-[11px] py-0.5 cursor-pointer'>
+                                                              <input
+                                                                type='checkbox'
+                                                                className='h-3 w-3 accent-primary'
+                                                                checked={editMemberRoles.includes(role)}
+                                                                onChange={(e) =>
+                                                                  setEditMemberRoles((prev) =>
+                                                                    e.target.checked
+                                                                      ? [...prev, role]
+                                                                      : prev.filter((r) => r !== role),
+                                                                  )
+                                                                }
+                                                              />
+                                                              {roleDisplayName(role)}
+                                                            </label>
+                                                          ))}
+                                                        </div>
+                                                      ))}
+                                                  </div>
+                                                  <div className='flex items-center gap-1.5'>
+                                                    <Button size='sm' className='h-6 text-xs px-2' onClick={saveRoles} disabled={editMemberRoles.length === 0}>Save</Button>
+                                                    <Button size='sm' variant='ghost' className='h-6 text-xs px-2' onClick={cancelEditRoles}>Cancel</Button>
+                                                  </div>
+                                                </div>
+                                              ) : (
+                                                <div className='flex flex-wrap items-center gap-1'>
+                                                  {member.roles.map((r) => (
+                                                    <span key={r} className='inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600'>
+                                                      {roleDisplayName(r)}
+                                                    </span>
+                                                  ))}
+                                                  <Button
+                                                    variant='ghost'
+                                                    size='sm'
+                                                    className='h-5 w-5 p-0 text-muted-foreground hover:text-foreground'
+                                                    onClick={() => startEditRoles(member)}
+                                                    title='Edit roles'
+                                                  >
+                                                    <Pencil className='h-3 w-3' />
+                                                  </Button>
+                                                </div>
+                                              )}
                                             </td>
                                             <td className='px-3 py-2'>
                                               <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${member.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
@@ -1164,30 +1372,69 @@ export default function AdminTenantsPage() {
                                     <Label>Full name</Label>
                                     <Input value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
                                   </div>
-                                  {availableInviteRoles.length > 0 && (
-                                    <div className='space-y-2 sm:col-span-2'>
-                                      <Label>Additional roles</Label>
+                                  {availableInviteGroups.length > 0 && (
+                                    <div className='space-y-3 sm:col-span-2'>
+                                      <div className='flex items-center justify-between'>
+                                        <Label>Module roles</Label>
+                                        {inviteRoles.length > 0 && (
+                                          <button
+                                            type='button'
+                                            className='text-[11px] text-muted-foreground hover:text-foreground'
+                                            onClick={() => setInviteRoles([])}
+                                          >
+                                            Clear all
+                                          </button>
+                                        )}
+                                      </div>
                                       <p className='text-xs text-muted-foreground'>
-                                        The admin will always get <span className='font-medium'>tenant_admin</span>. Select additional module roles they should be able to manage.
+                                        This admin will always get <span className='font-medium'>tenant_admin</span> (user management).
+                                        Grant additional module roles to control what they can delegate to other users.
                                       </p>
-                                      <div className='mt-1 flex flex-wrap gap-2'>
-                                        {availableInviteRoles.map((role) => (
-                                          <label key={role} className='flex items-center gap-1.5 text-xs'>
-                                            <input
-                                              type='checkbox'
-                                              className='h-3.5 w-3.5'
-                                              checked={inviteRoles.includes(role)}
-                                              onChange={(e) =>
-                                                setInviteRoles((prev) =>
-                                                  e.target.checked
-                                                    ? [...prev, role]
-                                                    : prev.filter((r) => r !== role),
-                                                )
-                                              }
-                                            />
-                                            {role.replaceAll('_', ' ')}
-                                          </label>
-                                        ))}
+                                      <div className='grid gap-2 sm:grid-cols-2'>
+                                        {availableInviteGroups.map((group) => {
+                                          const groupSelected = group.roles.filter((r) => inviteRoles.includes(r));
+                                          const allChecked = groupSelected.length === group.roles.length;
+                                          const someChecked = groupSelected.length > 0 && !allChecked;
+                                          return (
+                                            <div key={group.label} className='rounded-md border bg-muted/20 px-3 py-2.5'>
+                                              <label className='flex items-center gap-2 text-xs font-semibold'>
+                                                <input
+                                                  type='checkbox'
+                                                  className='h-3.5 w-3.5 accent-primary'
+                                                  checked={allChecked}
+                                                  ref={(el) => { if (el) el.indeterminate = someChecked; }}
+                                                  onChange={() => {
+                                                    if (allChecked) {
+                                                      setInviteRoles((prev) => prev.filter((r) => !group.roles.includes(r)));
+                                                    } else {
+                                                      setInviteRoles((prev) => Array.from(new Set([...prev, ...group.roles])));
+                                                    }
+                                                  }}
+                                                />
+                                                {group.label}
+                                              </label>
+                                              <div className='mt-1.5 ml-5 flex flex-col gap-1'>
+                                                {group.roles.map((role) => (
+                                                  <label key={role} className='flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground'>
+                                                    <input
+                                                      type='checkbox'
+                                                      className='h-3 w-3 accent-primary'
+                                                      checked={inviteRoles.includes(role)}
+                                                      onChange={(e) =>
+                                                        setInviteRoles((prev) =>
+                                                          e.target.checked
+                                                            ? [...prev, role]
+                                                            : prev.filter((r) => r !== role),
+                                                        )
+                                                      }
+                                                    />
+                                                    {roleDisplayName(role)}
+                                                  </label>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
                                       </div>
                                     </div>
                                   )}

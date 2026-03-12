@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 
 import { Button } from '@/components/ui/button';
@@ -8,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/lib/auth-context';
+import { useTenant } from '@/lib/tenant-context';
 import { comboToDisplay, eventToCombo, normalizeCombo } from '@/lib/hotkeys';
 import {
   KEYBINDING_ACTIONS,
@@ -29,7 +31,9 @@ type PendingConflict = {
 };
 
 export default function SettingsKeybindingsPage() {
-  const { accessToken } = useAuth();
+  const { accessToken, isLoading } = useAuth();
+  const { hasModule, hasPermission, isLoading: tenantLoading } = useTenant();
+  const router = useRouter();
   const [profile, setProfile] = useState<KeybindingProfile>(applyDefaultBindings({ updated_at: 0, bindings: {} }));
   const [baseline, setBaseline] = useState<KeybindingProfile>(applyDefaultBindings({ updated_at: 0, bindings: {} }));
   const [loading, setLoading] = useState(true);
@@ -42,6 +46,12 @@ export default function SettingsKeybindingsPage() {
   const [importError, setImportError] = useState<string | null>(null);
 
   const dirty = useMemo(() => profile.updated_at !== baseline.updated_at, [baseline.updated_at, profile.updated_at]);
+
+  useEffect(() => {
+    if (!isLoading && !tenantLoading && !(hasModule('releases') && hasPermission('releases:read'))) {
+      router.replace('/dashboard');
+    }
+  }, [hasModule, hasPermission, isLoading, router, tenantLoading]);
 
   useEffect(() => {
     let mounted = true;

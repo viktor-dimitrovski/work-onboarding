@@ -14,11 +14,6 @@ from app.modules.billing.models import CreditPack, Meter, MeterRate, Plan, PlanP
 
 ROLE_DESCRIPTIONS = {
     'super_admin': 'Full system access and governance.',
-    'admin': 'Operational administrator for tracks and assignments.',
-    'mentor': 'Reviews mentee submissions and approvals.',
-    'employee': 'Completes assigned onboarding tasks.',
-    'hr_viewer': 'Read-only HR reporting access.',
-    'reviewer': 'Optional evaluator for specialized assessments.',
 }
 
 
@@ -43,7 +38,7 @@ def ensure_reference_data(db: Session) -> None:
         db.add(admin)
         db.flush()
 
-    role_rows = db.scalars(select(Role).where(Role.name.in_(['super_admin', 'admin']))).all()
+    role_rows = db.scalars(select(Role).where(Role.name.in_(['super_admin']))).all()
     role_ids = {row.role_id for row in db.scalars(select(UserRole).where(UserRole.user_id == admin.id)).all()}
 
     for role in role_rows:

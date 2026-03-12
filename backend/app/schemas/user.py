@@ -17,7 +17,7 @@ class UserCreate(BaseModel):
 
 class UserAddExisting(BaseModel):
     email: EmailStr
-    tenant_role: str = Field(default='member', min_length=1, max_length=50)
+    tenant_role: str | None = Field(default=None, min_length=1, max_length=50)
     tenant_roles: list[str] = Field(default_factory=list)
 
 

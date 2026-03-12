@@ -8,7 +8,7 @@ from app.api.deps import get_current_active_user
 from app.db.session import get_db
 from app.models.rbac import User
 from app.multitenancy.deps import TenantContext, require_tenant_membership
-from app.multitenancy.permissions import require_access
+from app.multitenancy.permissions import permissions_for_roles, require_access
 from app.schemas.assignment import AssignmentCreate, AssignmentListResponse, AssignmentOut
 from app.schemas.track import TaskResourceOut
 from app.schemas.common import PaginationMeta
@@ -47,13 +47,16 @@ def list_assignments(
     ctx: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('assignments', 'assignments:read')),
 ) -> AssignmentListResponse:
-    roles = set(ctx.roles)
+    perms = permissions_for_roles(ctx.roles)
+    can_write_all = 'assignments:write' in perms
+    can_review = 'assignments:review' in perms
+
     effective_employee_id = employee_id
     effective_mentor_id = mentor_id
 
-    if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
+    if not can_write_all and not can_review:
         effective_employee_id = current_user.id
-    if 'mentor' in roles and not {'tenant_admin', 'manager'} & roles:
+    elif can_review and not can_write_all:
         effective_mentor_id = current_user.id
 
     assignments, total = assignment_service.list_assignments(
@@ -93,7 +96,7 @@ def list_assignments(
         assignment_out.updated_by_name = display_name(users_by_id.get(item.updated_by))
         assignment_out.created_by_email = display_email(users_by_id.get(item.created_by))
         assignment_out.updated_by_email = display_email(users_by_id.get(item.updated_by))
-        if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
+        if not can_write_all and not can_review:
             assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
         assignment_out = _add_task_resources(assignment_out, item)
         payload.append(assignment_out)
@@ -186,8 +189,8 @@ def get_assignment(
     __: object = Depends(require_access('assignments', 'assignments:read')),
 ) -> AssignmentOut:
     assignment = assignment_service.get_assignment_by_id(db, assignment_id)
-    roles = set(ctx.roles)
-    assignment_service.access_guard(assignment, user_id=current_user.id, roles=roles)
+    perms = permissions_for_roles(ctx.roles)
+    assignment_service.access_guard(assignment, user_id=current_user.id, permissions=perms)
     assignment_out = AssignmentOut.model_validate(assignment)
     if assignment.created_by:
         user = db.scalar(select(User).where(User.id == assignment.created_by))
@@ -197,7 +200,7 @@ def get_assignment(
         user = db.scalar(select(User).where(User.id == assignment.updated_by))
         assignment_out.updated_by_name = ((user.full_name or '').strip() or (user.email or '').strip()) if user else None
         assignment_out.updated_by_email = (user.email or '').strip() if user else None
-    if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
+    if 'assignments:write' not in perms and 'assignments:review' not in perms:
         assignment_out = assignment_service.mask_quiz_answers_for_employee(db, assignment_out)
     assignment_out = _add_task_resources(assignment_out, assignment)
     return assignment_out

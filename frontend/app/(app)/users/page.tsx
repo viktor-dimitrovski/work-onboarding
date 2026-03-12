@@ -25,7 +25,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
-import { formatDateTime, tenantRoleGroups, tenantRoleOptions } from '@/lib/constants';
+import { formatDateTime, roleDisplayName, tenantRoleGroups, tenantRoleOptions } from '@/lib/constants';
 import { useAuth } from '@/lib/auth-context';
 import { useTenant } from '@/lib/tenant-context';
 import type { UserRow } from '@/lib/types';
@@ -99,8 +99,9 @@ function TenantRolesEditor({
   const visibleGroups = tenantRoleGroups
     .filter((g) => g.moduleKey === null || !modules || modules.has(g.moduleKey))
     .map((g) => {
-      if (!g.moduleKey || !callerSet) return g;
-      return { ...g, roles: g.roles.filter((r) => callerSet.has(r)) };
+      if (!callerSet) return g;
+      // tenant_admin can always be granted to peers; every other role requires the caller to hold it.
+      return { ...g, roles: g.roles.filter((r) => r === 'tenant_admin' || callerSet.has(r)) };
     })
     .filter((g) => g.roles.length > 0);
   return (
@@ -138,7 +139,7 @@ function TenantRolesEditor({
                       onChange(safeValue.filter((r) => r !== role));
                     }}
                   >
-                    {role.replaceAll('_', ' ')}
+                    {roleDisplayName(role)}
                   </DropdownMenuCheckboxItem>
                 );
               })}
@@ -389,7 +390,7 @@ export default function UsersPage() {
                         <optgroup key={group.label} label={group.label}>
                           {group.roles.map((role) => (
                             <option key={role} value={role}>
-                              {role.replaceAll('_', ' ')}
+                              {roleDisplayName(role)}
                             </option>
                           ))}
                         </optgroup>

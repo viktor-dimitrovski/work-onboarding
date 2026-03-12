@@ -3,15 +3,14 @@ import re
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile, File, Form, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_active_user
 from app.db.session import get_db
 from app.models.rbac import User
 from app.multitenancy.deps import TenantContext, require_tenant_membership
-from app.multitenancy.permissions import require_access
-from app.multitenancy.deps import TenantContext, require_tenant_membership
+from app.multitenancy.permissions import permissions_for_roles, require_access
 from app.schemas.assessment import (
     AssessmentAttemptAnswersUpdate,
     AssessmentAttemptStartOut,
@@ -918,8 +917,8 @@ def get_delivery(
     __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> AssessmentDeliveryOut:
     delivery = assessment_service.get_delivery(db, delivery_id)
-    roles = set(ctx.roles)
-    if {'member', 'parent'} & roles and delivery.participant_user_id not in (None, current_user.id):
+    perms = permissions_for_roles(ctx.roles)
+    if 'assessments:write' not in perms and delivery.participant_user_id not in (None, current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Forbidden delivery')
     return AssessmentDeliveryOut.model_validate(delivery)
 
@@ -956,8 +955,8 @@ def autosave_answers(
     )
     if not attempt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Attempt not found')
-    roles = set(ctx.roles)
-    if {'member', 'parent'} & roles and attempt.user_id != current_user.id:
+    perms = permissions_for_roles(ctx.roles)
+    if 'assessments:write' not in perms and attempt.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Not allowed to edit this attempt')
 
     assessment_service.autosave_answers(
@@ -980,8 +979,8 @@ def submit_attempt(
     )
     if not attempt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Attempt not found')
-    roles = set(ctx.roles)
-    if {'member', 'parent'} & roles and attempt.user_id != current_user.id:
+    perms = permissions_for_roles(ctx.roles)
+    if 'assessments:write' not in perms and attempt.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Not allowed to submit this attempt')
 
     attempt = assessment_service.submit_attempt(db, attempt_id=attempt_id, actor_user_id=current_user.id)
@@ -1013,9 +1012,9 @@ def list_results(
     ctx: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> AssessmentResultListResponse:
-    roles = set(ctx.roles)
+    perms = permissions_for_roles(ctx.roles)
     effective_user_id = user_id
-    if {'member', 'parent'} & roles and not {'tenant_admin', 'manager', 'mentor'} & roles:
+    if 'assessments:write' not in perms and 'assignments:review' not in perms:
         effective_user_id = current_user.id
 
     attempts = assessment_service.list_attempts(

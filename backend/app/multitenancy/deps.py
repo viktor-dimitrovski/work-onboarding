@@ -20,7 +20,7 @@ class TenantContext:
     tenant: Tenant
     membership: TenantMembership | None
     roles: list[str]
-    enabled_modules: set[str]
+    enabled_modules: set[str] | None  # None = not queried (super_admin bypass); set() = zero rows in DB
 
 
 def _get_host(request: Request) -> str | None:

@@ -41,29 +41,17 @@ MODULE_PERMISSIONS: dict[str, set[str]] = {
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
-    'member': {'tracks:read', 'assignments:read', 'assignments:submit', 'assessments:take'},
-    'manager': {
+    # Cross-module oversight role — replaces legacy 'manager'
+    'supervisor': {
         'tracks:read',
         'assignments:read',
         'assignments:write',
         'assignments:review',
-        'releases:read',
-        'releases:write',
         'assessments:read',
+        'assessments:write',
         'assessments:take',
         'reports:read',
-        'compliance:read',
         'users:read',
-    },
-    'mentor': {
-        'tracks:read',
-        'assignments:read',
-        'assignments:write',
-        'assignments:review',
-        'releases:read',
-        'assessments:read',
-        'assessments:take',
-        'reports:read',
     },
     'tenant_admin': {
         'users:read',
@@ -72,7 +60,6 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     'compliance_viewer': {'compliance:read'},
     'compliance_editor': {'compliance:read', 'compliance:write'},
     'compliance_admin': {'compliance:read', 'compliance:write', 'compliance:admin'},
-    'parent': {'assignments:read'},
     'ir_viewer': {'ir:read'},
     'ir_editor': {'ir:read', 'ir:write'},
     'ir_approver': {'ir:read', 'ir:write', 'ir:approve'},
@@ -118,9 +105,7 @@ def validate_roles_for_tenant(roles: list[str], tenant_enabled_modules: set[str]
 
 ROLE_LABELS: dict[str, dict[str, str]] = {
     'company': {
-        'member': 'employee',
-        'manager': 'manager',
-        'mentor': 'mentor',
+        'supervisor': 'supervisor',
         'tenant_admin': 'tenant_admin',
         'billing_viewer': 'billing_viewer',
         'billing_manager': 'billing_manager',
@@ -132,11 +117,8 @@ ROLE_LABELS: dict[str, dict[str, str]] = {
         'settings_manager': 'settings_manager',
     },
     'education': {
-        'member': 'student',
-        'manager': 'manager',
-        'mentor': 'teacher',
+        'supervisor': 'supervisor',
         'tenant_admin': 'tenant_admin',
-        'parent': 'parent',
         'billing_viewer': 'billing_viewer',
         'billing_manager': 'billing_manager',
         'release_viewer': 'release_viewer',
@@ -163,7 +145,9 @@ def permissions_for_roles(roles: list[str]) -> set[str]:
 
 
 def enabled_modules(ctx: TenantContext) -> set[str]:
-    if not ctx.enabled_modules:
+    # None means the module query was skipped (e.g. super_admin bypass) — fall back to all modules.
+    # An explicit empty set means the tenant has no module rows → return empty (no access).
+    if ctx.enabled_modules is None:
         return set(DEFAULT_MODULES)
     return set(ctx.enabled_modules)
 

@@ -5,7 +5,7 @@ from app.api.deps import get_current_active_user
 from app.db.session import get_db
 from app.models.rbac import User
 from app.multitenancy.deps import TenantContext, require_tenant_membership
-from app.multitenancy.permissions import require_access
+from app.multitenancy.permissions import permissions_for_roles, require_access
 from app.schemas.report import AdminDashboardReport, EmployeeDashboardReport, MentorDashboardReport
 from app.services import report_service
 
@@ -20,7 +20,8 @@ def admin_dashboard(
     ctx: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('reports', 'reports:read')),
 ) -> AdminDashboardReport:
-    if not {'tenant_admin', 'manager'} & set(ctx.roles):
+    perms = permissions_for_roles(ctx.roles)
+    if 'assignments:write' not in perms and 'users:read' not in perms:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Insufficient permissions')
     return AdminDashboardReport(**report_service.admin_dashboard(db))
 
@@ -41,6 +42,7 @@ def mentor_dashboard(
     ctx: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('assignments', 'assignments:read')),
 ) -> MentorDashboardReport:
-    if not {'mentor', 'tenant_admin', 'manager'} & set(ctx.roles):
+    perms = permissions_for_roles(ctx.roles)
+    if 'assignments:review' not in perms and 'assignments:write' not in perms:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Insufficient permissions')
     return MentorDashboardReport(**report_service.mentor_dashboard(db, mentor_id=current_user.id))

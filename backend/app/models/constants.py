@@ -1,10 +1,5 @@
 ROLE_VALUES = [
     'super_admin',
-    'admin',
-    'mentor',
-    'employee',
-    'hr_viewer',
-    'reviewer',
 ]
 
 TRACK_VERSION_STATUS_VALUES = ['draft', 'published', 'archived']

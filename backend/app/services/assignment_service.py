@@ -616,11 +616,12 @@ def list_pending_reviews_for_mentor(db: Session, mentor_id: UUID) -> int:
     )
 
 
-def access_guard(assignment: OnboardingAssignment, *, user_id: UUID, roles: set[str]) -> None:
-    if {'tenant_admin', 'manager'} & roles:
+def access_guard(assignment: OnboardingAssignment, *, user_id: UUID, permissions: set[str]) -> None:
+    """Grant access if the caller can write all assignments, or is the assignment's employee/mentor."""
+    if 'assignments:write' in permissions:
         return
     if assignment.employee_id == user_id:
         return
-    if assignment.mentor_id == user_id and 'mentor' in roles:
+    if assignment.mentor_id == user_id and 'assignments:review' in permissions:
         return
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Access denied for assignment')

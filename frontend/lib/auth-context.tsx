@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api, isAuthExpiredError } from '@/lib/api';
-import type { AuthUser, TokenResponse } from '@/lib/types';
+import type { AuthUser, RoleName, TokenResponse } from '@/lib/types';
 
 const STORAGE_KEY = 'onboarding_auth_v1';
 const AUTH_UPDATED_EVENT = 'onboarding:auth-updated';
@@ -42,7 +42,7 @@ interface AuthState {
   refreshToken: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<TokenResponse>;
   logout: () => Promise<void>;
   hasRole: (role: string) => boolean;
   setSession: (payload: { user: AuthUser; accessToken: string; refreshToken: string }) => void;
@@ -168,9 +168,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return refreshPromise;
   }, [clearAuthState, hydrateAuth, refreshToken]);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string): Promise<TokenResponse> => {
     const tokenResponse = await api.login(email, password);
     hydrateAuth(tokenResponse);
+    return tokenResponse;
   };
 
   const logout = async () => {
@@ -183,7 +184,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const hasRole = (role: string) => !!user?.roles.includes(role as never);
+  const hasRole = (role: string) => !!user?.roles.includes(role as RoleName);
 
   const contextValue = useMemo<AuthState>(
     () => ({
