@@ -45,16 +45,27 @@ def _to_user_summary(user: User) -> UserSummary:
 
 def _resolve_tenant_from_request(request: Request, db: Session) -> Tenant | None:
     """If the request originates from a tenant subdomain, return the Tenant. Otherwise None."""
-    host = (request.headers.get('host') or request.headers.get('x-forwarded-host') or '').strip()
-    if not host:
+    tenant_slug: str | None = None
+
+    # 1. Try the explicit header set by Next.js middleware (works through the proxy rewrite).
+    header_slug = (request.headers.get('x-tenant-slug') or '').strip().lower()
+    if header_slug:
+        tenant_slug = header_slug
+
+    # 2. Fall back to host resolution (works when Nginx forwards directly to the backend).
+    if not tenant_slug:
+        host = (request.headers.get('x-forwarded-host') or request.headers.get('host') or '').strip()
+        if host:
+            base_domains = [d.strip().lower() for d in settings.BASE_DOMAINS.split(',') if d.strip()]
+            reserved = {s.strip().lower() for s in settings.RESERVED_SUBDOMAINS.split(',') if s.strip()}
+            product_map = {k: k for k in reserved}
+            resolution = resolve_host(host, base_domains=base_domains, reserved=reserved, product_map=product_map)
+            if resolution.kind == 'tenant' and resolution.tenant_slug:
+                tenant_slug = resolution.tenant_slug
+
+    if not tenant_slug:
         return None
-    base_domains = [d.strip().lower() for d in settings.BASE_DOMAINS.split(',') if d.strip()]
-    reserved = {s.strip().lower() for s in settings.RESERVED_SUBDOMAINS.split(',') if s.strip()}
-    product_map = {k: k for k in reserved}
-    resolution = resolve_host(host, base_domains=base_domains, reserved=reserved, product_map=product_map)
-    if resolution.kind != 'tenant' or not resolution.tenant_slug:
-        return None
-    return db.scalar(select(Tenant).where(Tenant.slug == resolution.tenant_slug, Tenant.is_active.is_(True)))
+    return db.scalar(select(Tenant).where(Tenant.slug == tenant_slug, Tenant.is_active.is_(True)))
 
 
 @router.post('/login', response_model=TokenResponse)
