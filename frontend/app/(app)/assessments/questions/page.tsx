@@ -1036,6 +1036,7 @@ export default function AssessmentQuestionsPage() {
                       }}
                       onPreview={() => setPreviewQuestion(question)}
                       onDuplicate={() => void duplicateQuestion(question)}
+                      onPublish={() => void publishQuestions([question.id])}
                       onArchive={() => setArchiveTarget({ ids: [question.id], label: 'this question' })}
                     />
                   </CardContent>
