@@ -128,11 +128,13 @@ function QuestionActionsMenu({
   onEdit,
   onPreview,
   onDuplicate,
+  onPublish,
   onArchive,
 }: {
   onEdit: () => void;
   onPreview: () => void;
   onDuplicate: () => void;
+  onPublish: () => void;
   onArchive: () => void;
 }) {
   return (
@@ -146,6 +148,7 @@ function QuestionActionsMenu({
         <DropdownMenuItem onSelect={onEdit}>Edit</DropdownMenuItem>
         <DropdownMenuItem onSelect={onPreview}>Preview</DropdownMenuItem>
         <DropdownMenuItem onSelect={onDuplicate}>Duplicate</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onPublish}>Publish</DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onArchive} className='text-destructive focus:text-destructive'>
           Archive
@@ -536,6 +539,22 @@ export default function AssessmentQuestionsPage() {
     }
   };
 
+  const publishQuestions = async (ids: string[]) => {
+    if (!accessToken || ids.length === 0) return;
+    await api.post(
+      '/assessments/questions/bulk-update',
+      {
+        scope: 'selected',
+        question_ids: ids,
+        action: 'set_status',
+        status_value: 'published',
+      },
+      accessToken,
+    );
+    setSelectedQuestionIds((prev) => prev.filter((id) => !ids.includes(id)));
+    await load();
+  };
+
   const duplicateQuestion = async (question: AssessmentQuestion) => {
     if (!accessToken) return;
     const payload = {
@@ -795,6 +814,17 @@ export default function AssessmentQuestionsPage() {
                   className={cn('h-9', selectedCount === 0 && 'invisible pointer-events-none')}
                   tabIndex={selectedCount === 0 ? -1 : 0}
                   aria-hidden={selectedCount === 0}
+                  onClick={() => void publishQuestions(selectedQuestionIds)}
+                >
+                  Publish selected
+                </Button>
+
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className={cn('h-9', selectedCount === 0 && 'invisible pointer-events-none')}
+                  tabIndex={selectedCount === 0 ? -1 : 0}
+                  aria-hidden={selectedCount === 0}
                   onClick={() =>
                     setArchiveTarget({
                       ids: selectedQuestionIds,
@@ -968,6 +998,7 @@ export default function AssessmentQuestionsPage() {
                         }}
                         onPreview={() => setPreviewQuestion(question)}
                         onDuplicate={() => void duplicateQuestion(question)}
+                        onPublish={() => void publishQuestions([question.id])}
                         onArchive={() => setArchiveTarget({ ids: [question.id], label: 'this question' })}
                       />
                     </div>
