@@ -17,6 +17,7 @@ import { BuilderShell } from '@/components/layout/builder-shell';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { AssessmentQuestion, AssessmentTest, AssessmentTestVersion } from '@/lib/types';
+import { ArrowDown, ArrowUp, CheckSquare, Search, Square, Trash2 } from 'lucide-react';
 
 interface QuestionListResponse {
   items: AssessmentQuestion[];
@@ -28,6 +29,13 @@ type ValidationIssue = {
   title: string;
   description: string;
   severity: 'warning' | 'error';
+};
+
+type VersionQuestion = {
+  question_id: string;
+  order_index: number;
+  points: number;
+  prompt: string;
 };
 
 export default function AssessmentTestBuilderPage() {
@@ -50,9 +58,12 @@ export default function AssessmentTestBuilderPage() {
   const [timeLimit, setTimeLimit] = useState<number | ''>('');
   const [shuffleQuestions, setShuffleQuestions] = useState(false);
   const [attemptsAllowed, setAttemptsAllowed] = useState<number | ''>('');
-  const [versionQuestions, setVersionQuestions] = useState<
-    { question_id: string; order_index: number; points: number; prompt: string }[]
-  >([]);
+  const [versionQuestions, setVersionQuestions] = useState<VersionQuestion[]>([]);
+
+  const [bankQuery, setBankQuery] = useState('');
+  const [bankDifficulty, setBankDifficulty] = useState('');
+  const [bankCategory, setBankCategory] = useState('');
+  const [bankChecked, setBankChecked] = useState<Set<string>>(new Set());
 
   const load = async () => {
     if (!accessToken || !id) return;
@@ -87,11 +98,18 @@ export default function AssessmentTestBuilderPage() {
           })),
       );
 
-      const questionResponse = await api.get<QuestionListResponse>(
-        '/assessments/questions?page=1&page_size=200&status=published',
-        accessToken,
-      );
-      setQuestions(questionResponse.items);
+      const allQuestions: AssessmentQuestion[] = [];
+      let page = 1;
+      while (true) {
+        const questionResponse = await api.get<QuestionListResponse>(
+          `/assessments/questions?page=${page}&page_size=100&status=published`,
+          accessToken,
+        );
+        allQuestions.push(...questionResponse.items);
+        if (allQuestions.length >= questionResponse.meta.total || questionResponse.items.length === 0) break;
+        page += 1;
+      }
+      setQuestions(allQuestions);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load test');
     } finally {
@@ -103,49 +121,90 @@ export default function AssessmentTestBuilderPage() {
     void load();
   }, [accessToken, id]);
 
+  const selectedIds = useMemo(() => new Set(versionQuestions.map((q) => q.question_id)), [versionQuestions]);
+
   const availableQuestions = useMemo(() => {
-    const selectedIds = new Set(versionQuestions.map((item) => item.question_id));
-    return questions.filter((question) => !selectedIds.has(question.id));
-  }, [questions, versionQuestions]);
+    return questions.filter((q) => !selectedIds.has(q.id));
+  }, [questions, selectedIds]);
+
+  const filteredBank = useMemo(() => {
+    let filtered = availableQuestions;
+    const q = bankQuery.trim().toLowerCase();
+    if (q) filtered = filtered.filter((item) => item.prompt.toLowerCase().includes(q));
+    if (bankDifficulty) filtered = filtered.filter((item) => item.difficulty === bankDifficulty);
+    if (bankCategory) {
+      if (bankCategory === '__unclassified') {
+        filtered = filtered.filter((item) => !item.category);
+      } else {
+        filtered = filtered.filter((item) => item.category?.slug === bankCategory);
+      }
+    }
+    return filtered;
+  }, [availableQuestions, bankQuery, bankDifficulty, bankCategory]);
+
+  const bankCategories = useMemo(() => {
+    const cats = new Map<string, string>();
+    availableQuestions.forEach((q) => {
+      if (q.category) cats.set(q.category.slug, q.category.name);
+    });
+    return Array.from(cats.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [availableQuestions]);
+
+  const allBankChecked = filteredBank.length > 0 && filteredBank.every((q) => bankChecked.has(q.id));
+
+  const toggleBankCheck = (questionId: string) => {
+    setBankChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(questionId)) next.delete(questionId);
+      else next.add(questionId);
+      return next;
+    });
+  };
+
+  const toggleAllBankChecked = () => {
+    if (allBankChecked) {
+      setBankChecked(new Set());
+    } else {
+      setBankChecked(new Set(filteredBank.map((q) => q.id)));
+    }
+  };
+
+  const addCheckedToVersion = () => {
+    const toAdd = filteredBank.filter((q) => bankChecked.has(q.id));
+    if (toAdd.length === 0) return;
+    setVersionQuestions((prev) => {
+      const next = [...prev];
+      toAdd.forEach((q) => {
+        next.push({
+          question_id: q.id,
+          order_index: next.length,
+          points: 1,
+          prompt: q.prompt,
+        });
+      });
+      return next.map((item, idx) => ({ ...item, order_index: idx }));
+    });
+    setBankChecked(new Set());
+  };
+
+  const addSingleQuestion = (q: AssessmentQuestion) => {
+    setVersionQuestions((prev) => [
+      ...prev,
+      { question_id: q.id, order_index: prev.length, points: 1, prompt: q.prompt },
+    ]);
+  };
 
   const summary = useMemo(() => {
     const totalQuestions = versionQuestions.length;
     const totalPoints = versionQuestions.reduce((sum, item) => sum + (item.points || 0), 0);
-    return {
-      totalQuestions,
-      totalPoints,
-      passingScore,
-      timeLimit,
-      attemptsAllowed,
-    };
+    return { totalQuestions, totalPoints, passingScore, timeLimit, attemptsAllowed };
   }, [versionQuestions, passingScore, timeLimit, attemptsAllowed]);
 
   const validationIssues = useMemo<ValidationIssue[]>(() => {
     const issues: ValidationIssue[] = [];
-    if (!title.trim()) {
-      issues.push({
-        id: 'test-title',
-        title: 'Missing title',
-        description: 'Add a test title so it is discoverable.',
-        severity: 'error',
-      });
-    }
-    if (versionQuestions.length === 0) {
-      issues.push({
-        id: 'test-questions',
-        title: 'No questions',
-        description: 'Add at least one question to this test version.',
-        severity: 'error',
-      });
-    }
-    if (passingScore < 0 || passingScore > 100) {
-      issues.push({
-        id: 'test-passing-score',
-        title: 'Invalid passing score',
-        description: 'Use a value between 0 and 100.',
-        severity: 'warning',
-      });
-    }
+    if (!title.trim()) issues.push({ id: 'title', title: 'Missing title', description: 'Add a test title.', severity: 'error' });
+    if (versionQuestions.length === 0) issues.push({ id: 'questions', title: 'No questions', description: 'Add at least one question.', severity: 'error' });
+    if (passingScore < 0 || passingScore > 100) issues.push({ id: 'score', title: 'Invalid passing score', description: 'Use 0–100.', severity: 'warning' });
     return issues;
   }, [title, versionQuestions, passingScore]);
 
@@ -155,6 +214,16 @@ export default function AssessmentTestBuilderPage() {
     const [moved] = next.splice(from, 1);
     next.splice(to, 0, moved);
     setVersionQuestions(next.map((item, idx) => ({ ...item, order_index: idx })));
+  };
+
+  const updatePoints = (idx: number, pts: number) => {
+    setVersionQuestions((prev) => prev.map((item, i) => (i === idx ? { ...item, points: Math.max(1, pts) } : item)));
+  };
+
+  const removeQuestion = (idx: number) => {
+    setVersionQuestions((prev) =>
+      prev.filter((_, i) => i !== idx).map((q, i) => ({ ...q, order_index: i })),
+    );
   };
 
   const saveDraft = async () => {
@@ -200,6 +269,7 @@ export default function AssessmentTestBuilderPage() {
     setSaving(true);
     setError(null);
     try {
+      await saveDraft();
       await api.post(`/assessments/test-versions/${version.id}/publish`, {}, accessToken);
       await load();
     } catch (err) {
@@ -212,6 +282,8 @@ export default function AssessmentTestBuilderPage() {
   if (loading) return <LoadingState label='Loading assessment test...' />;
   if (!test || !version) return <EmptyState title='Test not found' description='This assessment does not exist.' />;
 
+  const checkedCount = bankChecked.size;
+
   return (
     <div className='space-y-6'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
@@ -220,15 +292,9 @@ export default function AssessmentTestBuilderPage() {
           <p className='text-sm text-muted-foreground'>Draft and publish assessment versions.</p>
         </div>
         <div className='flex gap-2'>
-          <Button variant='outline' onClick={() => router.back()}>
-            Back
-          </Button>
-          <Button onClick={saveDraft} disabled={saving}>
-            {saving ? 'Saving…' : 'Save draft'}
-          </Button>
-          <Button variant='secondary' onClick={publish} disabled={saving}>
-            Publish
-          </Button>
+          <Button variant='outline' onClick={() => router.back()}>Back</Button>
+          <Button onClick={saveDraft} disabled={saving}>{saving ? 'Saving…' : 'Save draft'}</Button>
+          <Button variant='secondary' onClick={publish} disabled={saving || validationIssues.some((i) => i.severity === 'error')}>Publish</Button>
         </div>
       </div>
 
@@ -239,25 +305,23 @@ export default function AssessmentTestBuilderPage() {
         main={
           <div className='space-y-6'>
             <Card>
-              <CardHeader>
-                <CardTitle>Test metadata</CardTitle>
-              </CardHeader>
+              <CardHeader><CardTitle>Test metadata</CardTitle></CardHeader>
               <CardContent className='grid gap-4 md:grid-cols-2'>
                 <div className='space-y-2'>
                   <Label>Title</Label>
-                  <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+                  <Input value={title} onChange={(e) => setTitle(e.target.value)} />
                 </div>
                 <div className='space-y-2'>
                   <Label>Role target</Label>
-                  <Input value={roleTarget} onChange={(event) => setRoleTarget(event.target.value)} />
+                  <Input value={roleTarget} onChange={(e) => setRoleTarget(e.target.value)} />
                 </div>
                 <div className='space-y-2 md:col-span-2'>
                   <Label>Description</Label>
-                  <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
+                  <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
                 </div>
                 <div className='space-y-2'>
                   <Label>Category</Label>
-                  <Input value={category} onChange={(event) => setCategory(event.target.value)} />
+                  <Input value={category} onChange={(e) => setCategory(e.target.value)} />
                 </div>
               </CardContent>
             </Card>
@@ -270,124 +334,144 @@ export default function AssessmentTestBuilderPage() {
               <CardContent className='grid gap-4 md:grid-cols-2'>
                 <div className='space-y-2'>
                   <Label>Passing score (%)</Label>
-                  <Input
-                    type='number'
-                    min={0}
-                    max={100}
-                    value={passingScore}
-                    onChange={(event) => setPassingScore(Number(event.target.value || 0))}
-                  />
+                  <Input type='number' min={0} max={100} value={passingScore} onChange={(e) => setPassingScore(Number(e.target.value || 0))} />
                 </div>
                 <div className='space-y-2'>
                   <Label>Time limit (minutes)</Label>
-                  <Input
-                    type='number'
-                    min={1}
-                    value={timeLimit}
-                    onChange={(event) => setTimeLimit(event.target.value ? Number(event.target.value) : '')}
-                  />
+                  <Input type='number' min={1} value={timeLimit} onChange={(e) => setTimeLimit(e.target.value ? Number(e.target.value) : '')} />
                 </div>
                 <div className='space-y-2'>
                   <Label>Attempts allowed</Label>
-                  <Input
-                    type='number'
-                    min={1}
-                    value={attemptsAllowed}
-                    onChange={(event) => setAttemptsAllowed(event.target.value ? Number(event.target.value) : '')}
-                  />
+                  <Input type='number' min={1} value={attemptsAllowed} onChange={(e) => setAttemptsAllowed(e.target.value ? Number(e.target.value) : '')} />
                 </div>
                 <label className='flex items-center gap-2 text-sm'>
-                  <input
-                    type='checkbox'
-                    checked={shuffleQuestions}
-                    onChange={(event) => setShuffleQuestions(event.target.checked)}
-                  />
+                  <input type='checkbox' checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} />
                   Shuffle questions
                 </label>
               </CardContent>
             </Card>
 
+            {/* Question Set */}
             <Card>
               <CardHeader>
-                <CardTitle>Question set</CardTitle>
-                <CardDescription>Questions included in this version.</CardDescription>
+                <div className='flex items-center justify-between'>
+                  <div>
+                    <CardTitle>Question set</CardTitle>
+                    <CardDescription>{versionQuestions.length} question{versionQuestions.length !== 1 ? 's' : ''} · {summary.totalPoints} point{summary.totalPoints !== 1 ? 's' : ''}</CardDescription>
+                  </div>
+                </div>
               </CardHeader>
-              <CardContent className='space-y-4'>
+              <CardContent className='space-y-2'>
                 {versionQuestions.length === 0 ? (
-                  <p className='text-sm text-muted-foreground'>No questions yet.</p>
+                  <p className='text-sm text-muted-foreground'>No questions yet. Add from the bank below.</p>
                 ) : (
-                  <div className='space-y-2'>
-                    {versionQuestions.map((item, idx) => (
-                      <div key={`${item.question_id}-${idx}`} className='rounded-md border bg-white p-3'>
-                        <div className='flex items-start justify-between gap-3'>
-                          <div>
-                            <p className='font-medium'>{item.prompt}</p>
-                            <p className='text-xs text-muted-foreground'>Points: {item.points}</p>
-                          </div>
-                          <div className='flex items-center gap-2'>
-                            <Button variant='ghost' size='sm' onClick={() => moveQuestion(idx, idx - 1)}>
-                              Up
-                            </Button>
-                            <Button variant='ghost' size='sm' onClick={() => moveQuestion(idx, idx + 1)}>
-                              Down
-                            </Button>
-                            <Button
-                              variant='ghost'
-                              size='sm'
-                              onClick={() =>
-                                setVersionQuestions((prev) =>
-                                  prev.filter((_, questionIdx) => questionIdx !== idx).map((q, orderIndex) => ({
-                                    ...q,
-                                    order_index: orderIndex,
-                                  })),
-                                )
-                              }
-                            >
-                              Remove
-                            </Button>
-                          </div>
-                        </div>
+                  versionQuestions.map((item, idx) => (
+                    <div key={`${item.question_id}-${idx}`} className='flex items-center gap-3 rounded-md border bg-white p-3'>
+                      <span className='w-7 shrink-0 text-center text-xs font-medium text-muted-foreground'>{idx + 1}</span>
+                      <div className='min-w-0 flex-1'>
+                        <p className='truncate text-sm font-medium'>{item.prompt}</p>
                       </div>
+                      <div className='flex items-center gap-1'>
+                        <Input
+                          type='number'
+                          min={1}
+                          value={item.points}
+                          onChange={(e) => updatePoints(idx, Number(e.target.value || 1))}
+                          className='h-8 w-16 text-center text-xs'
+                          title='Points'
+                        />
+                        <span className='text-xs text-muted-foreground'>pts</span>
+                      </div>
+                      <div className='flex items-center gap-1'>
+                        <Button variant='ghost' size='icon' className='h-7 w-7' onClick={() => moveQuestion(idx, idx - 1)} disabled={idx === 0}>
+                          <ArrowUp className='h-3.5 w-3.5' />
+                        </Button>
+                        <Button variant='ghost' size='icon' className='h-7 w-7' onClick={() => moveQuestion(idx, idx + 1)} disabled={idx === versionQuestions.length - 1}>
+                          <ArrowDown className='h-3.5 w-3.5' />
+                        </Button>
+                        <Button variant='ghost' size='icon' className='h-7 w-7 text-destructive hover:text-destructive' onClick={() => removeQuestion(idx)}>
+                          <Trash2 className='h-3.5 w-3.5' />
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Question Bank */}
+            <Card>
+              <CardHeader>
+                <div className='flex items-center justify-between'>
+                  <div>
+                    <CardTitle>Question bank</CardTitle>
+                    <CardDescription>{filteredBank.length} of {availableQuestions.length} available</CardDescription>
+                  </div>
+                  {checkedCount > 0 && (
+                    <Button size='sm' onClick={addCheckedToVersion}>
+                      Add selected ({checkedCount})
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className='space-y-3'>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <div className='relative flex-1'>
+                    <Search className='absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
+                    <Input
+                      value={bankQuery}
+                      onChange={(e) => setBankQuery(e.target.value)}
+                      placeholder='Search questions…'
+                      className='pl-9'
+                    />
+                  </div>
+                  <select className='h-10 rounded-md border border-input bg-white px-3 text-sm' value={bankDifficulty} onChange={(e) => setBankDifficulty(e.target.value)}>
+                    <option value=''>All difficulties</option>
+                    <option value='easy'>Easy</option>
+                    <option value='medium'>Medium</option>
+                    <option value='hard'>Hard</option>
+                  </select>
+                  <select className='h-10 rounded-md border border-input bg-white px-3 text-sm' value={bankCategory} onChange={(e) => setBankCategory(e.target.value)}>
+                    <option value=''>All categories</option>
+                    <option value='__unclassified'>Unclassified</option>
+                    {bankCategories.map(([slug, name]) => (
+                      <option key={slug} value={slug}>{name}</option>
                     ))}
+                  </select>
+                </div>
+
+                {filteredBank.length > 0 && (
+                  <div className='flex items-center gap-2 border-b pb-2'>
+                    <button type='button' className='flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground' onClick={toggleAllBankChecked}>
+                      {allBankChecked ? <CheckSquare className='h-4 w-4' /> : <Square className='h-4 w-4' />}
+                      {allBankChecked ? 'Deselect all' : `Select all (${filteredBank.length})`}
+                    </button>
                   </div>
                 )}
 
-                <div className='rounded-md border bg-muted/30 p-3'>
-                  <p className='text-sm font-medium'>Question bank</p>
-                  <p className='text-xs text-muted-foreground'>Add published questions to this version.</p>
-                  <div className='mt-3 space-y-2'>
-                    {availableQuestions.length === 0 ? (
-                      <p className='text-xs text-muted-foreground'>No additional published questions available.</p>
-                    ) : (
-                      availableQuestions.map((question) => (
-                        <div key={question.id} className='flex items-center justify-between gap-3 rounded-md border bg-white p-2'>
-                          <div>
-                            <p className='text-sm'>{question.prompt}</p>
-                            <div className='mt-1 flex gap-2'>
-                              <Badge variant='secondary'>{question.question_type.replace('_', ' ')}</Badge>
-                            </div>
+                <div className='max-h-[400px] space-y-1 overflow-auto'>
+                  {filteredBank.length === 0 ? (
+                    <p className='py-4 text-center text-xs text-muted-foreground'>No questions match the current filters.</p>
+                  ) : (
+                    filteredBank.map((question) => (
+                      <div key={question.id} className='flex items-center gap-3 rounded-md border bg-white p-2 hover:border-primary/40'>
+                        <button type='button' onClick={() => toggleBankCheck(question.id)} className='shrink-0 text-muted-foreground hover:text-foreground'>
+                          {bankChecked.has(question.id) ? <CheckSquare className='h-4 w-4 text-primary' /> : <Square className='h-4 w-4' />}
+                        </button>
+                        <div className='min-w-0 flex-1'>
+                          <p className='truncate text-sm'>{question.prompt}</p>
+                          <div className='mt-0.5 flex gap-1.5'>
+                            <Badge variant='secondary' className='text-[10px]'>{question.question_type.replace('_', ' ')}</Badge>
+                            {question.difficulty && <Badge variant='outline' className='text-[10px] capitalize'>{question.difficulty}</Badge>}
+                            {question.category && <Badge variant='outline' className='text-[10px]'>{question.category.name}</Badge>}
                           </div>
-                          <Button
-                            variant='outline'
-                            size='sm'
-                            onClick={() =>
-                              setVersionQuestions((prev) => [
-                                ...prev,
-                                {
-                                  question_id: question.id,
-                                  order_index: prev.length,
-                                  points: 1,
-                                  prompt: question.prompt,
-                                },
-                              ])
-                            }
-                          >
-                            Add
-                          </Button>
                         </div>
-                      ))
-                    )}
-                  </div>
+                        <Button variant='outline' size='sm' className='h-7 text-xs' onClick={() => addSingleQuestion(question)}>
+                          Add
+                        </Button>
+                      </div>
+                    ))
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -398,9 +482,8 @@ export default function AssessmentTestBuilderPage() {
             <Card>
               <CardHeader className='space-y-3'>
                 <CardTitle className='text-base'>Workspace</CardTitle>
-                <TabsList className='grid w-full grid-cols-4'>
+                <TabsList className='grid w-full grid-cols-3'>
                   <TabsTrigger value='summary'>Summary</TabsTrigger>
-                  <TabsTrigger value='ai'>AI</TabsTrigger>
                   <TabsTrigger value='validation'>Validation</TabsTrigger>
                   <TabsTrigger value='outline'>Outline</TabsTrigger>
                 </TabsList>
@@ -416,31 +499,14 @@ export default function AssessmentTestBuilderPage() {
                           { label: 'Passing score', value: summary.passingScore, className: 'border-l-4 border-l-amber-200 bg-amber-50/60' },
                           { label: 'Time limit', value: summary.timeLimit || 0, className: 'border-l-4 border-l-slate-200 bg-slate-50/60' },
                           { label: 'Attempts', value: summary.attemptsAllowed || 0, className: 'border-l-4 border-l-violet-200 bg-violet-50/60' },
-                          { label: 'Shuffle', value: shuffleQuestions ? 1 : 0, className: 'border-l-4 border-l-teal-200 bg-teal-50/60' },
+                          { label: 'Shuffle', value: shuffleQuestions ? 'Yes' : 'No', className: 'border-l-4 border-l-teal-200 bg-teal-50/60' },
                         ].map((metric) => (
-                          <div
-                            key={metric.label}
-                            className={`flex items-center justify-between rounded-lg border px-3 py-2 ${metric.className}`}
-                          >
+                          <div key={metric.label} className={`flex items-center justify-between rounded-lg border px-3 py-2 ${metric.className}`}>
                             <span className='text-xs text-muted-foreground leading-none'>{metric.label}</span>
-                            <span
-                              className={`text-base font-semibold tabular-nums leading-none ${
-                                metric.value === 0 ? 'text-muted-foreground' : 'text-foreground'
-                              }`}
-                            >
-                              {metric.value}
-                            </span>
+                            <span className='text-base font-semibold tabular-nums leading-none'>{metric.value}</span>
                           </div>
                         ))}
                       </div>
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-
-                <TabsContent value='ai'>
-                  <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
-                    <div className='rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground'>
-                      AI question generation will be available in the next phase.
                     </div>
                   </ScrollArea>
                 </TabsContent>
@@ -449,9 +515,7 @@ export default function AssessmentTestBuilderPage() {
                   <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
                     <div className='space-y-3'>
                       {validationIssues.length === 0 ? (
-                        <div className='rounded-md bg-slate-50 p-3 text-xs text-muted-foreground'>
-                          No validation issues detected.
-                        </div>
+                        <div className='rounded-md bg-emerald-50 p-3 text-xs text-emerald-700'>Ready to publish. No issues detected.</div>
                       ) : (
                         validationIssues.map((issue) => (
                           <div key={issue.id} className='rounded-md border bg-white p-3 text-sm'>
@@ -460,7 +524,7 @@ export default function AssessmentTestBuilderPage() {
                                 <p className='font-medium'>{issue.title}</p>
                                 <p className='text-xs text-muted-foreground'>{issue.description}</p>
                               </div>
-                              <Badge variant='outline'>{issue.severity}</Badge>
+                              <Badge variant={issue.severity === 'error' ? 'default' : 'outline'} className={issue.severity === 'error' ? 'bg-red-600' : ''}>{issue.severity}</Badge>
                             </div>
                           </div>
                         ))
@@ -472,11 +536,16 @@ export default function AssessmentTestBuilderPage() {
                 <TabsContent value='outline'>
                   <ScrollArea className='h-[calc(100vh-360px)] pr-3'>
                     <div className='space-y-2'>
-                      {versionQuestions.map((item) => (
-                        <div key={item.question_id} className='rounded-md border bg-white p-3 text-xs text-muted-foreground'>
-                          {item.prompt}
-                        </div>
-                      ))}
+                      {versionQuestions.length === 0 ? (
+                        <p className='py-4 text-center text-xs text-muted-foreground'>No questions in this version yet.</p>
+                      ) : (
+                        versionQuestions.map((item, idx) => (
+                          <div key={item.question_id} className='flex items-start gap-2 rounded-md border bg-white p-2'>
+                            <span className='mt-0.5 w-5 shrink-0 text-center text-[10px] font-medium text-muted-foreground'>{idx + 1}</span>
+                            <p className='text-xs text-muted-foreground'>{item.prompt}</p>
+                          </div>
+                        ))
+                      )}
                     </div>
                   </ScrollArea>
                 </TabsContent>

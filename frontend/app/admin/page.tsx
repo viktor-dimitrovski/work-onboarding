@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ExternalLink, LayoutGrid, Pencil, Settings2, Trash2, Users2, Wallet, X } from 'lucide-react';
 
 import { LoadingState } from '@/components/common/loading-state';
+import { TenantRolesEditor } from '@/components/common/tenant-roles-editor';
 import { AppShell } from '@/components/layout/app-shell';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -199,8 +200,8 @@ export default function AdminTenantsPage() {
   const [membersLoading, setMembersLoading] = useState(false);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [editMemberName, setEditMemberName] = useState('');
-  const [editingRolesMemberId, setEditingRolesMemberId] = useState<string | null>(null);
-  const [editMemberRoles, setEditMemberRoles] = useState<string[]>([]);
+  const [editedMemberRoles, setEditedMemberRoles] = useState<Record<string, string[]>>({});
+  const [savingMemberId, setSavingMemberId] = useState<string | null>(null);
 
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
   const [editPlanName, setEditPlanName] = useState('');
@@ -554,33 +555,26 @@ export default function AdminTenantsPage() {
     setEditMemberName('');
   };
 
-  const startEditRoles = (member: TenantMemberRow) => {
-    setEditingRolesMemberId(member.id);
-    setEditMemberRoles(member.roles);
-  };
-
-  const cancelEditRoles = () => {
-    setEditingRolesMemberId(null);
-    setEditMemberRoles([]);
-  };
-
-  const saveRoles = async () => {
-    if (!accessToken || !selectedTenantId || !editingRolesMemberId) return;
-    if (editMemberRoles.length === 0) {
-      setError('At least one role is required');
-      return;
-    }
+  const saveMemberRoles = async (memberId: string, roles: string[]) => {
+    if (!accessToken || !selectedTenantId) return;
     setError(null);
+    setSavingMemberId(memberId);
     try {
       const updated = await api.patch<TenantMemberRow>(
-        `/admin/tenants/${selectedTenantId}/members/${editingRolesMemberId}`,
-        { roles: editMemberRoles },
+        `/admin/tenants/${selectedTenantId}/members/${memberId}`,
+        { roles },
         accessToken,
       );
-      setTenantMembers((prev) => prev.map((m) => (m.id === editingRolesMemberId ? updated : m)));
-      cancelEditRoles();
+      setTenantMembers((prev) => prev.map((m) => (m.id === memberId ? updated : m)));
+      setEditedMemberRoles((prev) => {
+        const copy = { ...prev };
+        delete copy[memberId];
+        return copy;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update roles');
+    } finally {
+      setSavingMemberId(null);
     }
   };
 
@@ -1275,57 +1269,59 @@ export default function AdminTenantsPage() {
                                               )}
                                             </td>
                                             <td className='px-3 py-2'>
-                                              {editingRolesMemberId === member.id ? (
-                                                <div className='space-y-2'>
-                                                  <div className='grid gap-1.5 sm:grid-cols-2'>
-                                                    {tenantRoleGroups
-                                                      .filter((g) => g.moduleKey === null || enabledModuleKeys.has(g.moduleKey))
-                                                      .map((group) => (
-                                                        <div key={group.label} className='rounded border bg-muted/20 px-2 py-1.5'>
-                                                          <p className='mb-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide'>{group.label}</p>
-                                                          {group.roles.map((role) => (
-                                                            <label key={role} className='flex items-center gap-1.5 text-[11px] py-0.5 cursor-pointer'>
-                                                              <input
-                                                                type='checkbox'
-                                                                className='h-3 w-3 accent-primary'
-                                                                checked={editMemberRoles.includes(role)}
-                                                                onChange={(e) =>
-                                                                  setEditMemberRoles((prev) =>
-                                                                    e.target.checked
-                                                                      ? [...prev, role]
-                                                                      : prev.filter((r) => r !== role),
-                                                                  )
-                                                                }
-                                                              />
-                                                              {roleDisplayName(role)}
-                                                            </label>
-                                                          ))}
-                                                        </div>
+                                              {(() => {
+                                                const currentRoles = member.roles;
+                                                const selectedRoles = editedMemberRoles[member.id] ?? currentRoles;
+                                                const isDirty = JSON.stringify([...selectedRoles].sort()) !== JSON.stringify([...currentRoles].sort());
+                                                const saving = savingMemberId === member.id;
+                                                return (
+                                                  <div className='flex flex-wrap items-center gap-1.5'>
+                                                    <div className='flex flex-wrap gap-1'>
+                                                      {selectedRoles.map((r) => (
+                                                        <span key={r} className='inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600'>
+                                                          {roleDisplayName(r)}
+                                                        </span>
                                                       ))}
+                                                    </div>
+                                                    <TenantRolesEditor
+                                                      value={selectedRoles}
+                                                      disabled={saving}
+                                                      enabledModules={[...enabledModuleKeys]}
+                                                      title={member.email}
+                                                      onChange={(next) =>
+                                                        setEditedMemberRoles((prev) => ({ ...prev, [member.id]: next }))
+                                                      }
+                                                    />
+                                                    {isDirty && (
+                                                      <>
+                                                        <Button
+                                                          type='button'
+                                                          size='sm'
+                                                          disabled={saving}
+                                                          onClick={() => saveMemberRoles(member.id, selectedRoles)}
+                                                        >
+                                                          {saving ? 'Saving…' : 'Save'}
+                                                        </Button>
+                                                        <Button
+                                                          type='button'
+                                                          size='sm'
+                                                          variant='ghost'
+                                                          disabled={saving}
+                                                          onClick={() =>
+                                                            setEditedMemberRoles((prev) => {
+                                                              const copy = { ...prev };
+                                                              delete copy[member.id];
+                                                              return copy;
+                                                            })
+                                                          }
+                                                        >
+                                                          Discard
+                                                        </Button>
+                                                      </>
+                                                    )}
                                                   </div>
-                                                  <div className='flex items-center gap-1.5'>
-                                                    <Button size='sm' className='h-6 text-xs px-2' onClick={saveRoles} disabled={editMemberRoles.length === 0}>Save</Button>
-                                                    <Button size='sm' variant='ghost' className='h-6 text-xs px-2' onClick={cancelEditRoles}>Cancel</Button>
-                                                  </div>
-                                                </div>
-                                              ) : (
-                                                <div className='flex flex-wrap items-center gap-1'>
-                                                  {member.roles.map((r) => (
-                                                    <span key={r} className='inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600'>
-                                                      {roleDisplayName(r)}
-                                                    </span>
-                                                  ))}
-                                                  <Button
-                                                    variant='ghost'
-                                                    size='sm'
-                                                    className='h-5 w-5 p-0 text-muted-foreground hover:text-foreground'
-                                                    onClick={() => startEditRoles(member)}
-                                                    title='Edit roles'
-                                                  >
-                                                    <Pencil className='h-3 w-3' />
-                                                  </Button>
-                                                </div>
-                                              )}
+                                                );
+                                              })()}
                                             </td>
                                             <td className='px-3 py-2'>
                                               <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${member.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>

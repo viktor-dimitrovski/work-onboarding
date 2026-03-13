@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   ListChecks,
   Network,
+  PlayCircle,
   Rocket,
   Send,
   Settings,
@@ -60,7 +61,7 @@ const DEFAULT_TENANT_SLUG = (process.env.NEXT_PUBLIC_DEFAULT_TENANT_SLUG || '').
 export const MODULES: ModuleDefinition[] = [
   {
     id: 'onboarding',
-    label: 'Onboarding',
+    label: 'Tracks & Assignments',
     description: 'Assignments, tracks, and employee onboarding progress.',
     icon: ListChecks,
     defaultHref: '/my-onboarding',
@@ -69,7 +70,7 @@ export const MODULES: ModuleDefinition[] = [
     navItems: [
       {
         href: '/my-onboarding',
-        label: 'My Onboarding',
+        label: 'My Assigned Tracks',
         icon: ListChecks,
         moduleKey: 'assignments',
         permission: 'assignments:read',
@@ -99,6 +100,13 @@ export const MODULES: ModuleDefinition[] = [
     routeMatchers: ['/assessments'],
     moduleKeys: ['assessments'],
     navItems: [
+      {
+        href: '/assessments/my-tests',
+        label: 'My Tests',
+        icon: PlayCircle,
+        moduleKey: 'assessments',
+        permission: 'assessments:take',
+      },
       {
         href: '/assessments/questions',
         label: 'Question Bank',

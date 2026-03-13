@@ -58,20 +58,86 @@ def _from_address() -> str:
 
 
 def _role_display(role: str) -> str:
-    """Convert a role key to a human-friendly label."""
     return role.replace('_', ' ').title()
 
 
-def _roles_pills(roles: list[str]) -> str:
-    """Render roles as inline pill badges."""
-    pills = ''.join(
-        f'<span style="display:inline-block;margin:3px 4px 3px 0;padding:4px 12px;'
-        f'background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;'
-        f'border-radius:20px;font-size:12px;font-weight:600;'
-        f'letter-spacing:0.01em;">{_role_display(r)}</span>'
-        for r in roles
+# Groups mirror tenantRoleGroups in frontend/lib/constants.ts
+_ROLE_GROUPS: list[tuple[str, list[str]]] = [
+    ('Administration',        ['tenant_admin']),
+    ('Assignments',           ['assignments_viewer', 'assignments_editor', 'assignments_reviewer']),
+    ('Tracks',                ['tracks_editor']),
+    ('Assessments',           ['assessments_editor']),
+    ('Reports',               ['reports_viewer']),
+    ('Compliance',            ['compliance_viewer', 'compliance_editor', 'compliance_admin']),
+    ('Integration Registry',  ['ir_viewer', 'ir_editor', 'ir_approver', 'ir_admin']),
+    ('Releases',              ['release_viewer', 'release_editor']),
+    ('Billing',               ['billing_viewer', 'billing_manager']),
+    ('Settings',              ['settings_manager']),
+]
+
+# Short label shown inside each group row (strips the repeated module prefix)
+_ROLE_SHORT_LABEL: dict[str, str] = {
+    'tenant_admin':           'Tenant Admin',
+    'assignments_viewer':     'Viewer',
+    'assignments_editor':     'Editor',
+    'assignments_reviewer':   'Reviewer',
+    'tracks_editor':          'Editor',
+    'assessments_editor':     'Editor',
+    'reports_viewer':         'Viewer',
+    'compliance_viewer':      'Viewer',
+    'compliance_editor':      'Editor',
+    'compliance_admin':       'Administrator',
+    'ir_viewer':              'Viewer',
+    'ir_editor':              'Editor',
+    'ir_approver':            'Approver',
+    'ir_admin':               'Administrator',
+    'release_viewer':         'Viewer',
+    'release_editor':         'Editor',
+    'billing_viewer':         'Viewer',
+    'billing_manager':        'Manager',
+    'settings_manager':       'Manager',
+}
+
+
+def _roles_grouped(roles: list[str]) -> str:
+    """
+    Render roles grouped by module as a compact two-column table.
+    Groups with no matching roles are skipped.
+    Example:
+        Administration    Tenant Admin
+        Assignments       Viewer · Editor · Reviewer
+        Compliance        Viewer · Editor
+    """
+    role_set = set(roles)
+    rows_html = ''
+
+    for group_name, group_roles in _ROLE_GROUPS:
+        matched = [r for r in group_roles if r in role_set]
+        if not matched:
+            continue
+        short_labels = ' <span style="color:#94a3b8;font-size:11px;">·</span> '.join(
+            f'<span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;'
+            f'border-radius:4px;padding:1px 7px;font-size:11px;font-weight:600;">'
+            f'{_ROLE_SHORT_LABEL.get(r, _role_display(r))}</span>'
+            for r in matched
+        )
+        rows_html += (
+            f'<tr>'
+            f'<td style="padding:5px 14px 5px 0;font-size:12px;font-weight:700;'
+            f'color:#374151;white-space:nowrap;vertical-align:middle;">{group_name}</td>'
+            f'<td style="padding:5px 0;vertical-align:middle;">{short_labels}</td>'
+            f'</tr>'
+        )
+
+    if not rows_html:
+        return ''
+
+    return (
+        f'<table role="presentation" cellpadding="0" cellspacing="0" '
+        f'style="margin:12px 0 4px;border-collapse:separate;border-spacing:0;">'
+        f'{rows_html}'
+        f'</table>'
     )
-    return f'<div style="margin:12px 0 4px;">{pills}</div>'
 
 
 def _base_email(
@@ -266,7 +332,7 @@ def send_invitation(
 ) -> None:
     """Invite a brand-new user; they must click the link to set their password."""
     display_name = to_name or to_email
-    roles_html = _roles_pills(roles) if roles else ''
+    roles_html = _roles_grouped(roles) if roles else ''
     html = _base_email(
         preheader=f"You've been invited to join {tenant_name} on SolveBox. Set your password to get started.",
         headline=f'Welcome to {tenant_name}',
@@ -309,7 +375,7 @@ def send_tenant_welcome(
 ) -> None:
     """Notify an existing user that they've been added to a new tenant."""
     display_name = to_name or to_email
-    roles_html = _roles_pills(roles) if roles else ''
+    roles_html = _roles_grouped(roles) if roles else ''
     html = _base_email(
         preheader=f"You now have access to {tenant_name} on SolveBox.",
         headline=f'Access granted — {tenant_name}',
@@ -348,7 +414,7 @@ def send_roles_updated(
 ) -> None:
     """Notify a user that their roles in a tenant have been changed."""
     display_name = to_name or to_email
-    roles_html = _roles_pills(roles) if roles else ''
+    roles_html = _roles_grouped(roles) if roles else ''
     html = _base_email(
         preheader=f"Your access permissions in {tenant_name} have been updated.",
         headline='Your permissions have been updated',

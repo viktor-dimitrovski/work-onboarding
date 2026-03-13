@@ -5,10 +5,13 @@ import { useEffect, useState } from 'react';
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { AssessmentAttempt } from '@/lib/types';
+import { BarChart3, CheckCircle2, XCircle } from 'lucide-react';
 
 interface ResultsResponse {
   items: AssessmentAttempt[];
@@ -21,10 +24,35 @@ interface ResultsResponse {
   };
 }
 
+const formatDate = (d?: string | null) => {
+  if (!d) return '—';
+  try {
+    return new Date(d).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return d;
+  }
+};
+
+const durationText = (start?: string | null, end?: string | null) => {
+  if (!start || !end) return '—';
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (ms <= 0) return '—';
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+};
+
 export default function AssessmentResultsPage() {
   const { accessToken } = useAuth();
   const [results, setResults] = useState<ResultsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState<AssessmentAttempt | null>(null);
 
   const load = async () => {
     if (!accessToken) return;
@@ -43,47 +71,168 @@ export default function AssessmentResultsPage() {
 
   if (loading) return <LoadingState label='Loading results...' />;
   if (!results || results.items.length === 0) {
-    return <EmptyState title='No results yet' description='Assessment attempts will appear here once submitted.' />;
+    return <EmptyState title='No results yet' description='Assessment results will appear here after completing a test.' />;
   }
+
+  const items = results.items;
+  const avg = results.summary.average_score_percent;
+  const passCount = items.filter((a) => a.passed).length;
+  const failCount = items.filter((a) => !a.passed && a.status === 'scored').length;
 
   return (
     <div className='space-y-6'>
       <div>
         <h2 className='text-2xl font-semibold'>Results</h2>
-        <p className='text-sm text-muted-foreground'>Latest assessment performance.</p>
+        <p className='text-sm text-muted-foreground'>Assessment performance and history.</p>
       </div>
 
+      {/* Summary cards */}
+      <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
+        <Card>
+          <CardContent className='flex items-center gap-3 py-4'>
+            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50'>
+              <BarChart3 className='h-5 w-5 text-blue-600' />
+            </div>
+            <div>
+              <p className='text-2xl font-bold'>{results.summary.attempt_count}</p>
+              <p className='text-xs text-muted-foreground'>Total attempts</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className='flex items-center gap-3 py-4'>
+            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50'>
+              <CheckCircle2 className='h-5 w-5 text-emerald-600' />
+            </div>
+            <div>
+              <p className='text-2xl font-bold'>{passCount}</p>
+              <p className='text-xs text-muted-foreground'>Passed</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className='flex items-center gap-3 py-4'>
+            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-red-50'>
+              <XCircle className='h-5 w-5 text-red-600' />
+            </div>
+            <div>
+              <p className='text-2xl font-bold'>{failCount}</p>
+              <p className='text-xs text-muted-foreground'>Failed</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className='flex items-center gap-3 py-4'>
+            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50'>
+              <BarChart3 className='h-5 w-5 text-amber-600' />
+            </div>
+            <div>
+              <p className='text-2xl font-bold'>{avg != null ? `${Math.round(avg)}%` : '—'}</p>
+              <p className='text-xs text-muted-foreground'>Average score</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Results table */}
       <Card>
         <CardHeader>
-          <CardTitle>Summary</CardTitle>
+          <CardTitle className='text-base'>Attempt history</CardTitle>
         </CardHeader>
-        <CardContent className='text-sm text-muted-foreground'>
-          <p>Attempts: {results.summary.attempt_count}</p>
-          <p>
-            Average score:{' '}
-            {results.summary.average_score_percent !== null && results.summary.average_score_percent !== undefined
-              ? `${Math.round(results.summary.average_score_percent)}%`
-              : 'n/a'}
-          </p>
+        <CardContent>
+          <div className='overflow-x-auto'>
+            <table className='w-full text-sm'>
+              <thead>
+                <tr className='border-b text-left text-xs text-muted-foreground'>
+                  <th className='pb-2 pr-4 font-medium'>Attempt</th>
+                  <th className='pb-2 pr-4 font-medium'>Status</th>
+                  <th className='pb-2 pr-4 font-medium'>Score</th>
+                  <th className='pb-2 pr-4 font-medium'>Result</th>
+                  <th className='pb-2 pr-4 font-medium'>Started</th>
+                  <th className='pb-2 pr-4 font-medium'>Duration</th>
+                  <th className='pb-2 font-medium'></th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((attempt) => (
+                  <tr key={attempt.id} className='border-b last:border-b-0 hover:bg-muted/30'>
+                    <td className='py-3 pr-4 font-medium'>#{attempt.attempt_number}</td>
+                    <td className='py-3 pr-4'>
+                      <Badge variant='outline' className='capitalize'>{attempt.status}</Badge>
+                    </td>
+                    <td className='py-3 pr-4 tabular-nums'>
+                      {attempt.score_percent != null ? (
+                        <span className='font-semibold'>{Math.round(attempt.score_percent)}%</span>
+                      ) : '—'}
+                      {attempt.score != null && attempt.max_score != null && (
+                        <span className='ml-1 text-xs text-muted-foreground'>
+                          ({attempt.score}/{attempt.max_score})
+                        </span>
+                      )}
+                    </td>
+                    <td className='py-3 pr-4'>
+                      {attempt.status === 'scored' || attempt.status === 'submitted' ? (
+                        attempt.passed ? (
+                          <Badge className='bg-emerald-100 text-emerald-800 hover:bg-emerald-100'>Passed</Badge>
+                        ) : (
+                          <Badge variant='outline' className='border-red-300 text-red-700'>Failed</Badge>
+                        )
+                      ) : '—'}
+                    </td>
+                    <td className='py-3 pr-4 text-xs text-muted-foreground'>{formatDate(attempt.started_at)}</td>
+                    <td className='py-3 pr-4 text-xs text-muted-foreground tabular-nums'>
+                      {durationText(attempt.started_at, attempt.submitted_at)}
+                    </td>
+                    <td className='py-3'>
+                      <Button variant='ghost' size='sm' className='h-7 text-xs' onClick={() => setDetail(attempt)}>
+                        Details
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </CardContent>
       </Card>
 
-      <div className='grid gap-4 md:grid-cols-2'>
-        {results.items.map((attempt) => (
-          <Card key={attempt.id}>
-            <CardHeader>
-              <CardTitle className='text-base'>Attempt {attempt.attempt_number}</CardTitle>
-            </CardHeader>
-            <CardContent className='text-xs text-muted-foreground'>
-              <p>Status: {attempt.status}</p>
-              <p>Score: {attempt.score_percent ? `${Math.round(attempt.score_percent)}%` : 'n/a'}</p>
-              <p>Started: {attempt.started_at}</p>
-              {attempt.submitted_at && <p>Submitted: {attempt.submitted_at}</p>}
-              {attempt.passed && <Badge className='mt-2'>Passed</Badge>}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {/* Detail slide-over */}
+      <Sheet open={!!detail} onOpenChange={(open) => { if (!open) setDetail(null); }}>
+        <SheetContent side='right' className='sm:max-w-lg'>
+          <SheetHeader>
+            <SheetTitle>Attempt #{detail?.attempt_number} details</SheetTitle>
+          </SheetHeader>
+          {detail && (
+            <div className='mt-4 space-y-4'>
+              <div className='grid grid-cols-2 gap-3'>
+                <div className='rounded-md border p-3'>
+                  <p className='text-xs text-muted-foreground'>Score</p>
+                  <p className='text-lg font-bold'>
+                    {detail.score_percent != null ? `${Math.round(detail.score_percent)}%` : '—'}
+                  </p>
+                </div>
+                <div className='rounded-md border p-3'>
+                  <p className='text-xs text-muted-foreground'>Points</p>
+                  <p className='text-lg font-bold'>{detail.score ?? 0} / {detail.max_score ?? 0}</p>
+                </div>
+                <div className='rounded-md border p-3'>
+                  <p className='text-xs text-muted-foreground'>Result</p>
+                  <p className='text-lg font-bold'>{detail.passed ? 'Passed' : 'Failed'}</p>
+                </div>
+                <div className='rounded-md border p-3'>
+                  <p className='text-xs text-muted-foreground'>Duration</p>
+                  <p className='text-lg font-bold'>{durationText(detail.started_at, detail.submitted_at)}</p>
+                </div>
+              </div>
+              <div className='space-y-2 text-sm'>
+                <p><span className='text-muted-foreground'>Status:</span> {detail.status}</p>
+                <p><span className='text-muted-foreground'>Started:</span> {formatDate(detail.started_at)}</p>
+                {detail.submitted_at && <p><span className='text-muted-foreground'>Submitted:</span> {formatDate(detail.submitted_at)}</p>}
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 import re
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile, File, Form, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, UploadFile, File, Form, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_active_user
@@ -32,6 +32,7 @@ from app.schemas.assessment import (
     AssessmentQuestionsBulkUpdate,
     AssessmentBulkUpdateResult,
     AssessmentPdfImportResponse,
+    AssessmentTextImportIn,
     AssessmentResultListResponse,
     AssessmentResultSummary,
     AssessmentTestCreate,
@@ -42,7 +43,7 @@ from app.schemas.assessment import (
     AssessmentTestVersionUpdate,
 )
 from app.schemas.common import PaginationMeta
-from app.models.assessment import AssessmentAttempt, AssessmentClassificationJob
+from app.models.assessment import AssessmentAttempt, AssessmentClassificationJob, AssessmentDelivery
 from app.models.assessment import AssessmentClassificationJobItem
 from app.services import assessment_classification_service, assessment_service, audit_service, usage_service
 from app.services.openai_responses_service import call_openai_responses_json
@@ -311,6 +312,120 @@ def import_questions_from_pdf(
         question_ids=created_ids,
         warnings=warnings,
     )
+
+
+@router.post('/questions/import-text', response_model=AssessmentPdfImportResponse, status_code=status.HTTP_201_CREATED)
+def import_questions_from_text(
+    body: AssessmentTextImportIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+    ctx: TenantContext = Depends(require_tenant_membership),
+) -> AssessmentPdfImportResponse:
+    text = body.text.strip()
+    if len(text) < 50:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='Text is too short to generate questions from.')
+
+    question_count = body.question_count
+    difficulty = (body.difficulty or '').strip() or None
+
+    chunks = chunk_pages([text], max_chars=18_000)
+    if not chunks:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='No usable text found.')
+
+    base_tags = _normalize_tags(body.tags)
+    merged_tags = _normalize_tags(','.join([*base_tags, 'text_import']))
+
+    warnings: list[str] = []
+    questions: list[dict] = []
+    remaining = question_count
+
+    for chunk in chunks:
+        if remaining <= 0:
+            break
+        per_chunk = min(remaining, 20)
+        prompt = (
+            f'Generate exactly {per_chunk} questions as JSON.\n'
+            f'Difficulty: {difficulty or "mixed"}\n'
+            f'Tags to include on every question: {merged_tags}\n\n'
+            f'Content:\n{chunk}'
+        )
+        payload = call_openai_responses_json(
+            instructions=IMPORT_SYSTEM_PROMPT,
+            input_text=prompt,
+            schema_name='assessment_questions_import',
+            schema=IMPORT_JSON_SCHEMA,
+            temperature=0.3,
+            timeout_ms=60_000,
+        )
+        items = payload.get('questions')
+        if not isinstance(items, list):
+            warnings.append('OpenAI returned unexpected payload shape for one chunk.')
+            continue
+
+        for q in items:
+            if not isinstance(q, dict):
+                continue
+            q['tags'] = merged_tags
+            if difficulty and not q.get('difficulty'):
+                q['difficulty'] = difficulty
+            q, err = _validate_mcq(q)
+            if err:
+                warnings.append(f'Skipped invalid question: {err}')
+                continue
+            questions.append(q)
+
+        remaining = question_count - len(questions)
+
+    # de-dupe by prompt
+    seen_prompts: set[str] = set()
+    deduped: list[dict] = []
+    for q in questions:
+        p = re.sub(r'\s+', ' ', str(q.get('prompt') or '').strip()).lower()
+        if not p or p in seen_prompts:
+            continue
+        seen_prompts.add(p)
+        deduped.append(q)
+        if len(deduped) >= question_count:
+            break
+
+    if not deduped:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='No valid questions generated.')
+
+    created_ids = []
+    for q in deduped:
+        created = assessment_service.create_question(db, payload=q, actor_user_id=current_user.id)
+        created_ids.append(created.id)
+
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_questions_import_text',
+        entity_type='assessment_question',
+        details={
+            'imported_count': len(created_ids),
+            'question_count_requested': question_count,
+            'tags': merged_tags,
+            'difficulty': difficulty,
+            'text_length': len(text),
+        },
+    )
+    usage_service.record_event(
+        db,
+        tenant_id=ctx.tenant.id,
+        event_key='ai.text_import',
+        quantity=float(len(created_ids)),
+        actor_user_id=current_user.id,
+        meta={'question_count_requested': question_count},
+    )
+    db.commit()
+
+    return AssessmentPdfImportResponse(
+        imported_count=len(created_ids),
+        question_ids=created_ids,
+        warnings=warnings,
+    )
+
 
 @router.get('/questions', response_model=AssessmentQuestionListResponse)
 def list_questions(
@@ -800,6 +915,27 @@ def update_test(
     return AssessmentTestOut.model_validate(assessment_service.get_test(db, test.id))
 
 
+@router.delete('/tests/{test_id}', status_code=status.HTTP_204_NO_CONTENT)
+def delete_test(
+    test_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> Response:
+    test = assessment_service.get_test(db, test_id)
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_test_delete',
+        entity_type='assessment_test',
+        entity_id=test.id,
+        details={'title': test.title},
+    )
+    db.delete(test)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post('/tests/{test_id}/versions', response_model=AssessmentTestVersionOut, status_code=status.HTTP_201_CREATED)
 def create_test_version(
     test_id: UUID,
@@ -862,6 +998,70 @@ def publish_test_version(
     )
     db.commit()
     return AssessmentTestVersionOut.model_validate(version)
+
+
+@router.get('/available')
+def list_available_assessments(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
+):
+    now = datetime.now(timezone.utc)
+    window_open = or_(AssessmentDelivery.starts_at.is_(None), AssessmentDelivery.starts_at <= now)
+    window_close = or_(AssessmentDelivery.ends_at.is_(None), AssessmentDelivery.ends_at >= now)
+    visible = or_(
+        AssessmentDelivery.participant_user_id == current_user.id,
+        AssessmentDelivery.audience_type == 'campaign',
+    )
+    base = (
+        select(AssessmentDelivery)
+        .where(visible, window_open, window_close)
+        .options(joinedload(AssessmentDelivery.test_version), joinedload(AssessmentDelivery.attempts))
+        .order_by(AssessmentDelivery.created_at.desc())
+    )
+    deliveries = db.scalars(base).unique().all()
+
+    items = []
+    for d in deliveries:
+        user_attempts = [a for a in d.attempts if a.user_id == current_user.id]
+        latest = max(user_attempts, key=lambda a: a.attempt_number, default=None)
+        completed = any(a.status in ('submitted', 'scored') for a in user_attempts)
+        in_progress = any(a.status == 'in_progress' for a in user_attempts)
+        passed = any(getattr(a, 'passed', False) for a in user_attempts)
+        attempt_status = 'not_started'
+        if passed:
+            attempt_status = 'passed'
+        elif completed:
+            attempt_status = 'completed'
+        elif in_progress:
+            attempt_status = 'in_progress'
+
+        test = None
+        if d.test_version and d.test_version.test_id:
+            from app.models.assessment import AssessmentTest
+            test = db.scalar(select(AssessmentTest).where(AssessmentTest.id == d.test_version.test_id))
+
+        items.append({
+            'delivery_id': str(d.id),
+            'title': d.title,
+            'description': test.description if test else None,
+            'test_title': test.title if test else d.title,
+            'audience_type': d.audience_type,
+            'starts_at': d.starts_at.isoformat() if d.starts_at else None,
+            'ends_at': d.ends_at.isoformat() if d.ends_at else None,
+            'due_date': d.due_date.isoformat() if d.due_date else None,
+            'duration_minutes': d.duration_minutes,
+            'attempts_allowed': d.attempts_allowed,
+            'attempts_used': len(user_attempts),
+            'attempt_status': attempt_status,
+            'latest_score_percent': latest.score_percent if latest and latest.score_percent is not None else None,
+            'passed': passed,
+            'question_count': len(d.test_version.questions) if d.test_version else 0,
+            'passing_score': d.test_version.passing_score if d.test_version else None,
+            'in_progress_attempt_id': latest.id if latest and latest.status == 'in_progress' else None,
+        })
+
+    return {'items': items}
 
 
 @router.post('/deliveries', response_model=AssessmentDeliveryOut, status_code=status.HTTP_201_CREATED)

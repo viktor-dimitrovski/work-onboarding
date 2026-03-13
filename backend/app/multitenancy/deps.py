@@ -10,9 +10,59 @@ from app.core.config import settings
 from app.db.session import get_db, set_tenant_id
 from app.models.rbac import User
 from app.models.tenant import Tenant, TenantMembership
-from app.modules.billing.models import TenantModule
+from app.modules.billing.models import Plan, Subscription, TenantModule
 from app.multitenancy.tenant_resolution import resolve_host
 from app.api.deps import get_current_active_user, get_user_role_names
+
+# All known module keys — kept in sync with admin.py and frontend MODULE_META.
+_ALL_MODULE_KEYS: list[str] = [
+    'tracks', 'assignments', 'assessments', 'reports', 'users',
+    'settings', 'billing', 'releases', 'compliance', 'integration_registry',
+]
+
+
+def _resolve_enabled_modules(db: Session, tenant_id) -> set[str]:
+    """
+    Return the set of module keys that are effectively enabled for a tenant.
+
+    Resolution order (explicit override beats plan default):
+    1. TenantModule row present → use row.enabled.
+    2. No row → use the active plan's module_defaults value (default False).
+
+    This mirrors the logic in admin.py _plan_defaults + _build_module_list so that
+    the sidebar and all access-checks see the same module set as the admin console.
+    """
+    # Explicit override rows (may or may not exist for every key).
+    override_rows = {
+        row.module_key: row.enabled
+        for row in db.scalars(
+            select(TenantModule).where(TenantModule.tenant_id == tenant_id)
+        ).all()
+    }
+
+    # Active subscription plan defaults.
+    plan_defaults: dict[str, bool] = {}
+    sub = db.scalar(
+        select(Subscription)
+        .where(
+            Subscription.tenant_id == tenant_id,
+            Subscription.status.in_(['active', 'trialing']),
+        )
+        .order_by(Subscription.starts_at.desc())
+    )
+    if sub:
+        plan = db.scalar(select(Plan).where(Plan.id == sub.plan_id))
+        if plan and plan.module_defaults:
+            plan_defaults = {k: bool(v) for k, v in plan.module_defaults.items()}
+
+    enabled: set[str] = set()
+    for key in _ALL_MODULE_KEYS:
+        if key in override_rows:
+            if override_rows[key]:
+                enabled.add(key)
+        elif plan_defaults.get(key, False):
+            enabled.add(key)
+    return enabled
 
 
 @dataclass(frozen=True)
@@ -79,12 +129,8 @@ def get_tenant_context(
         if membership:
             roles = membership.roles()
 
-    modules = db.scalars(
-        select(TenantModule.module_key).where(
-            TenantModule.tenant_id == tenant.id, TenantModule.enabled.is_(True)
-        )
-    ).all()
-    return TenantContext(tenant=tenant, membership=membership, roles=roles, enabled_modules=set(modules))
+    enabled = _resolve_enabled_modules(db, tenant.id)
+    return TenantContext(tenant=tenant, membership=membership, roles=roles, enabled_modules=enabled)
 
 
 def require_tenant_membership(

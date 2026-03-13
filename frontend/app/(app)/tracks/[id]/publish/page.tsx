@@ -9,6 +9,7 @@ import { StatusChip } from '@/components/common/status-chip';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { TrackTemplate } from '@/lib/types';
@@ -40,6 +41,12 @@ export default function PublishTrackPage() {
   const publishVersion = async (versionId: string) => {
     if (!accessToken) return;
     await api.post(`/tracks/${id}/publish/${versionId}`, {}, accessToken);
+    await loadTrack();
+  };
+
+  const deleteVersion = async (versionId: string) => {
+    if (!accessToken) return;
+    await api.delete(`/tracks/${id}/versions/${versionId}`, accessToken);
     await loadTrack();
   };
 
@@ -77,15 +84,30 @@ export default function PublishTrackPage() {
                 </CardHeader>
                 <CardContent className='flex items-center justify-between'>
                   <p className='text-sm text-muted-foreground'>Phases: {version.phases.length}</p>
-                  <ConfirmDialog
-                    title='Publish this version?'
-                    description='Publishing this version will archive any currently published version.'
-                    confirmText='Publish'
-                    onConfirm={() => {
-                      void publishVersion(version.id);
-                    }}
-                    trigger={<Button>Publish</Button>}
-                  />
+                  <div className='flex items-center gap-2'>
+                    <ConfirmDialog
+                      title='Delete this version?'
+                      description={`Version ${version.version_number} will be permanently deleted and cannot be recovered.`}
+                      confirmText='Delete'
+                      onConfirm={() => {
+                        void deleteVersion(version.id);
+                      }}
+                      trigger={
+                        <Button variant='ghost' size='icon' className='text-destructive hover:text-destructive'>
+                          <Trash2 className='h-4 w-4' />
+                        </Button>
+                      }
+                    />
+                    <ConfirmDialog
+                      title='Publish this version?'
+                      description='Publishing this version will archive any currently published version.'
+                      confirmText='Publish'
+                      onConfirm={() => {
+                        void publishVersion(version.id);
+                      }}
+                      trigger={<Button>Publish</Button>}
+                    />
+                  </div>
                 </CardContent>
               </Card>
             ))}

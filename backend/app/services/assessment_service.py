@@ -466,7 +466,7 @@ def update_test_version(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Only draft versions can be updated')
 
     for field in ['passing_score', 'time_limit_minutes', 'shuffle_questions', 'attempts_allowed']:
-        if field in payload and payload[field] is not None:
+        if field in payload:
             setattr(version, field, payload[field])
     version.updated_by = actor_user_id
 
@@ -495,6 +495,8 @@ def publish_test_version(db: Session, *, version_id: UUID, actor_user_id: UUID) 
     version = get_test_version(db, version_id)
     if version.status == 'published':
         return version
+    if not version.questions:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='Cannot publish a version with no questions')
     version.status = 'published'
     version.published_at = datetime.now(UTC)
     version.updated_by = actor_user_id

@@ -13,6 +13,11 @@ TASK_TYPE_VALUES = [
     'mentor_approval',
     'file_upload',
     'assessment_test',
+    'training',
+    'presentation',
+    'discussion',
+    'diagram',
+    'procedure',
 ]
 RESOURCE_TYPE_VALUES = [
     'markdown_text',

@@ -123,7 +123,7 @@ class TrackTask(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
         ),
         UniqueConstraint('track_phase_id', 'order_index', name='uq_track_tasks_phase_order'),
         CheckConstraint(
-            "task_type in ('read_material', 'video', 'checklist', 'quiz', 'code_assignment', 'external_link', 'mentor_approval', 'file_upload', 'assessment_test')",
+            "task_type in ('read_material', 'video', 'checklist', 'quiz', 'code_assignment', 'external_link', 'mentor_approval', 'file_upload', 'assessment_test', 'training', 'presentation', 'discussion', 'diagram', 'procedure')",
             name='track_task_type_values',
         ),
     )

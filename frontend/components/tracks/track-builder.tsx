@@ -31,7 +31,12 @@ export type TaskType =
   | 'external_link'
   | 'mentor_approval'
   | 'file_upload'
-  | 'assessment_test';
+  | 'assessment_test'
+  | 'training'
+  | 'presentation'
+  | 'discussion'
+  | 'diagram'
+  | 'procedure';
 
 export type QuizQuestion = {
   type: 'single' | 'multi';
@@ -418,12 +423,7 @@ export function TrackBuilder({
                 className='rounded-xl border-2 border-border bg-card shadow-sm transition-colors data-[state=open]:border-primary/40'
               >
                 <AccordionPrimitive.Header className='flex'>
-                  <div
-                    className={cn(
-                      'flex flex-1 items-start justify-between gap-3 px-4 py-3 text-left',
-                      openPhaseId === phase.client_id ? 'bg-primary/5' : 'hover:bg-muted/30',
-                    )}
-                  >
+                  <div className='flex flex-1 items-start justify-between gap-3 px-4 py-3 text-left'>
                     <div className='text-left'>
                       <div className='flex items-center gap-2'>
                         <Badge variant='secondary'>Phase {phaseIndex + 1}</Badge>
@@ -475,16 +475,12 @@ export function TrackBuilder({
                       <AccordionPrimitive.Trigger
                         aria-label='Toggle phase'
                         className={cn(
-                          'flex h-9 w-9 items-center justify-center rounded-md border border-border bg-white text-muted-foreground transition hover:text-foreground',
-                          openPhaseId === phase.client_id ? 'bg-muted/30' : 'bg-white',
+                          'flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:text-foreground',
+                          'data-[state=open]:bg-muted/30 data-[state=closed]:bg-white',
+                          '[&>svg]:transition-transform [&>svg]:duration-200 data-[state=open]:[&>svg]:rotate-180',
                         )}
-                        onClick={() =>
-                          setOpenPhaseId((current) => (current === phase.client_id ? null : phase.client_id))
-                        }
                       >
-                        <span className='[&>svg]:transition-transform [&>svg]:duration-200 data-[state=open]:[&>svg]:rotate-180'>
-                          <ChevronDown className='h-4 w-4' />
-                        </span>
+                        <ChevronDown className='h-4 w-4' />
                       </AccordionPrimitive.Trigger>
                     </div>
                   </div>

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { SingleSelect } from '@/components/inputs/single-select';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -27,8 +28,7 @@ export default function NewAssignmentPage() {
   const { hasModule, hasPermission, isLoading: tenantLoading } = useTenant();
   const router = useRouter();
 
-  const [employees, setEmployees] = useState<UserRow[]>([]);
-  const [mentors, setMentors] = useState<UserRow[]>([]);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [publishedVersions, setPublishedVersions] = useState<
     Array<{ templateId: string; versionId: string; label: string }>
   >([]);
@@ -52,16 +52,11 @@ export default function NewAssignmentPage() {
       if (!accessToken) return;
 
       const [usersResponse, tracksResponse] = await Promise.all([
-        api.get<UserListResponse>('/users?page=1&page_size=100', accessToken),
+        api.get<UserListResponse>('/users?page=1&page_size=200', accessToken),
         api.get<TrackListResponse>('/tracks?page=1&page_size=100', accessToken),
       ]);
 
-      const employeeRows = usersResponse.items.filter((user) =>
-        (user.tenant_roles ?? (user.tenant_role ? [user.tenant_role] : [])).includes('member'),
-      );
-      const mentorRows = usersResponse.items.filter((user) =>
-        (user.tenant_roles ?? (user.tenant_role ? [user.tenant_role] : [])).includes('mentor'),
-      );
+      const activeUsers = usersResponse.items.filter((user) => user.tenant_status !== 'disabled');
 
       const versions = tracksResponse.items
         .filter((track) => track.is_active)
@@ -76,12 +71,10 @@ export default function NewAssignmentPage() {
         )
         .sort((a, b) => a.label.localeCompare(b.label));
 
-      setEmployees(employeeRows);
-      setMentors(mentorRows);
+      setUsers(activeUsers);
       setPublishedVersions(versions);
 
-      if (employeeRows[0]) setEmployeeId(employeeRows[0].id);
-      if (mentorRows[0]) setMentorId(mentorRows[0].id);
+      if (activeUsers[0]) setEmployeeId(activeUsers[0].id);
       if (versions[0]) setTrackVersionId(versions[0].versionId);
     };
 
@@ -132,48 +125,43 @@ export default function NewAssignmentPage() {
         <CardContent className='grid gap-4 md:grid-cols-2'>
           <div className='space-y-2'>
             <Label>Employee</Label>
-            <select
+            <SingleSelect
               value={employeeId}
-              onChange={(event) => setEmployeeId(event.target.value)}
-              className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
-            >
-              {employees.map((employee) => (
-                <option key={employee.id} value={employee.id}>
-                  {employee.full_name} ({employee.email})
-                </option>
-              ))}
-            </select>
+              onChange={setEmployeeId}
+              placeholder='Select employee…'
+              options={users.map((u) => ({
+                value: u.id,
+                label: u.full_name ? `${u.full_name} (${u.email})` : u.email,
+              }))}
+            />
           </div>
 
           <div className='space-y-2'>
             <Label>Mentor</Label>
-            <select
+            <SingleSelect
               value={mentorId}
-              onChange={(event) => setMentorId(event.target.value)}
-              className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
-            >
-              <option value=''>No mentor</option>
-              {mentors.map((mentor) => (
-                <option key={mentor.id} value={mentor.id}>
-                  {mentor.full_name} ({mentor.email})
-                </option>
-              ))}
-            </select>
+              onChange={setMentorId}
+              placeholder='No mentor'
+              options={[
+                { value: '', label: 'No mentor' },
+                ...users
+                  .filter((u) => u.id !== employeeId)
+                  .map((u) => ({
+                    value: u.id,
+                    label: u.full_name ? `${u.full_name} (${u.email})` : u.email,
+                  })),
+              ]}
+            />
           </div>
 
           <div className='space-y-2 md:col-span-2'>
             <Label>Published track version</Label>
-            <select
+            <SingleSelect
               value={trackVersionId}
-              onChange={(event) => setTrackVersionId(event.target.value)}
-              className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
-            >
-              {publishedVersions.map((version) => (
-                <option key={version.versionId} value={version.versionId}>
-                  {version.label}
-                </option>
-              ))}
-            </select>
+              onChange={setTrackVersionId}
+              placeholder='Select track version…'
+              options={publishedVersions.map((v) => ({ value: v.versionId, label: v.label }))}
+            />
           </div>
 
           <div className='space-y-2'>

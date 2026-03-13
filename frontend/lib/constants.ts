@@ -8,6 +8,11 @@ export const taskTypeOptions = [
   'mentor_approval',
   'file_upload',
   'assessment_test',
+  'training',
+  'presentation',
+  'discussion',
+  'diagram',
+  'procedure',
 ] as const;
 
 export const roleOptions = ['super_admin'] as const;
@@ -37,7 +42,7 @@ export const tenantRoleGroups: TenantRoleGroup[] = [
   {
     label: 'Assessments',
     moduleKey: 'assessments',
-    roles: ['assessments_editor'],
+    roles: ['assessments_viewer', 'assessments_editor'],
   },
   {
     label: 'Reports',
@@ -90,6 +95,7 @@ const ROLE_DISPLAY_NAMES: Record<string, string> = {
   release_viewer: 'Release Viewer',
   release_editor: 'Release Editor',
   tracks_editor: 'Tracks Editor',
+  assessments_viewer: 'Assessments Viewer',
   assessments_editor: 'Assessments Editor',
   reports_viewer: 'Reports Viewer',
   settings_manager: 'Settings Manager',

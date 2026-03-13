@@ -11,6 +11,7 @@ from app.models.assignment import OnboardingAssignment
 from app.models.rbac import User
 from app.multitenancy.permissions import require_access
 from app.schemas.common import PaginationMeta
+from app.models.track import TrackVersion
 from app.schemas.track import (
     DuplicateTrackResponse,
     PublishTrackResponse,
@@ -318,6 +319,40 @@ def cascade_delete_track(
     )
     db.commit()
     return TrackCascadeDeleteResponse(template_id=template_id, deleted_assignments=deleted_assignments)
+
+
+@router.delete('/{template_id}/versions/{version_id}', status_code=status.HTTP_204_NO_CONTENT)
+def delete_track_version(
+    template_id: UUID,
+    version_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('tracks', 'tracks:write')),
+) -> Response:
+    version = db.scalar(
+        select(TrackVersion).where(
+            TrackVersion.id == version_id,
+            TrackVersion.template_id == template_id,
+        )
+    )
+    if not version:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Version not found')
+    if version.status != 'draft':
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Only draft versions can be deleted',
+        )
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='track_version_delete',
+        entity_type='track_version',
+        entity_id=version.id,
+        details={'template_id': str(template_id), 'version_number': version.version_number},
+    )
+    db.delete(version)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post('/{template_id}/publish/{version_id}', response_model=PublishTrackResponse)

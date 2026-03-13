@@ -121,7 +121,10 @@ export function TaskDetailsSheet({ open, onOpenChange, task, phase, onUpdateTask
     ]);
   };
 
-  const isResourceTask = ['read_material', 'video', 'external_link', 'code_assignment'].includes(task.task_type);
+  const isResourceTask = [
+    'read_material', 'video', 'external_link', 'code_assignment',
+    'training', 'presentation', 'discussion', 'diagram', 'procedure',
+  ].includes(task.task_type);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

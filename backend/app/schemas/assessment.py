@@ -179,6 +179,13 @@ class AssessmentPdfImportResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class AssessmentTextImportIn(BaseModel):
+    text: str = Field(..., min_length=50, max_length=200_000, description='Plain text or Markdown to generate questions from')
+    question_count: int = Field(20, ge=1, le=100)
+    tags: str = Field('', description='Comma-separated tag list')
+    difficulty: str | None = None
+
+
 class AssessmentTestCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = None
