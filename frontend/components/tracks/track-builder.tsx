@@ -173,7 +173,7 @@ export function TrackBuilder({
   };
 
   const [quickAddInputs, setQuickAddInputs] = useState<Record<string, QuickAddState>>({});
-  const [openPhaseId, setOpenPhaseId] = useState<string | null>(phases[0]?.client_id ?? null);
+  const [openPhaseIds, setOpenPhaseIds] = useState<string[]>(phases[0]?.client_id ? [phases[0].client_id] : []);
   const [phaseToDelete, setPhaseToDelete] = useState<string | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<{ phaseId: string; taskId: string } | null>(null);
 
@@ -206,18 +206,20 @@ export function TrackBuilder({
   };
 
   useEffect(() => {
-    if (!openPhaseId && phases[0]) {
-      setOpenPhaseId(phases[0].client_id);
+    if (openPhaseIds.length === 0 && phases[0]) {
+      setOpenPhaseIds([phases[0].client_id]);
       return;
     }
-    if (openPhaseId && !phases.some((phase) => phase.client_id === openPhaseId)) {
-      setOpenPhaseId(phases[0]?.client_id ?? null);
+    // Remove any open IDs that no longer exist in the phases list
+    const validIds = openPhaseIds.filter((id) => phases.some((phase) => phase.client_id === id));
+    if (validIds.length !== openPhaseIds.length) {
+      setOpenPhaseIds(validIds.length > 0 ? validIds : phases[0] ? [phases[0].client_id] : []);
     }
-  }, [openPhaseId, phases]);
+  }, [openPhaseIds, phases]);
 
   useEffect(() => {
     if (selectedPhaseId) {
-      setOpenPhaseId(selectedPhaseId);
+      setOpenPhaseIds((prev) => prev.includes(selectedPhaseId) ? prev : [...prev, selectedPhaseId]);
     }
   }, [selectedPhaseId]);
 
@@ -236,7 +238,7 @@ export function TrackBuilder({
     if (!selectedTaskLocation) return;
     const phase = phases[selectedTaskLocation.phaseIndex];
     if (phase) {
-      setOpenPhaseId(phase.client_id);
+      setOpenPhaseIds((prev) => prev.includes(phase.client_id) ? prev : [...prev, phase.client_id]);
     }
   }, [selectedTaskLocation, phases]);
 
@@ -394,7 +396,7 @@ export function TrackBuilder({
     const newPhase = createEmptyPhase(phases.length);
     const next = normalizePhaseOrder([...phases, newPhase]);
     setPhases(next);
-    setOpenPhaseId(newPhase.client_id);
+    setOpenPhaseIds((prev) => prev.includes(newPhase.client_id) ? prev : [...prev, newPhase.client_id]);
   };
 
   return (
@@ -408,10 +410,9 @@ export function TrackBuilder({
       </CardHeader>
       <CardContent className='space-y-5 pb-8'>
         <Accordion
-          type='single'
-          collapsible
-          value={openPhaseId ?? undefined}
-          onValueChange={(value) => setOpenPhaseId(value || null)}
+          type='multiple'
+          value={openPhaseIds}
+          onValueChange={setOpenPhaseIds}
           className='space-y-5'
         >
           {phases.map((phase, phaseIndex) => {

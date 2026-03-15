@@ -197,8 +197,31 @@ export default function AssessmentTestsPage() {
               <Input value={category} onChange={(e) => setCategory(e.target.value)} />
             </div>
             <div className='space-y-2'>
-              <Label>Role target</Label>
-              <Input value={roleTarget} onChange={(e) => setRoleTarget(e.target.value)} />
+              <Label htmlFor='role-target'>Target audience <span className='text-muted-foreground font-normal'>(optional)</span></Label>
+              <p className='text-[11px] text-muted-foreground'>
+                Which job role or group is this test intended for? Used for display and filtering only — it does not restrict who can take the test.
+              </p>
+              <input
+                id='role-target'
+                list='role-target-suggestions'
+                value={roleTarget}
+                onChange={(e) => setRoleTarget(e.target.value)}
+                placeholder='e.g. All employees, Developer, Manager…'
+                className='flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+              />
+              <datalist id='role-target-suggestions'>
+                <option value='All employees' />
+                <option value='New hires' />
+                <option value='Developer' />
+                <option value='Manager' />
+                <option value='Team Lead' />
+                <option value='Sales' />
+                <option value='Customer Support' />
+                <option value='Finance' />
+                <option value='HR' />
+                <option value='Operations' />
+                <option value='Compliance Officer' />
+              </datalist>
             </div>
             {error && <p className='text-sm text-destructive'>{error}</p>}
           </div>

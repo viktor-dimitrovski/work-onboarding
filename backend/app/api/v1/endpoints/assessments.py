@@ -24,6 +24,7 @@ from app.schemas.assessment import (
     AssessmentDeliveryCreate,
     AssessmentDeliveryListResponse,
     AssessmentDeliveryOut,
+    AssessmentDeliveryUpdate,
     AssessmentQuestionCreate,
     AssessmentQuestionListResponse,
     AssessmentQuestionOut,
@@ -1120,6 +1121,61 @@ def get_delivery(
     perms = permissions_for_roles(ctx.roles)
     if 'assessments:write' not in perms and delivery.participant_user_id not in (None, current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Forbidden delivery')
+    return AssessmentDeliveryOut.model_validate(delivery)
+
+
+@router.patch('/deliveries/{delivery_id}', response_model=AssessmentDeliveryOut)
+def update_delivery(
+    delivery_id: UUID,
+    payload: AssessmentDeliveryUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentDeliveryOut:
+    delivery = db.scalar(select(AssessmentDelivery).where(AssessmentDelivery.id == delivery_id))
+    if not delivery:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Delivery not found')
+    delivery.starts_at = payload.starts_at
+    delivery.ends_at = payload.ends_at
+    delivery.due_date = payload.due_date
+    delivery.attempts_allowed = payload.attempts_allowed
+    if payload.duration_minutes is not None:
+        delivery.duration_minutes = payload.duration_minutes
+    else:
+        delivery.duration_minutes = None
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_delivery_update',
+        entity_type='assessment_delivery',
+        entity_id=delivery.id,
+    )
+    db.commit()
+    db.refresh(delivery)
+    return AssessmentDeliveryOut.model_validate(delivery)
+
+
+@router.post('/deliveries/{delivery_id}/stop', response_model=AssessmentDeliveryOut)
+def stop_delivery(
+    delivery_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentDeliveryOut:
+    """Immediately close a delivery by setting ends_at to now."""
+    delivery = db.scalar(select(AssessmentDelivery).where(AssessmentDelivery.id == delivery_id))
+    if not delivery:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Delivery not found')
+    delivery.ends_at = datetime.now(timezone.utc)
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_delivery_stop',
+        entity_type='assessment_delivery',
+        entity_id=delivery.id,
+    )
+    db.commit()
+    db.refresh(delivery)
     return AssessmentDeliveryOut.model_validate(delivery)
 
 

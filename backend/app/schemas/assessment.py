@@ -281,6 +281,14 @@ class AssessmentDeliveryCreate(BaseModel):
     due_date: date | None = None
 
 
+class AssessmentDeliveryUpdate(BaseModel):
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    due_date: date | None = None
+    attempts_allowed: int = Field(default=1, ge=1)
+    duration_minutes: int | None = None
+
+
 class AssessmentDeliveryOut(BaseSchema):
     id: UUID
     test_version_id: UUID
