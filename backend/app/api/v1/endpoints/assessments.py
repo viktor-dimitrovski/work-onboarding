@@ -1187,6 +1187,8 @@ def start_attempt(
     __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> AssessmentAttemptStartOut:
     attempt = assessment_service.start_attempt(db, delivery_id=delivery_id, user_id=current_user.id)
+    db.commit()
+    db.refresh(attempt)
     version = assessment_service.get_test_version(db, attempt.delivery.test_version_id)
     questions = assessment_service._build_attempt_questions(version, attempt.question_order)
     return AssessmentAttemptStartOut(
