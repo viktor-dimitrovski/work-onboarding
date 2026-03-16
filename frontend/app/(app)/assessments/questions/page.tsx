@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { QuestionEditorSheet } from '@/components/assessments/question-editor-sheet';
@@ -285,6 +285,16 @@ export default function AssessmentQuestionsPage() {
   const [textImporting, setTextImporting] = useState(false);
   const [textImportError, setTextImportError] = useState<string | null>(null);
   const [textImportResult, setTextImportResult] = useState<PdfImportResponse | null>(null);
+  const [textImportProgress, setTextImportProgress] = useState(0);
+  const [textImportPhase, setTextImportPhase] = useState('');
+  const [textImportJobId, setTextImportJobId] = useState<string | null>(null);
+  const [textImportCancelling, setTextImportCancelling] = useState(false);
+  const textImportPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const IMPORT_JOB_KEY = 'textImportJobId';
+  const [dedupePreview, setDedupePreview] = useState<{ duplicate_groups: number; archived_count: number } | null>(null);
+  const [dedupeRunning, setDedupeRunning] = useState(false);
+  const [dedupeError, setDedupeError] = useState<string | null>(null);
   const [classifyOpen, setClassifyOpen] = useState(false);
   const [classifyJob, setClassifyJob] = useState<AssessmentClassificationJob | null>(null);
   const [classifyError, setClassifyError] = useState<string | null>(null);
@@ -412,6 +422,35 @@ export default function AssessmentQuestionsPage() {
     setSelectedQuestionIds((prev) => prev.filter((id) => questions.some((question) => question.id === id)));
   }, [questions]);
 
+  // Resume polling if a job was running before a page refresh
+  useEffect(() => {
+    if (!accessToken) return;
+    const savedJobId = localStorage.getItem(IMPORT_JOB_KEY);
+    if (!savedJobId) return;
+
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '/api/v1';
+    // Peek at the job status; only resume if it is still running
+    fetch(`${apiBase}/assessments/questions/import-jobs/${savedJobId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then((job) => {
+        if (!job || job.status !== 'running') {
+          localStorage.removeItem(IMPORT_JOB_KEY);
+          return;
+        }
+        // Restore in-progress state and open the sheet
+        setTextImportJobId(savedJobId);
+        setTextImporting(true);
+        setTextImportProgress(job.percent ?? 0);
+        setTextImportPhase(job.phase ?? 'Resuming…');
+        setTextImportOpen(true);
+        startPolling(savedJobId, accessToken, apiBase);
+      })
+      .catch(() => localStorage.removeItem(IMPORT_JOB_KEY));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
+
   const availableTags = useMemo(() => {
     const tags = new Set<string>();
     questions.forEach((question) => {
@@ -422,6 +461,84 @@ export default function AssessmentQuestionsPage() {
     });
     return Array.from(tags).sort((a, b) => a.localeCompare(b));
   }, [questions]);
+
+  type ImportJobStatus = {
+    status: string;
+    percent: number;
+    phase: string;
+    questions_created: number;
+    total_chunks: number;
+    done_chunks: number;
+    cancel_requested?: boolean;
+    warnings?: string[];
+    error?: string | null;
+    imported_count?: number | null;
+    question_ids?: string[] | null;
+  };
+
+  const startPolling = (jobId: string, token: string, apiBase: string) => {
+    if (textImportPollRef.current) clearInterval(textImportPollRef.current);
+
+    textImportPollRef.current = setInterval(async () => {
+      try {
+        const pollResp = await fetch(`${apiBase}/assessments/questions/import-jobs/${jobId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!pollResp.ok) {
+          clearInterval(textImportPollRef.current!);
+          textImportPollRef.current = null;
+          setTextImportError(`Polling failed (${pollResp.status})`);
+          setTextImporting(false);
+          setTextImportCancelling(false);
+          localStorage.removeItem(IMPORT_JOB_KEY);
+          return;
+        }
+
+        const job = (await pollResp.json()) as ImportJobStatus;
+        setTextImportProgress(job.percent);
+        setTextImportPhase(job.phase);
+
+        if (job.status === 'done') {
+          clearInterval(textImportPollRef.current!);
+          textImportPollRef.current = null;
+          setTextImportProgress(100);
+          setTextImportResult({
+            imported_count: job.imported_count ?? job.questions_created,
+            question_ids: job.question_ids ?? [],
+            warnings: job.warnings ?? [],
+          });
+          setTextImporting(false);
+          setTextImportCancelling(false);
+          setTextImportJobId(null);
+          localStorage.removeItem(IMPORT_JOB_KEY);
+          await load();
+        } else if (job.status === 'cancelled') {
+          clearInterval(textImportPollRef.current!);
+          textImportPollRef.current = null;
+          setTextImportError('Import was cancelled.');
+          setTextImportProgress(0);
+          setTextImportPhase('');
+          setTextImporting(false);
+          setTextImportCancelling(false);
+          setTextImportJobId(null);
+          localStorage.removeItem(IMPORT_JOB_KEY);
+        } else if (job.status === 'error') {
+          clearInterval(textImportPollRef.current!);
+          textImportPollRef.current = null;
+          setTextImportError(job.error ?? 'Import failed on the server.');
+          setTextImportProgress(0);
+          setTextImportPhase('');
+          setTextImporting(false);
+          setTextImportCancelling(false);
+          setTextImportJobId(null);
+          localStorage.removeItem(IMPORT_JOB_KEY);
+        }
+      } catch {
+        // network hiccup – keep polling
+      }
+    }, 2000);
+  };
 
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -607,6 +724,30 @@ export default function AssessmentQuestionsPage() {
           <Button variant='outline' onClick={() => setTextImportOpen(true)}>
             Import Text
           </Button>
+          <Button
+            variant='outline'
+            onClick={async () => {
+              if (!accessToken) return;
+              setDedupeRunning(true);
+              setDedupeError(null);
+              setDedupePreview(null);
+              try {
+                const result = await api.post<{ duplicate_groups: number; archived_count: number; dry_run: boolean }>(
+                  '/assessments/questions/deduplicate?dry_run=true',
+                  {},
+                  accessToken,
+                );
+                setDedupePreview(result);
+              } catch (err) {
+                setDedupeError(err instanceof Error ? err.message : 'Failed to scan for duplicates');
+              } finally {
+                setDedupeRunning(false);
+              }
+            }}
+            disabled={dedupeRunning}
+          >
+            {dedupeRunning ? 'Scanning…' : 'Remove duplicates'}
+          </Button>
           <Button variant='outline' onClick={() => setClassifyOpen(true)}>
             <Sparkles className='mr-2 h-4 w-4' />
             Smart classify
@@ -677,6 +818,12 @@ export default function AssessmentQuestionsPage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {dedupeError && (
+        <p className='rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive'>
+          {dedupeError}
+        </p>
       )}
 
       <div className='grid gap-6 lg:grid-cols-[240px,1fr]'>
@@ -1329,12 +1476,21 @@ export default function AssessmentQuestionsPage() {
         onOpenChange={(open) => {
           setTextImportOpen(open);
           if (!open) {
-            setTextImportError(null);
-            setTextImportResult(null);
-            setTextImportText('');
-            setTextImportCount(20);
-            setTextImportTags('');
-            setTextImportDifficulty('');
+            // If import is running, keep polling in the background – don't reset state.
+            // The resume-on-refresh effect will reopen the sheet if needed.
+            if (!textImporting) {
+              if (textImportPollRef.current) { clearInterval(textImportPollRef.current); textImportPollRef.current = null; }
+              setTextImportError(null);
+              setTextImportResult(null);
+              setTextImportText('');
+              setTextImportCount(20);
+              setTextImportTags('');
+              setTextImportDifficulty('');
+              setTextImportProgress(0);
+              setTextImportPhase('');
+              setTextImportJobId(null);
+              setTextImportCancelling(false);
+            }
           }
         }}
       >
@@ -1404,14 +1560,55 @@ export default function AssessmentQuestionsPage() {
               </div>
             </div>
 
+            {/* Progress */}
+            {textImporting && (
+              <div className='space-y-2 rounded-lg border bg-muted/20 p-4'>
+                <div className='flex items-center justify-between text-xs'>
+                  <span className='text-muted-foreground'>{textImportPhase}</span>
+                  <span className='tabular-nums font-medium'>{Math.round(textImportProgress)}%</span>
+                </div>
+                <Progress value={textImportProgress} className='h-2' />
+                <div className='flex items-center justify-between'>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Generating {textImportCount} question{textImportCount !== 1 ? 's' : ''} — this may take up to a minute for large batches.
+                  </p>
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='sm'
+                    className='h-6 px-2 text-[11px] text-destructive hover:text-destructive'
+                    disabled={textImportCancelling}
+                    onClick={async () => {
+                      if (!accessToken || !textImportJobId) return;
+                      setTextImportCancelling(true);
+                      const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '/api/v1';
+                      try {
+                        await fetch(`${apiBase}/assessments/questions/import-jobs/${textImportJobId}/cancel`, {
+                          method: 'POST',
+                          headers: { Authorization: `Bearer ${accessToken}` },
+                        });
+                        setTextImportPhase('Cancellation requested…');
+                      } catch {
+                        setTextImportCancelling(false);
+                      }
+                    }}
+                  >
+                    {textImportCancelling ? 'Stopping…' : 'Stop import'}
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {textImportError && <p className='text-sm text-destructive'>{textImportError}</p>}
             {textImportResult && (
-              <div className='rounded-md border bg-muted/20 p-3 text-sm'>
-                <p className='font-medium'>Imported {textImportResult.imported_count} questions</p>
+              <div className='rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm'>
+                <p className='font-semibold text-emerald-800'>
+                  ✓ Imported {textImportResult.imported_count} question{textImportResult.imported_count !== 1 ? 's' : ''}
+                </p>
                 {textImportResult.warnings && textImportResult.warnings.length > 0 && (
-                  <div className='mt-2 space-y-1 text-xs text-muted-foreground'>
+                  <div className='mt-2 space-y-1 text-xs text-emerald-700'>
                     {textImportResult.warnings.slice(0, 6).map((w, idx) => (
-                      <p key={idx}>- {w}</p>
+                      <p key={idx}>· {w}</p>
                     ))}
                   </div>
                 )}
@@ -1424,21 +1621,26 @@ export default function AssessmentQuestionsPage() {
               type='button'
               variant='outline'
               onClick={() => setTextImportOpen(false)}
-              disabled={textImporting}
             >
-              Close
+              {textImporting ? 'Close (runs in background)' : 'Close'}
             </Button>
             <Button
               type='button'
               disabled={!accessToken || textImporting || textImportText.trim().length < 50}
               onClick={async () => {
                 if (!accessToken) return;
+
                 setTextImporting(true);
                 setTextImportError(null);
                 setTextImportResult(null);
+                setTextImportProgress(0);
+                setTextImportPhase('Starting…');
+
+                const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '/api/v1';
+
                 try {
-                  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '/api/v1';
-                  const resp = await fetch(`${apiBase}/assessments/questions/import-text`, {
+                  // 1. Start the background job (returns immediately with job_id)
+                  const startResp = await fetch(`${apiBase}/assessments/questions/import-text`, {
                     method: 'POST',
                     headers: {
                       Authorization: `Bearer ${accessToken}`,
@@ -1452,17 +1654,24 @@ export default function AssessmentQuestionsPage() {
                     }),
                   });
 
-                  if (!resp.ok) {
-                    const text = await resp.text();
-                    throw new Error(text || `Import failed (${resp.status})`);
+                  if (!startResp.ok) {
+                    const errText = await startResp.text();
+                    throw new Error(errText || `Import failed (${startResp.status})`);
                   }
 
-                  const data = (await resp.json()) as PdfImportResponse;
-                  setTextImportResult(data);
-                  await load();
+                  const { job_id } = (await startResp.json()) as { job_id: string; total_chunks: number };
+
+                  // Persist so polling can resume after a page refresh
+                  setTextImportJobId(job_id);
+                  localStorage.setItem(IMPORT_JOB_KEY, job_id);
+
+                  // 2. Poll job status every 2 s
+                  startPolling(job_id, accessToken, apiBase);
                 } catch (err) {
+                  if (textImportPollRef.current) { clearInterval(textImportPollRef.current); textImportPollRef.current = null; }
+                  setTextImportProgress(0);
+                  setTextImportPhase('');
                   setTextImportError(err instanceof Error ? err.message : 'Failed to import text');
-                } finally {
                   setTextImporting(false);
                 }
               }}
@@ -1484,6 +1693,35 @@ export default function AssessmentQuestionsPage() {
           const ids = archiveTarget.ids;
           setArchiveTarget(null);
           void archiveQuestions(ids);
+        }}
+      />
+
+      <ConfirmDialog
+        title='Remove duplicate questions?'
+        description={
+          dedupePreview
+            ? dedupePreview.archived_count === 0
+              ? 'No duplicate questions found — your question bank is already clean.'
+              : `Found ${dedupePreview.duplicate_groups} duplicate group${dedupePreview.duplicate_groups !== 1 ? 's' : ''}. This will archive ${dedupePreview.archived_count} duplicate question${dedupePreview.archived_count !== 1 ? 's' : ''}, keeping the best copy of each. Archived questions are not deleted and can be reviewed later.`
+            : ''
+        }
+        confirmText={dedupePreview?.archived_count === 0 ? 'OK' : dedupeRunning ? 'Archiving…' : 'Archive duplicates'}
+        open={!!dedupePreview}
+        onOpenChange={(open) => { if (!open) { setDedupePreview(null); setDedupeError(null); } }}
+        onConfirm={async () => {
+          if (!accessToken || !dedupePreview) return;
+          if (dedupePreview.archived_count === 0) { setDedupePreview(null); return; }
+          setDedupeRunning(true);
+          try {
+            await api.post('/assessments/questions/deduplicate?dry_run=false', {}, accessToken);
+            setDedupePreview(null);
+            await load();
+          } catch (err) {
+            setDedupeError(err instanceof Error ? err.message : 'Failed to remove duplicates');
+            setDedupePreview(null);
+          } finally {
+            setDedupeRunning(false);
+          }
         }}
       />
 

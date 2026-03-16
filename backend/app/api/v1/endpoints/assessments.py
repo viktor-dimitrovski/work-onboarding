@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import json
 import re
-from uuid import UUID
+import threading
+import time
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, UploadFile, File, Form, status
 from sqlalchemy import func, or_, select
@@ -32,8 +35,11 @@ from app.schemas.assessment import (
     AssessmentQuestionUpdate,
     AssessmentQuestionsBulkUpdate,
     AssessmentBulkUpdateResult,
+    AssessmentDeduplicateResult,
     AssessmentPdfImportResponse,
     AssessmentTextImportIn,
+    AssessmentTextImportJobStart,
+    AssessmentTextImportJobStatus,
     AssessmentResultListResponse,
     AssessmentResultSummary,
     AssessmentTestCreate,
@@ -52,6 +58,59 @@ from app.services.pdf_extract_service import chunk_pages, extract_pdf_pages_text
 
 
 router = APIRouter(prefix='/assessments', tags=['assessments'])
+
+
+# ---------------------------------------------------------------------------
+# Job store for text-import background jobs.
+# Uses Redis when available (cross-process safe); falls back to an in-process
+# dict protected by a lock (works fine for single-worker deployments).
+# ---------------------------------------------------------------------------
+_JOB_TTL = 600  # seconds
+_JOB_KEY_PREFIX = 'import_job:'
+
+# In-memory fallback
+_mem_jobs: dict[str, dict] = {}
+_mem_jobs_lock = threading.Lock()
+
+
+def _job_key(job_id: str) -> str:
+    return f'{_JOB_KEY_PREFIX}{job_id}'
+
+
+def _write_job(job_id: str, data: dict) -> None:
+    from app.core.redis_client import redis_client
+    if redis_client is not None:
+        redis_client.set(_job_key(job_id), json.dumps(data), ex=_JOB_TTL)
+    else:
+        with _mem_jobs_lock:
+            _mem_jobs[job_id] = {**data, '_ts': time.monotonic()}
+        _prune_mem_jobs()
+
+
+def _read_job(job_id: str) -> dict | None:
+    from app.core.redis_client import redis_client
+    if redis_client is not None:
+        raw = redis_client.get(_job_key(job_id))
+        return json.loads(raw) if raw else None
+    with _mem_jobs_lock:
+        return _mem_jobs.get(job_id)
+
+
+def _update_job(job_id: str, **fields: object) -> None:
+    """Patch specific fields on an existing job (read-modify-write)."""
+    data = _read_job(job_id)
+    if data is None:
+        return
+    data.update(fields)
+    _write_job(job_id, data)
+
+
+def _prune_mem_jobs() -> None:
+    now = time.monotonic()
+    with _mem_jobs_lock:
+        stale = [jid for jid, j in _mem_jobs.items() if j.get('status') != 'running' and now - j.get('_ts', now) > _JOB_TTL]
+        for jid in stale:
+            del _mem_jobs[jid]
 
 IMPORT_SYSTEM_PROMPT = """You extract high-quality multiple-choice assessment questions from technical text.
 Return compact JSON only (no prose).
@@ -315,117 +374,248 @@ def import_questions_from_pdf(
     )
 
 
-@router.post('/questions/import-text', response_model=AssessmentPdfImportResponse, status_code=status.HTTP_201_CREATED)
+def _split_text_chunks(text: str, chunk_size: int = 8_000) -> list[str]:
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    chunks: list[str] = []
+    buf: list[str] = []
+    buf_size = 0
+    for para in paragraphs:
+        if buf_size + len(para) > chunk_size and buf:
+            chunks.append('\n\n'.join(buf))
+            buf = []
+            buf_size = 0
+        buf.append(para)
+        buf_size += len(para) + 2
+    if buf:
+        chunks.append('\n\n'.join(buf))
+    return chunks
+
+
+def _run_text_import_job(
+    job_id: str,
+    text_chunks: list[str],
+    question_count: int,
+    merged_tags: list[str],
+    difficulty: str | None,
+    tenant_id: str,
+    user_id: UUID,
+    tenant_db_id: UUID,
+) -> None:
+    """Background thread: calls OpenAI per chunk, saves questions, updates Redis job state."""
+    from app.db.session import SessionLocal, set_tenant_id  # local import to avoid circular refs
+
+    questions: list[dict] = []
+    remaining = question_count
+    warnings: list[str] = []
+
+    def _is_cancelled() -> bool:
+        job = _read_job(job_id)
+        return bool(job and job.get('cancel_requested'))
+
+    try:
+        for i, chunk in enumerate(text_chunks):
+            if remaining <= 0:
+                break
+            if _is_cancelled():
+                _update_job(job_id, status='cancelled', phase='Cancelled by user.')
+                return
+            _update_job(job_id, phase=f'Generating questions… (chunk {i + 1} of {len(text_chunks)})')
+            per_chunk = min(remaining, 25)
+            prompt = (
+                f'Generate exactly {per_chunk} questions as JSON.\n'
+                f'Difficulty: {difficulty or "mixed"}\n'
+                f'Tags to include on every question: {merged_tags}\n\n'
+                f'Content:\n{chunk}'
+            )
+            try:
+                payload = call_openai_responses_json(
+                    instructions=IMPORT_SYSTEM_PROMPT,
+                    input_text=prompt,
+                    schema_name='assessment_questions_import',
+                    schema=IMPORT_JSON_SCHEMA,
+                    temperature=0.3,
+                    timeout_ms=120_000,
+                )
+            except Exception as exc:
+                warnings.append(f'Chunk {i + 1} skipped (AI timeout or error): {exc}')
+                _update_job(job_id, done_chunks=i + 1, warnings=warnings)
+                continue
+
+            items = payload.get('questions')
+            if not isinstance(items, list):
+                warnings.append(f'Chunk {i + 1}: OpenAI returned unexpected payload shape.')
+                _update_job(job_id, done_chunks=i + 1, warnings=warnings)
+                continue
+
+            for q in items:
+                if not isinstance(q, dict):
+                    continue
+                q['tags'] = merged_tags
+                if difficulty and not q.get('difficulty'):
+                    q['difficulty'] = difficulty
+                q, err = _validate_mcq(q)
+                if err:
+                    warnings.append(f'Skipped invalid question: {err}')
+                    continue
+                questions.append(q)
+
+            remaining = question_count - len(questions)
+            _update_job(job_id, done_chunks=i + 1, questions_created=len(questions), warnings=warnings)
+            if _is_cancelled():
+                _update_job(job_id, status='cancelled', phase='Cancelled by user.')
+                return
+
+        # de-dupe by prompt
+        seen_prompts: set[str] = set()
+        deduped: list[dict] = []
+        for q in questions:
+            p = re.sub(r'\s+', ' ', str(q.get('prompt') or '').strip()).lower()
+            if not p or p in seen_prompts:
+                continue
+            seen_prompts.add(p)
+            deduped.append(q)
+            if len(deduped) >= question_count:
+                break
+
+        if not deduped:
+            _update_job(job_id, status='error', error='No valid questions were generated from the provided text.')
+            return
+
+        _update_job(job_id, phase='Saving to question bank…')
+        created_ids: list[str] = []
+
+        db = SessionLocal()
+        try:
+            set_tenant_id(db, tenant_id)
+            for q in deduped:
+                created = assessment_service.create_question(db, payload=q, actor_user_id=user_id)
+                created_ids.append(str(created.id))
+
+            audit_service.log_action(
+                db,
+                actor_user_id=user_id,
+                action='assessment_questions_import_text',
+                entity_type='assessment_question',
+                details={
+                    'imported_count': len(created_ids),
+                    'question_count_requested': question_count,
+                    'tags': merged_tags,
+                    'difficulty': difficulty,
+                },
+            )
+            usage_service.record_event(
+                db,
+                tenant_id=tenant_db_id,
+                event_key='ai.text_import',
+                quantity=float(len(created_ids)),
+                actor_user_id=user_id,
+                meta={'question_count_requested': question_count},
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        _update_job(
+            job_id,
+            status='done',
+            phase='Done',
+            done_chunks=len(text_chunks),
+            questions_created=len(created_ids),
+            imported_count=len(created_ids),
+            question_ids=created_ids,
+            warnings=warnings,
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        _update_job(job_id, status='error', error=str(exc))
+
+
+@router.post('/questions/import-text', response_model=AssessmentTextImportJobStart, status_code=status.HTTP_202_ACCEPTED)
 def import_questions_from_text(
     body: AssessmentTextImportIn,
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access('assessments', 'assessments:write')),
     ctx: TenantContext = Depends(require_tenant_membership),
-) -> AssessmentPdfImportResponse:
-    text = body.text.strip()
-    if len(text) < 50:
+) -> AssessmentTextImportJobStart:
+    raw_text = body.text.strip()
+    if len(raw_text) < 50:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='Text is too short to generate questions from.')
 
     question_count = body.question_count
     difficulty = (body.difficulty or '').strip() or None
-
-    chunks = chunk_pages([text], max_chars=18_000)
-    if not chunks:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='No usable text found.')
-
     base_tags = _normalize_tags(body.tags)
     merged_tags = _normalize_tags(','.join([*base_tags, 'text_import']))
 
-    warnings: list[str] = []
-    questions: list[dict] = []
-    remaining = question_count
+    text_chunks = _split_text_chunks(raw_text)
+    if not text_chunks:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='No usable text found.')
 
-    for chunk in chunks:
-        if remaining <= 0:
-            break
-        per_chunk = min(remaining, 20)
-        prompt = (
-            f'Generate exactly {per_chunk} questions as JSON.\n'
-            f'Difficulty: {difficulty or "mixed"}\n'
-            f'Tags to include on every question: {merged_tags}\n\n'
-            f'Content:\n{chunk}'
-        )
-        payload = call_openai_responses_json(
-            instructions=IMPORT_SYSTEM_PROMPT,
-            input_text=prompt,
-            schema_name='assessment_questions_import',
-            schema=IMPORT_JSON_SCHEMA,
-            temperature=0.3,
-            timeout_ms=60_000,
-        )
-        items = payload.get('questions')
-        if not isinstance(items, list):
-            warnings.append('OpenAI returned unexpected payload shape for one chunk.')
-            continue
+    job_id = str(uuid4())
+    _write_job(job_id, {
+        'job_id': job_id,
+        'status': 'running',
+        'total_chunks': len(text_chunks),
+        'done_chunks': 0,
+        'phase': 'Starting…',
+        'questions_created': 0,
+        'cancel_requested': False,
+        'warnings': [],
+        'error': None,
+        'imported_count': None,
+        'question_ids': None,
+    })
 
-        for q in items:
-            if not isinstance(q, dict):
-                continue
-            q['tags'] = merged_tags
-            if difficulty and not q.get('difficulty'):
-                q['difficulty'] = difficulty
-            q, err = _validate_mcq(q)
-            if err:
-                warnings.append(f'Skipped invalid question: {err}')
-                continue
-            questions.append(q)
-
-        remaining = question_count - len(questions)
-
-    # de-dupe by prompt
-    seen_prompts: set[str] = set()
-    deduped: list[dict] = []
-    for q in questions:
-        p = re.sub(r'\s+', ' ', str(q.get('prompt') or '').strip()).lower()
-        if not p or p in seen_prompts:
-            continue
-        seen_prompts.add(p)
-        deduped.append(q)
-        if len(deduped) >= question_count:
-            break
-
-    if not deduped:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='No valid questions generated.')
-
-    created_ids = []
-    for q in deduped:
-        created = assessment_service.create_question(db, payload=q, actor_user_id=current_user.id)
-        created_ids.append(created.id)
-
-    audit_service.log_action(
-        db,
-        actor_user_id=current_user.id,
-        action='assessment_questions_import_text',
-        entity_type='assessment_question',
-        details={
-            'imported_count': len(created_ids),
-            'question_count_requested': question_count,
-            'tags': merged_tags,
-            'difficulty': difficulty,
-            'text_length': len(text),
-        },
+    t = threading.Thread(
+        target=_run_text_import_job,
+        args=(job_id, text_chunks, question_count, merged_tags, difficulty, str(ctx.tenant.id), current_user.id, ctx.tenant.id),
+        daemon=True,
     )
-    usage_service.record_event(
-        db,
-        tenant_id=ctx.tenant.id,
-        event_key='ai.text_import',
-        quantity=float(len(created_ids)),
-        actor_user_id=current_user.id,
-        meta={'question_count_requested': question_count},
-    )
-    db.commit()
+    t.start()
 
-    return AssessmentPdfImportResponse(
-        imported_count=len(created_ids),
-        question_ids=created_ids,
-        warnings=warnings,
+    return AssessmentTextImportJobStart(job_id=job_id, status='running', total_chunks=len(text_chunks))
+
+
+@router.get('/questions/import-jobs/{job_id}', response_model=AssessmentTextImportJobStatus)
+def get_text_import_job(
+    job_id: str,
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentTextImportJobStatus:
+    job = _read_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Import job not found.')
+    total = job.get('total_chunks', 1)
+    done = job.get('done_chunks', 0)
+    percent = 100 if job.get('status') == 'done' else (0 if total == 0 else int(done * 100 / total))
+    return AssessmentTextImportJobStatus(
+        job_id=job['job_id'],
+        status=job['status'],
+        total_chunks=total,
+        done_chunks=done,
+        percent=percent,
+        phase=job.get('phase', ''),
+        questions_created=job.get('questions_created', 0),
+        cancel_requested=bool(job.get('cancel_requested', False)),
+        warnings=job.get('warnings', []),
+        error=job.get('error'),
+        imported_count=job.get('imported_count'),
+        question_ids=job.get('question_ids'),
     )
+
+
+@router.post('/questions/import-jobs/{job_id}/cancel', status_code=status.HTTP_204_NO_CONTENT)
+def cancel_text_import_job(
+    job_id: str,
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> None:
+    job = _read_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Import job not found.')
+    if job.get('status') not in ('running',):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f'Job is already {job["status"]}.')
+    _update_job(job_id, cancel_requested=True, phase='Cancellation requested…')
+    return None
 
 
 @router.get('/questions', response_model=AssessmentQuestionListResponse)
@@ -522,12 +712,16 @@ def start_classification_job(
         .order_by(AssessmentClassificationJob.created_at.desc())
     )
     if existing:
-        # If a prior job is stuck (e.g. server reload killed the worker), allow a new run by expiring it.
-        # Otherwise, return the running job so the UI can attach and poll.
-        stale_after = datetime.now(timezone.utc) - timedelta(minutes=5)
-        if existing.updated_at and existing.updated_at < stale_after:
+        # If the worker appears dead (no heartbeat for 2 min), expire it so a fresh run can start.
+        # Otherwise return the live job so the UI can attach and poll.
+        heartbeat_cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
+        worker_is_dead = (
+            existing.last_heartbeat_at is None
+            or existing.last_heartbeat_at < heartbeat_cutoff
+        )
+        if worker_is_dead:
             existing.status = 'failed'
-            existing.error_summary = 'Expired stale job (no updates for 5+ minutes). Please re-run.'
+            existing.error_summary = 'Expired stale job (worker unresponsive for 2+ minutes). Re-running.'
             existing.updated_by = current_user.id
             db.commit()
         else:
@@ -569,6 +763,23 @@ def start_classification_job(
         batch_size=payload.batch_size,
     )
 
+    return AssessmentClassificationJobOut.model_validate(job)
+
+
+@router.get('/questions/classify/jobs/latest', response_model=AssessmentClassificationJobOut)
+def latest_classification_job(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> AssessmentClassificationJobOut:
+    job = db.scalar(
+        select(AssessmentClassificationJob)
+        .where(AssessmentClassificationJob.tenant_id == ctx.tenant.id)
+        .order_by(AssessmentClassificationJob.created_at.desc())
+    )
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No classification jobs found')
     return AssessmentClassificationJobOut.model_validate(job)
 
 
@@ -631,7 +842,19 @@ def cancel_classification_job(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Classification job not found')
     if job.status not in ('queued', 'running', 'paused'):
         return {'status': 'noop'}
-    job.cancel_requested = True
+    # If the worker is stale (no heartbeat in 30s), force-cancel immediately —
+    # the background task is dead and won't pick up cancel_requested on its own.
+    heartbeat_cutoff = datetime.now(timezone.utc) - timedelta(seconds=30)
+    worker_is_dead = (
+        job.last_heartbeat_at is None
+        or job.last_heartbeat_at < heartbeat_cutoff
+    )
+    if worker_is_dead:
+        job.status = 'canceled'
+        job.error_summary = 'Cancelled by user (worker was unresponsive).'
+        job.completed_at = datetime.now(timezone.utc)
+    else:
+        job.cancel_requested = True
     job.updated_by = current_user.id
     db.commit()
     return {'status': 'ok'}
@@ -677,23 +900,6 @@ def resume_classification_job(
     return {'status': 'ok'}
 
 
-@router.get('/questions/classify/jobs/latest', response_model=AssessmentClassificationJobOut)
-def latest_classification_job(
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
-    ctx: TenantContext = Depends(require_tenant_membership),
-    __: object = Depends(require_access('assessments', 'assessments:read')),
-) -> AssessmentClassificationJobOut:
-    job = db.scalar(
-        select(AssessmentClassificationJob)
-        .where(AssessmentClassificationJob.tenant_id == ctx.tenant.id)
-        .order_by(AssessmentClassificationJob.created_at.desc())
-    )
-    if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No classification jobs found')
-    return AssessmentClassificationJobOut.model_validate(job)
-
-
 @router.post('/questions/classify/jobs/{job_id}/apply')
 def apply_classification_job(
     job_id: UUID,
@@ -715,6 +921,7 @@ def apply_classification_job(
         db,
         job_id=job.id,
         actor_user_id=current_user.id,
+        tenant_id=ctx.tenant.id,
     )
     job.applied_at = datetime.now(timezone.utc)
     job.updated_by = current_user.id
@@ -787,6 +994,79 @@ def bulk_update_questions(
     )
     db.commit()
     return AssessmentBulkUpdateResult(updated_count=updated)
+
+
+@router.post('/questions/deduplicate', response_model=AssessmentDeduplicateResult)
+def deduplicate_questions(
+    dry_run: bool = True,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentDeduplicateResult:
+    """Find questions with identical prompts (after normalisation) and archive the extras.
+
+    Keeps the 'best' copy per group: prefers questions with both category and difficulty
+    set; among equals keeps the oldest (created_at ASC). Operates only on non-archived questions.
+    """
+    from app.models.assessment import AssessmentQuestion as AQ
+
+    # Load all non-archived questions — just the columns we need for grouping.
+    rows = db.execute(
+        select(AQ.id, AQ.prompt, AQ.category_id, AQ.difficulty, AQ.created_at)
+        .where(AQ.status != 'archived')
+        .order_by(AQ.created_at.asc())
+    ).all()
+
+    # Group by normalised prompt
+    groups: dict[str, list] = {}
+    for row in rows:
+        key = re.sub(r'\s+', ' ', (row.prompt or '').strip().lower())
+        if not key:
+            continue
+        groups.setdefault(key, []).append(row)
+
+    duplicate_groups = 0
+    ids_to_archive: list = []
+
+    for norm_prompt, candidates in groups.items():
+        if len(candidates) < 2:
+            continue
+        duplicate_groups += 1
+
+        # Sort: fully classified first, then by age (oldest first → keep oldest)
+        def _score(r) -> tuple:
+            has_cat = r.category_id is not None
+            has_diff = r.difficulty is not None
+            return (0 if (has_cat and has_diff) else 1 if (has_cat or has_diff) else 2, r.created_at)
+
+        sorted_candidates = sorted(candidates, key=_score)
+        # Keep the first (best / oldest), archive the rest
+        ids_to_archive.extend(c.id for c in sorted_candidates[1:])
+
+    archived_count = len(ids_to_archive)
+
+    if not dry_run and ids_to_archive:
+        db.execute(
+            select(AQ).where(AQ.id.in_(ids_to_archive))  # warm identity map
+        )
+        db.query(AQ).filter(AQ.id.in_(ids_to_archive)).update(
+            {'status': 'archived', 'updated_by': current_user.id},
+            synchronize_session='fetch',
+        )
+        audit_service.log_action(
+            db,
+            actor_user_id=current_user.id,
+            action='assessment_questions_deduplicate',
+            entity_type='assessment_question',
+            details={'archived_count': archived_count, 'duplicate_groups': duplicate_groups},
+        )
+        db.commit()
+
+    return AssessmentDeduplicateResult(
+        duplicate_groups=duplicate_groups,
+        archived_count=archived_count,
+        dry_run=dry_run,
+    )
 
 
 @router.post('/questions', response_model=AssessmentQuestionOut, status_code=status.HTTP_201_CREATED)

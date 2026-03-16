@@ -256,7 +256,7 @@ function AssignmentsSection({
 }) {
   return (
     <SectionShell id='section-assignments' accent='bg-blue-500'>
-      <SectionHeader icon={ClipboardList} title='Tracks & Assignments' href='/assignments' linkLabel='Go to assignments' accent='bg-blue-500' />
+      <SectionHeader icon={ClipboardList} title='Tracks' href='/assignments' linkLabel='Go to assignments' accent='bg-blue-500' />
 
       <div className='grid gap-4 md:grid-cols-4'>
         {isAdmin && adminData ? (

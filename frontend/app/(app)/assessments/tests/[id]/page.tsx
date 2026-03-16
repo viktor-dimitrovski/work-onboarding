@@ -104,6 +104,7 @@ type VersionQuestion = {
   question_id: string;
   order_index: number;
   points: number;
+  section: string;
   prompt: string;
 };
 
@@ -184,6 +185,7 @@ export default function AssessmentTestBuilderPage() {
             question_id: q.question_id as string,
             order_index: idx,
             points: q.points || 1,
+            section: q.section || '',
             prompt: (q.question_snapshot?.prompt as string) || 'Untitled',
           })),
       );
@@ -286,14 +288,14 @@ export default function AssessmentTestBuilderPage() {
     if (!toAdd.length) return;
     setVersionQuestions((prev) => {
       const next = [...prev];
-      toAdd.forEach((q) => next.push({ question_id: q.id, order_index: next.length, points: 1, prompt: q.prompt }));
+      toAdd.forEach((q) => next.push({ question_id: q.id, order_index: next.length, points: 1, section: '', prompt: q.prompt }));
       return next.map((item, idx) => ({ ...item, order_index: idx }));
     });
     setBankChecked(new Set());
   };
 
   const addSingle = (q: AssessmentQuestion) => {
-    setVersionQuestions((prev) => [...prev, { question_id: q.id, order_index: prev.length, points: 1, prompt: q.prompt }]);
+    setVersionQuestions((prev) => [...prev, { question_id: q.id, order_index: prev.length, points: 1, section: '', prompt: q.prompt }]);
   };
 
   // ---------------------------------------------------------------------------
@@ -309,6 +311,10 @@ export default function AssessmentTestBuilderPage() {
 
   const updatePoints = (idx: number, pts: number) => {
     setVersionQuestions((prev) => prev.map((q, i) => (i === idx ? { ...q, points: Math.max(1, pts) } : q)));
+  };
+
+  const updateSection = (idx: number, sec: string) => {
+    setVersionQuestions((prev) => prev.map((q, i) => (i === idx ? { ...q, section: sec } : q)));
   };
 
   const removeQuestion = (idx: number) => {
@@ -328,7 +334,7 @@ export default function AssessmentTestBuilderPage() {
         time_limit_minutes: timeLimit || null,
         shuffle_questions: shuffleQuestions,
         attempts_allowed: attemptsAllowed || null,
-        questions: versionQuestions.map((q, idx) => ({ question_id: q.question_id, order_index: idx, points: q.points || 1 })),
+        questions: versionQuestions.map((q, idx) => ({ question_id: q.question_id, order_index: idx, points: q.points || 1, section: q.section || null })),
       }, accessToken);
       await api.put(`/assessments/tests/${id}`, {
         title: title.trim(),
@@ -622,28 +628,41 @@ export default function AssessmentTestBuilderPage() {
             ) : (
               <div className='divide-y'>
                 {versionQuestions.map((q, idx) => (
-                  <div key={`${q.question_id}-${idx}`} className='group flex items-center gap-2 px-3 py-2 hover:bg-muted/20'>
-                    <GripVertical className='h-3.5 w-3.5 shrink-0 text-muted-foreground/30' />
-                    <span className='w-5 shrink-0 text-center text-[10px] font-medium text-muted-foreground'>{idx + 1}</span>
-                    <p className='min-w-0 flex-1 truncate text-xs'>{q.prompt}</p>
-                    <Input
-                      type='number'
-                      min={1}
-                      value={q.points}
-                      onChange={(e) => updatePoints(idx, Number(e.target.value || 1))}
-                      className='h-6 w-12 text-center text-[11px] px-1'
-                      title='Points'
-                    />
-                    <div className='flex items-center opacity-0 group-hover:opacity-100 transition-opacity'>
-                      <button type='button' onClick={() => moveQuestion(idx, idx - 1)} disabled={idx === 0} className='p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30'>
-                        <ArrowUp className='h-3 w-3' />
-                      </button>
-                      <button type='button' onClick={() => moveQuestion(idx, idx + 1)} disabled={idx === versionQuestions.length - 1} className='p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30'>
-                        <ArrowDown className='h-3 w-3' />
-                      </button>
-                      <button type='button' onClick={() => removeQuestion(idx)} className='p-0.5 text-red-500 hover:text-red-700'>
-                        <Trash2 className='h-3 w-3' />
-                      </button>
+                  <div key={`${q.question_id}-${idx}`} className='group px-3 py-2 hover:bg-muted/20'>
+                    {/* Row 1: drag handle · number · prompt · points · actions */}
+                    <div className='flex items-center gap-2'>
+                      <GripVertical className='h-3.5 w-3.5 shrink-0 text-muted-foreground/30' />
+                      <span className='w-5 shrink-0 text-center text-[10px] font-medium text-muted-foreground'>{idx + 1}</span>
+                      <p className='min-w-0 flex-1 truncate text-xs'>{q.prompt}</p>
+                      <Input
+                        type='number'
+                        min={1}
+                        value={q.points}
+                        onChange={(e) => updatePoints(idx, Number(e.target.value || 1))}
+                        className='h-6 w-12 shrink-0 text-center text-[11px] px-1'
+                        title='Points'
+                      />
+                      <div className='flex items-center opacity-0 group-hover:opacity-100 transition-opacity'>
+                        <button type='button' onClick={() => moveQuestion(idx, idx - 1)} disabled={idx === 0} className='p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30'>
+                          <ArrowUp className='h-3 w-3' />
+                        </button>
+                        <button type='button' onClick={() => moveQuestion(idx, idx + 1)} disabled={idx === versionQuestions.length - 1} className='p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30'>
+                          <ArrowDown className='h-3 w-3' />
+                        </button>
+                        <button type='button' onClick={() => removeQuestion(idx)} className='p-0.5 text-red-500 hover:text-red-700'>
+                          <Trash2 className='h-3 w-3' />
+                        </button>
+                      </div>
+                    </div>
+                    {/* Row 2: section tag */}
+                    <div className='mt-1 pl-9'>
+                      <input
+                        list='section-suggestions'
+                        value={q.section}
+                        onChange={(e) => updateSection(idx, e.target.value)}
+                        placeholder='Section (optional)'
+                        className='h-5 w-full rounded border border-dashed bg-transparent px-1.5 text-[10px] text-muted-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none'
+                      />
                     </div>
                   </div>
                 ))}
@@ -674,6 +693,25 @@ export default function AssessmentTestBuilderPage() {
           </div>
         </aside>
       </div>
+
+      {/* Section suggestions datalist */}
+      <datalist id='section-suggestions'>
+        <option value='General Engineering' />
+        <option value='.NET Core / C#' />
+        <option value='Entity Framework & Data Access' />
+        <option value='SQL' />
+        <option value='REST API & Security' />
+        <option value='JWT & Authentication' />
+        <option value='Postman & cURL' />
+        <option value='Bash & Scripting' />
+        <option value='Kubernetes' />
+        <option value='Serverless' />
+        <option value='PSD2 & Open Banking' />
+        <option value='Payments' />
+        <option value='HTML / CSS / JavaScript' />
+        <option value='AI-Era Engineering' />
+        <option value='Scenario Questions' />
+      </datalist>
 
       {/* ── Metadata Sheet ── */}
       <Sheet open={metaSheetOpen} onOpenChange={setMetaSheetOpen}>

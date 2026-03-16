@@ -481,6 +481,7 @@ def update_test_version(
                     question_id=question.id,
                     order_index=item.get('order_index', 0),
                     points=item.get('points', 1),
+                    section=item.get('section') or None,
                     question_snapshot=_snapshot_question(question),
                     created_by=actor_user_id,
                     updated_by=actor_user_id,
@@ -724,6 +725,9 @@ def submit_attempt(db: Session, *, attempt_id: UUID, actor_user_id: UUID) -> Ass
     earned_points = 0.0
     correct_count = 0
 
+    # Per-section accumulators: {section_name: {earned, total, correct, total_questions}}
+    section_acc: dict[str, dict[str, float]] = {}
+
     for idx, item in enumerate(ordered_questions):
         total_points += item.points
         answer = answers_by_index.get(idx)
@@ -738,16 +742,37 @@ def submit_attempt(db: Session, *, attempt_id: UUID, actor_user_id: UUID) -> Ass
             earned_points += item.points
             correct_count += 1
 
+        section = item.section or 'General'
+        if section not in section_acc:
+            section_acc[section] = {'earned': 0.0, 'total': 0.0, 'correct': 0, 'total_questions': 0}
+        section_acc[section]['total'] += item.points
+        section_acc[section]['total_questions'] += 1
+        if is_correct:
+            section_acc[section]['earned'] += item.points
+            section_acc[section]['correct'] += 1
+
     if total_points <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Attempt has no questions to score')
 
     score_percent = (earned_points / total_points) * 100
     passed = score_percent >= float(version.passing_score or 0)
 
+    section_scores = {
+        sec: {
+            'earned': acc['earned'],
+            'total': acc['total'],
+            'percent': round(acc['earned'] / acc['total'] * 100, 1) if acc['total'] > 0 else 0.0,
+            'correct': int(acc['correct']),
+            'total_questions': int(acc['total_questions']),
+        }
+        for sec, acc in section_acc.items()
+    }
+
     attempt.score = earned_points
     attempt.max_score = total_points
     attempt.score_percent = score_percent
     attempt.passed = passed
+    attempt.section_scores = section_scores
     attempt.status = 'scored'
     attempt.submitted_at = datetime.now(UTC)
     attempt.updated_by = actor_user_id

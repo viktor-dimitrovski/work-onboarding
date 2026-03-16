@@ -272,6 +272,7 @@ export interface AssessmentTestVersionQuestion {
   question_id?: string | null;
   order_index: number;
   points: number;
+  section?: string | null;
   question_snapshot: Record<string, unknown>;
 }
 
@@ -314,6 +315,14 @@ export interface AssessmentDelivery {
   due_date?: string | null;
 }
 
+export interface AssessmentSectionScore {
+  earned: number;
+  total: number;
+  percent: number;
+  correct: number;
+  total_questions: number;
+}
+
 export interface AssessmentAttempt {
   id: string;
   delivery_id: string;
@@ -327,6 +336,7 @@ export interface AssessmentAttempt {
   max_score?: number | null;
   score_percent?: number | null;
   passed: boolean;
+  section_scores?: Record<string, AssessmentSectionScore> | null;
 }
 
 export interface AssessmentAttemptQuestionOption {

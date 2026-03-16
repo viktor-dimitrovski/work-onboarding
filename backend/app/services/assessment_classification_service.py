@@ -78,13 +78,26 @@ def _build_prompt(questions: list[AssessmentQuestion], categories: list[str]) ->
     return "\n".join(lines)
 
 
-def _get_or_create_category(db: Session, name: str, actor_user_id: UUID) -> tuple[AssessmentCategory, bool]:
+def _get_or_create_category(
+    db: Session, name: str, actor_user_id: UUID, tenant_id: UUID
+) -> tuple[AssessmentCategory, bool]:
     clean_name = (name or "").strip()[:100] or "General"
     slug = _slugify(clean_name)[:120]
-    existing = db.scalar(select(AssessmentCategory).where(AssessmentCategory.slug == slug))
+    # Explicitly filter by tenant_id so we never pick up a category from another
+    # tenant even if RLS context is momentarily wrong.
+    existing = db.scalar(
+        select(AssessmentCategory).where(
+            AssessmentCategory.slug == slug,
+            AssessmentCategory.tenant_id == tenant_id,
+        )
+    )
     if existing:
         return existing, False
     category = AssessmentCategory(
+        # Set tenant_id explicitly – do not rely on server_default so the FK
+        # constraint (tenant_id, category_id) on assessment_questions is always
+        # satisfied regardless of the current RLS context at flush time.
+        tenant_id=tenant_id,
         name=clean_name,
         slug=slug,
         created_by=actor_user_id,
@@ -223,14 +236,25 @@ def run_classification_job(
 
             last_id = batch[-1].id
             prompt = _build_prompt(batch, category_names)
-            payload = call_openai_responses_json(
-                instructions="Return JSON only. Keep category short and consistent.",
-                input_text=prompt,
-                schema_name="assessment_questions_classification",
-                schema=CLASSIFICATION_SCHEMA,
-                temperature=0.2,
-                timeout_ms=60_000,
-            )
+            try:
+                payload = call_openai_responses_json(
+                    instructions="Return JSON only. Keep category short and consistent.",
+                    input_text=prompt,
+                    schema_name="assessment_questions_classification",
+                    schema=CLASSIFICATION_SCHEMA,
+                    temperature=0.2,
+                    timeout_ms=60_000,
+                )
+            except Exception as batch_exc:  # noqa: BLE001
+                # Log and skip this batch rather than aborting the whole job
+                report.setdefault("batch_errors", []).append(str(batch_exc)[:200])
+                job.processed += len(batch)
+                job.report_json = report
+                job.last_heartbeat_at = datetime.now(timezone.utc)
+                job.updated_by = actor_user_id
+                db.commit()
+                _set_ctx()
+                continue
 
             results = {
                 str(item.get("id")): item
@@ -269,7 +293,7 @@ def run_classification_job(
                 category = None
                 created = False
                 if not dry_run:
-                    category, created = _get_or_create_category(db, clean_name, actor_user_id)
+                    category, created = _get_or_create_category(db, clean_name, actor_user_id, tenant_id)
                     if created:
                         report["created_categories"] += 1
                         category_names.append(category.name)
@@ -341,6 +365,7 @@ def run_classification_job(
         db.commit()
     except Exception as exc:
         try:
+            db.rollback()  # reset any broken transaction before writing error status
             _set_ctx()
             job = db.scalar(select(AssessmentClassificationJob).where(AssessmentClassificationJob.id == job_id))
             if job:
@@ -348,13 +373,14 @@ def run_classification_job(
                 job.error_summary = str(exc)[:500]
                 job.updated_by = actor_user_id
                 db.commit()
-        finally:
-            raise
+        except Exception:  # noqa: BLE001
+            pass  # best-effort — don't mask the original exception
+        raise
     finally:
         db.close()
 
 
-def apply_job_items(db: Session, *, job_id: UUID, actor_user_id: UUID) -> int:
+def apply_job_items(db: Session, *, job_id: UUID, actor_user_id: UUID, tenant_id: UUID) -> int:
     items = db.scalars(
         select(AssessmentClassificationJobItem)
         .where(AssessmentClassificationJobItem.job_id == job_id, AssessmentClassificationJobItem.applied.is_(False))
@@ -365,8 +391,8 @@ def apply_job_items(db: Session, *, job_id: UUID, actor_user_id: UUID) -> int:
 
     applied = 0
     for item in items:
-        # Ensure category exists
-        category, _ = _get_or_create_category(db, item.new_category_name, actor_user_id)
+        # Ensure category exists (explicit tenant_id to avoid FK violations)
+        category, _ = _get_or_create_category(db, item.new_category_name, actor_user_id, tenant_id)
         item.new_category_id = category.id
         q = db.scalar(select(AssessmentQuestion).where(AssessmentQuestion.id == item.question_id))
         if not q:

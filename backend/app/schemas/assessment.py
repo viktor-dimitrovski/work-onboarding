@@ -173,6 +173,12 @@ class AssessmentBulkUpdateResult(BaseModel):
     updated_count: int
 
 
+class AssessmentDeduplicateResult(BaseModel):
+    duplicate_groups: int
+    archived_count: int
+    dry_run: bool
+
+
 class AssessmentPdfImportResponse(BaseModel):
     imported_count: int
     question_ids: list[UUID]
@@ -184,6 +190,27 @@ class AssessmentTextImportIn(BaseModel):
     question_count: int = Field(20, ge=1, le=100)
     tags: str = Field('', description='Comma-separated tag list')
     difficulty: str | None = None
+
+
+class AssessmentTextImportJobStart(BaseModel):
+    job_id: str
+    status: str
+    total_chunks: int
+
+
+class AssessmentTextImportJobStatus(BaseModel):
+    job_id: str
+    status: str  # 'running' | 'done' | 'error' | 'cancelled'
+    total_chunks: int
+    done_chunks: int
+    percent: int
+    phase: str
+    questions_created: int
+    cancel_requested: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+    imported_count: int | None = None
+    question_ids: list[str] | None = None
 
 
 class AssessmentTestCreate(BaseModel):
@@ -206,6 +233,7 @@ class AssessmentTestVersionQuestionIn(BaseModel):
     question_id: UUID
     order_index: int = Field(ge=0)
     points: int = Field(default=1, ge=1)
+    section: str | None = None
 
 
 class AssessmentTestVersionCreate(BaseModel):
@@ -229,6 +257,7 @@ class AssessmentTestVersionQuestionOut(BaseSchema):
     question_id: UUID | None
     order_index: int
     points: int
+    section: str | None
     question_snapshot: dict[str, Any]
     created_at: datetime
     updated_at: datetime
@@ -333,6 +362,7 @@ class AssessmentAttemptOut(BaseSchema):
     max_score: float | None
     score_percent: float | None
     passed: bool
+    section_scores: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 

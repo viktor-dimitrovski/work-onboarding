@@ -285,6 +285,7 @@ class AssessmentTestVersionQuestion(UUIDPrimaryKeyMixin, TimestampMixin, AuditUs
     question_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     points: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    section: Mapped[str | None] = mapped_column(String(100), nullable=True)
     question_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
     test_version: Mapped['AssessmentTestVersion'] = relationship(back_populates='questions')
@@ -381,6 +382,7 @@ class AssessmentAttempt(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Bas
     max_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     score_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    section_scores: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     delivery: Mapped['AssessmentDelivery'] = relationship(back_populates='attempts')
     answers: Mapped[list['AssessmentAttemptAnswer']] = relationship(

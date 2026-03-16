@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import type { AssessmentAttempt } from '@/lib/types';
+import type { AssessmentAttempt, AssessmentSectionScore } from '@/lib/types';
 import { BarChart3, CheckCircle2, XCircle } from 'lucide-react';
 
 interface ResultsResponse {
@@ -22,6 +22,19 @@ interface ResultsResponse {
     attempt_count: number;
     average_score_percent?: number | null;
   };
+}
+
+function SectionScorePill({ percent }: { percent: number }) {
+  const pct = Math.round(percent);
+  const color =
+    pct >= 80 ? 'bg-emerald-100 text-emerald-800' :
+    pct >= 50 ? 'bg-amber-100 text-amber-800' :
+                'bg-red-100 text-red-700';
+  return (
+    <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${color}`}>
+      {pct}%
+    </span>
+  );
 }
 
 const formatDate = (d?: string | null) => {
@@ -198,12 +211,13 @@ export default function AssessmentResultsPage() {
 
       {/* Detail slide-over */}
       <Sheet open={!!detail} onOpenChange={(open) => { if (!open) setDetail(null); }}>
-        <SheetContent side='right' className='sm:max-w-lg'>
+        <SheetContent side='right' className='flex h-full flex-col sm:max-w-lg'>
           <SheetHeader>
             <SheetTitle>Attempt #{detail?.attempt_number} details</SheetTitle>
           </SheetHeader>
           {detail && (
-            <div className='mt-4 space-y-4'>
+            <div className='flex-1 overflow-auto mt-4 space-y-5'>
+              {/* Top stats */}
               <div className='grid grid-cols-2 gap-3'>
                 <div className='rounded-md border p-3'>
                   <p className='text-xs text-muted-foreground'>Score</p>
@@ -217,14 +231,57 @@ export default function AssessmentResultsPage() {
                 </div>
                 <div className='rounded-md border p-3'>
                   <p className='text-xs text-muted-foreground'>Result</p>
-                  <p className='text-lg font-bold'>{detail.passed ? 'Passed' : 'Failed'}</p>
+                  <p className={`text-lg font-bold ${detail.passed ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {detail.passed ? 'Passed' : 'Failed'}
+                  </p>
                 </div>
                 <div className='rounded-md border p-3'>
                   <p className='text-xs text-muted-foreground'>Duration</p>
                   <p className='text-lg font-bold'>{durationText(detail.started_at, detail.submitted_at)}</p>
                 </div>
               </div>
-              <div className='space-y-2 text-sm'>
+
+              {/* Section scorecard */}
+              {detail.section_scores && Object.keys(detail.section_scores).length > 0 && (
+                <div>
+                  <p className='mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground'>
+                    Score by section
+                  </p>
+                  <div className='overflow-hidden rounded-lg border'>
+                    <table className='w-full text-sm'>
+                      <thead>
+                        <tr className='border-b bg-muted/40 text-xs text-muted-foreground'>
+                          <th className='px-3 py-2 text-left font-medium'>Section</th>
+                          <th className='px-3 py-2 text-right font-medium'>Correct</th>
+                          <th className='px-3 py-2 text-right font-medium'>Points</th>
+                          <th className='px-3 py-2 text-right font-medium'>Score</th>
+                        </tr>
+                      </thead>
+                      <tbody className='divide-y'>
+                        {Object.entries(detail.section_scores)
+                          .sort((a, b) => b[1].percent - a[1].percent)
+                          .map(([section, s]: [string, AssessmentSectionScore]) => (
+                            <tr key={section} className='hover:bg-muted/20'>
+                              <td className='px-3 py-2 font-medium'>{section}</td>
+                              <td className='px-3 py-2 text-right text-xs text-muted-foreground tabular-nums'>
+                                {s.correct}/{s.total_questions}
+                              </td>
+                              <td className='px-3 py-2 text-right text-xs text-muted-foreground tabular-nums'>
+                                {s.earned}/{s.total}
+                              </td>
+                              <td className='px-3 py-2 text-right tabular-nums'>
+                                <SectionScorePill percent={s.percent} />
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Meta */}
+              <div className='space-y-1.5 text-sm'>
                 <p><span className='text-muted-foreground'>Status:</span> {detail.status}</p>
                 <p><span className='text-muted-foreground'>Started:</span> {formatDate(detail.started_at)}</p>
                 {detail.submitted_at && <p><span className='text-muted-foreground'>Submitted:</span> {formatDate(detail.submitted_at)}</p>}
