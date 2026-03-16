@@ -61,7 +61,7 @@ const DEFAULT_TENANT_SLUG = (process.env.NEXT_PUBLIC_DEFAULT_TENANT_SLUG || '').
 export const MODULES: ModuleDefinition[] = [
   {
     id: 'onboarding',
-    label: 'Tracks & Assignments',
+    label: 'Tracks',
     description: 'Assignments, tracks, and employee onboarding progress.',
     icon: ListChecks,
     defaultHref: '/my-onboarding',

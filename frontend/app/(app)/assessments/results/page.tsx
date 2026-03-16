@@ -81,10 +81,10 @@ export default function AssessmentResultsPage() {
 
   return (
     <div className='space-y-6'>
-      <div>
+      {/* <div>
         <h2 className='text-2xl font-semibold'>Results</h2>
         <p className='text-sm text-muted-foreground'>Assessment performance and history.</p>
-      </div>
+      </div> */}
 
       {/* Summary cards */}
       <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>

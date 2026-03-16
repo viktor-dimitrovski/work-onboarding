@@ -8,7 +8,7 @@ import { MultiSelect } from '@/components/inputs/multi-select';
 import { SingleSelect } from '@/components/inputs/single-select';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -332,76 +332,83 @@ export default function AssessmentDeliveriesPage() {
         </div>
       </div>
 
-      {/* Delivery list */}
+      {/* Delivery table */}
       {deliveries.length === 0 ? (
         <EmptyState title='No deliveries yet' description='Assign a test above to make it available to employees.' />
       ) : (
-        <div className='grid gap-4 md:grid-cols-2'>
-          {deliveries.map((delivery) => {
-            const deliveryStatus = getDeliveryStatus(delivery);
-            const statusCfg = STATUS_CONFIG[deliveryStatus];
-            return (
-              <Card key={delivery.id} className={deliveryStatus === 'closed' ? 'opacity-70' : ''}>
-                <CardHeader className='pb-3'>
-                  <div className='flex items-start justify-between gap-2'>
-                    <div className='min-w-0 flex-1'>
-                      <div className='flex flex-wrap items-center gap-2'>
-                        <CardTitle className='text-base'>{delivery.title}</CardTitle>
-                        <Badge
-                          variant='outline'
-                          className={`shrink-0 text-[11px] font-medium ${statusCfg.className}`}
-                        >
-                          {statusCfg.label}
-                        </Badge>
-                      </div>
-                      <p className='mt-0.5 text-xs text-muted-foreground'>
-                        {delivery.audience_type === 'campaign' ? 'Open to all employees' : 'Targeted assignment'}
-                      </p>
-                    </div>
-
-                    {/* Actions menu */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant='ghost' size='icon' className='h-8 w-8 shrink-0'>
-                          <MoreVertical className='h-4 w-4' />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align='end'>
-                        <DropdownMenuItem onClick={() => openEdit(delivery)}>
-                          <Pencil className='mr-2 h-3.5 w-3.5' />
-                          Edit dates &amp; limits
-                        </DropdownMenuItem>
-                        {deliveryStatus !== 'closed' && (
-                          <>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => stopDelivery(delivery)}
-                              className='text-destructive focus:text-destructive'
-                            >
-                              <Square className='mr-2 h-3.5 w-3.5' />
-                              Stop campaign now
-                            </DropdownMenuItem>
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                </CardHeader>
-
-                <CardContent>
-                  <div className='flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground'>
-                    <span>{delivery.attempts_allowed} attempt{delivery.attempts_allowed !== 1 ? 's' : ''}</span>
-                    {delivery.duration_minutes && <span>{delivery.duration_minutes} min per attempt</span>}
-                    {delivery.starts_at && <span>Opens {fmtDateTime(delivery.starts_at)}</span>}
-                    {delivery.ends_at
-                      ? <span>Closes {fmtDateTime(delivery.ends_at)}</span>
-                      : <span className='text-blue-600'>No closing date</span>
-                    }
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+        <div className='overflow-hidden rounded-xl border bg-white'>
+          <table className='w-full text-sm'>
+            <thead>
+              <tr className='border-b bg-muted/40 text-xs text-muted-foreground'>
+                <th className='px-4 py-2.5 text-left font-medium'>Test</th>
+                <th className='px-4 py-2.5 text-left font-medium'>Status</th>
+                <th className='px-4 py-2.5 text-left font-medium'>Audience</th>
+                <th className='px-4 py-2.5 text-left font-medium'>Opens</th>
+                <th className='px-4 py-2.5 text-left font-medium'>Closes</th>
+                <th className='px-4 py-2.5 text-left font-medium'>Limits</th>
+                <th className='px-2 py-2.5' />
+              </tr>
+            </thead>
+            <tbody className='divide-y'>
+              {deliveries.map((delivery) => {
+                const deliveryStatus = getDeliveryStatus(delivery);
+                const statusCfg = STATUS_CONFIG[deliveryStatus];
+                return (
+                  <tr key={delivery.id} className={`hover:bg-muted/20 ${deliveryStatus === 'closed' ? 'opacity-60' : ''}`}>
+                    <td className='px-4 py-3 font-medium'>{delivery.title}</td>
+                    <td className='px-4 py-3'>
+                      <Badge variant='outline' className={`text-[11px] font-medium ${statusCfg.className}`}>
+                        {statusCfg.label}
+                      </Badge>
+                    </td>
+                    <td className='px-4 py-3 text-xs text-muted-foreground'>
+                      {delivery.audience_type === 'campaign' ? 'Open to all' : 'Targeted'}
+                    </td>
+                    <td className='px-4 py-3 text-xs text-muted-foreground whitespace-nowrap'>
+                      {fmtDateTime(delivery.starts_at) ?? <span className='text-slate-400'>—</span>}
+                    </td>
+                    <td className='px-4 py-3 text-xs text-muted-foreground whitespace-nowrap'>
+                      {delivery.ends_at
+                        ? fmtDateTime(delivery.ends_at)
+                        : <span className='text-blue-600'>No end</span>
+                      }
+                    </td>
+                    <td className='px-4 py-3 text-xs text-muted-foreground whitespace-nowrap'>
+                      {delivery.attempts_allowed} attempt{delivery.attempts_allowed !== 1 ? 's' : ''}
+                      {delivery.duration_minutes ? ` · ${delivery.duration_minutes} min` : ''}
+                    </td>
+                    <td className='px-2 py-3'>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant='ghost' size='icon' className='h-7 w-7'>
+                            <MoreVertical className='h-3.5 w-3.5' />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align='end'>
+                          <DropdownMenuItem onClick={() => openEdit(delivery)}>
+                            <Pencil className='mr-2 h-3.5 w-3.5' />
+                            Edit dates &amp; limits
+                          </DropdownMenuItem>
+                          {deliveryStatus !== 'closed' && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() => stopDelivery(delivery)}
+                                className='text-destructive focus:text-destructive'
+                              >
+                                <Square className='mr-2 h-3.5 w-3.5' />
+                                Stop campaign now
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 

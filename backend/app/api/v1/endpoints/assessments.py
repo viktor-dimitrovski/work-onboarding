@@ -1187,14 +1187,15 @@ def start_attempt(
     __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> AssessmentAttemptStartOut:
     attempt = assessment_service.start_attempt(db, delivery_id=delivery_id, user_id=current_user.id)
-    db.commit()
-    db.refresh(attempt)
-    version = assessment_service.get_test_version(db, attempt.delivery.test_version_id)
+    # Load the delivery and version while the RLS tenant context is still active
+    # (set_config 'app.tenant_id' is transaction-local — it clears after commit).
+    delivery = assessment_service.get_delivery(db, delivery_id)
+    version = assessment_service.get_test_version(db, delivery.test_version_id)
     questions = assessment_service._build_attempt_questions(version, attempt.question_order)
-    return AssessmentAttemptStartOut(
-        attempt=AssessmentAttemptOut.model_validate(attempt),
-        questions=questions,
-    )
+    # Snapshot the attempt fields before commit (expire_on_commit=False keeps them after commit).
+    attempt_out = AssessmentAttemptOut.model_validate(attempt)
+    db.commit()
+    return AssessmentAttemptStartOut(attempt=attempt_out, questions=questions)
 
 
 @router.put('/attempts/{attempt_id}/answers', response_model=AssessmentAttemptOut)
@@ -1218,7 +1219,10 @@ def autosave_answers(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Not allowed to edit this attempt')
 
     assessment_service.autosave_answers(
-        db, attempt_id=attempt_id, answers=payload.answers, actor_user_id=current_user.id
+        db,
+        attempt_id=attempt_id,
+        answers=[a.model_dump() for a in payload.answers],
+        actor_user_id=current_user.id,
     )
     db.commit()
     return AssessmentAttemptOut.model_validate(attempt)

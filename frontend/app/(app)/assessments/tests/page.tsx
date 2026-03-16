@@ -7,7 +7,6 @@ import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
   DropdownMenu,
@@ -131,48 +130,53 @@ export default function AssessmentTestsPage() {
       {tests.length === 0 ? (
         <EmptyState title='No tests yet' description='Create your first assessment test.' />
       ) : (
-        <div className='grid gap-4 md:grid-cols-2'>
+        <div className='overflow-hidden rounded-xl border bg-white divide-y'>
           {tests.map((test) => (
-            <Card key={test.id}>
-              <CardHeader>
-                <div className='flex items-start justify-between gap-2'>
-                  <div className='min-w-0'>
-                    <CardTitle className='text-base'>{test.title}</CardTitle>
-                    <CardDescription className='mt-1'>{test.description || 'No description provided.'}</CardDescription>
-                  </div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant='ghost' size='icon' className='h-8 w-8 shrink-0'>
-                        <MoreVertical className='h-4 w-4' />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align='end'>
-                      <DropdownMenuItem onSelect={() => openEdit(test)}>Edit</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onSelect={() => setDeleteTarget(test)}
-                        className='text-destructive focus:text-destructive'
-                      >
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
-                  <Badge variant='outline' className='capitalize'>{test.status}</Badge>
-                  {test.category && <Badge variant='secondary'>{test.category}</Badge>}
-                  {test.role_target && <span>Role: {test.role_target}</span>}
-                  <span>{test.versions.length} version{test.versions.length !== 1 ? 's' : ''}</span>
-                </div>
-                <div className='mt-3'>
-                  <Button variant='outline' asChild>
-                    <Link href={`/assessments/tests/${test.id}`}>Open builder</Link>
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            <div key={test.id} className='flex items-center gap-4 px-4 py-3 hover:bg-muted/20'>
+              {/* Title + description */}
+              <div className='min-w-0 flex-1'>
+                <p className='truncate font-medium text-sm'>{test.title}</p>
+                {test.description && (
+                  <p className='truncate text-xs text-muted-foreground mt-0.5'>{test.description}</p>
+                )}
+              </div>
+
+              {/* Badges */}
+              <div className='hidden sm:flex shrink-0 items-center gap-1.5'>
+                <Badge variant='outline' className='text-[11px] capitalize'>{test.status}</Badge>
+                {test.category && <Badge variant='secondary' className='text-[11px]'>{test.category}</Badge>}
+                {test.role_target && (
+                  <span className='text-xs text-muted-foreground'>Role: {test.role_target}</span>
+                )}
+                <span className='text-xs text-muted-foreground'>
+                  {test.versions.length} version{test.versions.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+
+              {/* Actions */}
+              <div className='flex shrink-0 items-center gap-1'>
+                <Button variant='outline' size='sm' className='h-7 text-xs' asChild>
+                  <Link href={`/assessments/tests/${test.id}`}>Open builder</Link>
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant='ghost' size='icon' className='h-7 w-7'>
+                      <MoreVertical className='h-3.5 w-3.5' />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align='end'>
+                    <DropdownMenuItem onSelect={() => openEdit(test)}>Edit</DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={() => setDeleteTarget(test)}
+                      className='text-destructive focus:text-destructive'
+                    >
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
           ))}
         </div>
       )}

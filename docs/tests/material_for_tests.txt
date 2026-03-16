@@ -1,0 +1,1725 @@
+# Intermediate Developer Assessment Pack
+
+## For AI-era screening across K8S, .NET Core, C#, SQL, REST, Open Banking, automation, and payments
+
+This is built to detect whether a candidate is truly **intermediate** and can work safely with AI, not just prompt AI and repeat output.
+
+---
+
+## 1. What to test in the AI era
+
+Do not overvalue definitions.
+Test these instead:
+
+1. **Can they explain why**
+2. **Can they spot risk**
+3. **Can they debug broken logic**
+4. **Can they verify AI-generated output**
+5. **Can they make safe changes without breaking existing behavior**
+6. **Can they reason across layers**
+   example: token issue -> middleware -> gateway -> API -> DB -> logs
+
+A real intermediate developer should usually be able to:
+
+* explain tradeoffs, not only syntax
+* debug step by step
+* use AI as accelerator, not as substitute for judgment
+* recognize security, reliability, and data consistency risks
+* write small but correct automation/scripts
+* test APIs and verify assumptions independently
+
+---
+
+## 2. Suggested assessment structure
+
+### Part A — Oral / written technical interview
+
+* 35 to 50 questions
+* mix of short-answer and scenario questions
+
+### Part B — Practical task
+
+* 1 backend/API task
+* 1 SQL/debugging task
+* 1 automation or shell/cURL/Postman task
+
+### Part C — AI-era validation
+
+Give the candidate:
+
+* AI-generated code
+* AI-generated SQL
+* AI-generated curl/Postman collection
+* AI-generated explanation with hidden mistakes
+
+Then ask them to validate and correct it.
+
+---
+
+## 3. Simple scoring model
+
+Use this for each question:
+
+### 0 — No real understanding
+
+* vague
+* memorized
+* cannot explain consequences
+* cannot give example
+
+### 1 — Basic / junior-ish
+
+* partial concept recognition
+* weak reasoning
+* misses operational/security implications
+
+### 2 — Solid intermediate
+
+* explains concept correctly
+* gives practical example
+* identifies common risks
+* proposes workable debugging path
+
+### 3 — Strong intermediate / approaching senior
+
+* explains tradeoffs clearly
+* connects multiple layers
+* anticipates failure modes
+* proposes safe implementation and verification steps
+
+---
+
+## 4. General engineering questions
+
+### Q1.
+
+What is the difference between “it works on my machine” and “it is production-ready”?
+
+**Expected signals**
+
+* environment parity
+* configuration management
+* observability
+* security
+* idempotent deployment
+* rollback
+* resilience under load
+
+**Red flags**
+
+* talks only about code correctness
+* ignores logging, secrets, infra, database migrations
+
+---
+
+### Q2.
+
+How do you verify whether AI-generated code is safe to merge?
+
+**Expected signals**
+
+* read the code fully
+* check assumptions and dependencies
+* run tests
+* validate edge cases
+* inspect auth/data access/logging
+* review SQL and security-sensitive parts manually
+* compare with project conventions
+
+**Red flags**
+
+* “if it compiles, it is fine”
+* trusts AI output without validation
+
+---
+
+### Q3.
+
+What makes a developer intermediate rather than junior?
+
+**Expected signals**
+
+* can own a feature end-to-end
+* can debug independently
+* understands side effects
+* writes maintainable code
+* knows when to escalate
+
+---
+
+### Q4.
+
+When is copy-pasting code from another project dangerous even if it looks correct?
+
+**Expected signals**
+
+* hidden assumptions
+* missing middleware/config
+* wrong connection lifecycle
+* security differences
+* different error handling
+* transaction boundaries
+
+---
+
+### Q5.
+
+How would you evaluate whether a bug is in frontend, backend, network, auth, or database?
+
+**Expected signals**
+
+* reproduction steps
+* browser/network tab
+* request/response inspection
+* correlation IDs/logs
+* curl/Postman isolation
+* backend logs
+* DB query verification
+
+---
+
+## 5. .NET Core / C# questions
+
+### Q6.
+
+What problem does Dependency Injection solve in .NET Core?
+
+**Expected signals**
+
+* loose coupling
+* easier testing
+* lifecycle management
+* replacing implementations
+* central composition
+
+---
+
+### Q7.
+
+Explain transient, scoped, and singleton lifetimes. When can wrong lifetime selection cause bugs?
+
+**Expected signals**
+
+* scoped for per-request state
+* singleton must not hold request-specific or mutable unsafe state
+* transient for lightweight stateless services
+* DbContext should not be singleton
+* thread safety concerns
+
+---
+
+### Q8.
+
+Why is injecting a scoped service into a singleton dangerous?
+
+**Expected signals**
+
+* lifetime mismatch
+* stale/disposed dependency
+* request context leakage
+* runtime errors or subtle bugs
+
+---
+
+### Q9.
+
+What is middleware in ASP.NET Core? Give practical examples.
+
+**Expected signals**
+
+* request pipeline
+* order matters
+* auth/authz
+* logging
+* exception handling
+* CORS
+* correlation IDs
+* tenant resolution
+
+---
+
+### Q10.
+
+What can go wrong if authentication middleware is placed in the wrong order?
+
+**Expected signals**
+
+* unauthorized access
+* claims not populated
+* policies fail
+* endpoints behave inconsistently
+
+---
+
+### Q11.
+
+Difference between `IEnumerable`, `IQueryable`, and `List` in practical backend work.
+
+**Expected signals**
+
+* execution timing
+* database translation with IQueryable
+* materialization
+* performance implications
+* danger of accidental in-memory filtering
+
+---
+
+### Q12.
+
+What is deferred execution and why can it surprise developers?
+
+**Expected signals**
+
+* query executes later
+* repeated enumeration
+* DB hit timing
+* side effects if context disposed
+
+---
+
+### Q13.
+
+How would you detect and fix an N+1 query problem in Entity Framework?
+
+**Expected signals**
+
+* logs/SQL profiler
+* lazy loading awareness
+* Include/select projection
+* batching
+* careful DTO shaping
+
+---
+
+### Q14.
+
+When would you prefer raw SQL or stored procedures over Entity Framework?
+
+**Expected signals**
+
+* complex reporting
+* performance-critical operations
+* legacy DB logic
+* bulk ops
+* very specific SQL features
+* but with maintainability and security tradeoffs
+
+---
+
+### Q15.
+
+What are common causes of memory or performance issues in a .NET API?
+
+**Expected signals**
+
+* large object allocations
+* improper singleton state
+* too much logging
+* blocking calls
+* sync-over-async
+* loading too much data
+* connection misuse
+* poor caching
+
+---
+
+### Q16.
+
+What is the difference between `async/await` used correctly and “fake async”?
+
+**Expected signals**
+
+* non-blocking I/O
+* avoiding `.Result` / `.Wait()`
+* not wrapping CPU work blindly
+* thread starvation awareness
+
+---
+
+### Q17.
+
+What is model validation in ASP.NET Core and why should you not rely only on frontend validation?
+
+**Expected signals**
+
+* trust boundary
+* server-side enforcement
+* malformed or malicious input
+* data integrity
+
+---
+
+### Q18.
+
+What is the risk of exposing internal exception details to API consumers?
+
+**Expected signals**
+
+* security leakage
+* stack traces
+* schema exposure
+* operational confusion
+* use safe problem details and internal logs
+
+---
+
+### Q19.
+
+How would you structure service, repository, and controller responsibilities?
+
+**Expected signals**
+
+* controller thin
+* service holds business logic
+* repository/data layer handles persistence
+* not absolute dogma, but separation of concerns
+
+---
+
+### Q20.
+
+What makes a good DTO different from exposing entity classes directly?
+
+**Expected signals**
+
+* prevent overposting
+* hide internal fields
+* versioning flexibility
+* control shape of API contract
+
+---
+
+## 6. Entity Framework and data access questions
+
+### Q21.
+
+What is tracking vs no-tracking in Entity Framework?
+
+**Expected signals**
+
+* change tracking overhead
+* read-only query optimization
+* update scenarios
+* identity resolution awareness
+
+---
+
+### Q22.
+
+What can go wrong if DbContext lives too long?
+
+**Expected signals**
+
+* stale tracked entities
+* memory growth
+* concurrency confusion
+* unintended updates
+
+---
+
+### Q23.
+
+Why are transactions important in payment-related or financial operations?
+
+**Expected signals**
+
+* consistency
+* prevent partial writes
+* idempotency relation
+* rollback on failure
+* still not enough alone for distributed systems
+
+---
+
+### Q24.
+
+What is optimistic concurrency? Give a practical example.
+
+**Expected signals**
+
+* row version / timestamp
+* detect simultaneous updates
+* prevent silent overwrite
+
+---
+
+### Q25.
+
+How would you safely implement pagination in an API backed by a large table?
+
+**Expected signals**
+
+* avoid returning all rows
+* stable ordering
+* page size limits
+* offset vs keyset tradeoff
+* select only needed columns
+
+---
+
+## 7. SQL Server and PostgreSQL questions
+
+### Q26.
+
+What is the difference between an index seek and an index scan in practical terms?
+
+**Expected signals**
+
+* selective lookup vs broad scan
+* cost/performance
+* query design implications
+
+---
+
+### Q27.
+
+Why can `SELECT *` be harmful in APIs and services?
+
+**Expected signals**
+
+* unnecessary payload
+* network cost
+* broken contracts
+* index usage impact
+* data leakage
+
+---
+
+### Q28.
+
+What is a deadlock and how would you investigate it?
+
+**Expected signals**
+
+* two or more transactions waiting on each other
+* lock order
+* logs/DB deadlock graph
+* shorten transactions
+* consistent access order
+* proper indexes
+
+---
+
+### Q29.
+
+What is the difference between SQL injection and a normal query bug?
+
+**Expected signals**
+
+* malicious input affects query structure
+* parameterization defense
+* least privilege
+* stored procedures are not automatically safe
+
+---
+
+### Q30.
+
+When are stored procedures helpful, and when do they become a maintenance burden?
+
+**Expected signals**
+
+* good for encapsulating complex SQL / performance-critical logic
+* burden when business logic is scattered or versioning/testing is poor
+
+---
+
+### Q31.
+
+What are the important differences between SQL Server and PostgreSQL a backend developer should know?
+
+**Expected signals**
+
+* syntax differences
+* identity/sequence behavior
+* JSON support differences
+* locking/concurrency nuances
+* procedural language differences
+* tooling differences
+
+---
+
+### Q32.
+
+How would you verify whether an API bug is caused by wrong SQL, wrong ORM mapping, or wrong business logic?
+
+**Expected signals**
+
+* isolate with direct SQL
+* inspect generated SQL
+* compare expected dataset
+* step through service logic
+* test with known fixtures
+
+---
+
+### Q33.
+
+What is the risk of missing `WHERE` clauses in update or delete scripts?
+
+**Expected signals**
+
+* mass data corruption
+* need transaction
+* backup
+* row count verification
+* dry run/select first
+
+---
+
+### Q34.
+
+How do you safely write migration or fix scripts for production?
+
+**Expected signals**
+
+* idempotent where possible
+* transaction strategy
+* backup
+* validation query before/after
+* row count checks
+* rollback plan
+* environment-specific care
+
+---
+
+## 8. REST APIs, JWT, auth, and security questions
+
+### Q35.
+
+What is the difference between authentication and authorization?
+
+**Expected signals**
+
+* identity vs permissions
+* claims/roles/scopes example
+
+---
+
+### Q36.
+
+What is a JWT access token? What should not be stored blindly in it?
+
+**Expected signals**
+
+* signed token with claims
+* avoid sensitive data
+* size concerns
+* revocation limitations
+* expiry importance
+
+---
+
+### Q37.
+
+How do you validate whether a JWT is trustworthy?
+
+**Expected signals**
+
+* signature
+* issuer
+* audience
+* expiration
+* not-before
+* algorithm control
+* key rotation awareness
+
+---
+
+### Q38.
+
+What is the risk of accepting a token without validating issuer or audience?
+
+**Expected signals**
+
+* token minted for another system accepted incorrectly
+* cross-system trust failure
+
+---
+
+### Q39.
+
+What is idempotency and why is it crucial in payments?
+
+**Expected signals**
+
+* repeated request should not duplicate effect
+* retries/network failures
+* payment duplication prevention
+* idempotency keys or unique business reference
+
+---
+
+### Q40.
+
+What are common mistakes in REST API design?
+
+**Expected signals**
+
+* unclear status codes
+* inconsistent naming
+* no versioning strategy
+* poor validation
+* leaking internal errors
+* missing pagination/filter rules
+* unsafe retries for financial ops
+
+---
+
+### Q41.
+
+Difference between `401` and `403`.
+
+**Expected signals**
+
+* unauthenticated vs authenticated but forbidden
+
+---
+
+### Q42.
+
+What should be logged in auth-related flows, and what should not be logged?
+
+**Expected signals**
+
+* log trace IDs, user ID, scope, endpoint, outcome
+* do not log secrets, full tokens, passwords, sensitive PII
+
+---
+
+### Q43.
+
+How would you debug a `403` issue in a .NET API protected by JWT?
+
+**Expected signals**
+
+* inspect token claims
+* verify policy/role/scope
+* verify middleware order
+* inspect issuer/audience
+* compare environment config
+* review endpoint attributes
+
+---
+
+### Q44.
+
+What is CORS and why can developers misunderstand it?
+
+**Expected signals**
+
+* browser-enforced cross-origin policy
+* not a server-to-server security feature
+* affects frontend calls
+* preflight awareness
+
+---
+
+### Q45.
+
+How do retries help, and when can retries be dangerous?
+
+**Expected signals**
+
+* transient failures
+* exponential backoff
+* retries dangerous for non-idempotent operations like payments
+
+---
+
+## 9. Postman, cURL, API verification, and automation questions
+
+### Q46.
+
+What can Postman do that a browser cannot do easily for API verification?
+
+**Expected signals**
+
+* custom headers
+* auth tokens
+* scripting
+* collections
+* environment variables
+* automated assertions
+
+---
+
+### Q47.
+
+How would you prove whether an issue is frontend-only by using cURL or Postman?
+
+**Expected signals**
+
+* reproduce same request directly
+* compare headers/body/auth
+* isolate browser/frontend logic
+
+---
+
+### Q48.
+
+Give an example of an automated API verification flow.
+
+**Expected signals**
+
+* authenticate
+* capture token
+* call protected endpoints
+* validate status/body/schema
+* negative test
+* cleanup if needed
+
+---
+
+### Q49.
+
+What should a good smoke test for a REST API include?
+
+**Expected signals**
+
+* health endpoint not enough
+* auth flow
+* one critical business endpoint
+* DB-backed check
+* status/body assertions
+* failure visibility
+
+---
+
+### Q50.
+
+Why is comparing only `200 OK` not enough in API testing?
+
+**Expected signals**
+
+* wrong payload can still return 200
+* business validation needed
+* schema/content assertion needed
+
+---
+
+### Q51.
+
+How would you organize a Postman collection for multiple environments?
+
+**Expected signals**
+
+* env variables
+* base URLs
+* credentials/tokens separated
+* test scripts reusable
+* secrets not hardcoded
+
+---
+
+### Q52.
+
+What can go wrong in cURL examples copied from docs?
+
+**Expected signals**
+
+* wrong quoting
+* shell escaping
+* wrong content type
+* missing auth header
+* environment mismatch
+* line breaks issue in Windows vs bash
+
+---
+
+## 10. Bash, BAT, and scripting questions
+
+### Q53.
+
+When would you use bash versus BAT in a real project?
+
+**Expected signals**
+
+* environment/platform fit
+* CI runners
+* Linux servers vs Windows ops
+* portability concerns
+
+---
+
+### Q54.
+
+What makes a script safe for repeated execution?
+
+**Expected signals**
+
+* idempotency
+* checks before change
+* predictable outputs
+* proper exit codes
+* defensive validation
+
+---
+
+### Q55.
+
+How would you pass secrets to scripts safely?
+
+**Expected signals**
+
+* env vars / secret store
+* do not hardcode
+* avoid echoing in logs/history
+* least privilege
+
+---
+
+### Q56.
+
+What should a good deployment script output?
+
+**Expected signals**
+
+* clear steps
+* timestamps
+* status/failure points
+* meaningful exit codes
+* maybe correlation/build version
+
+---
+
+### Q57.
+
+How do you troubleshoot a script that works manually but fails in CI/CD?
+
+**Expected signals**
+
+* environment variables
+* working directory
+* user permissions
+* line endings
+* shell differences
+* missing tools/path
+
+---
+
+### Q58.
+
+How would you automate verification of multiple REST endpoints from a script?
+
+**Expected signals**
+
+* loop over endpoints
+* auth token retrieval
+* parse response/status
+* fail fast or aggregate results
+* readable report
+
+---
+
+## 11. Kubernetes questions
+
+### Q59.
+
+What problem does Kubernetes solve in a backend platform?
+
+**Expected signals**
+
+* orchestration
+* scheduling
+* scaling
+* self-healing
+* rollout control
+* service discovery
+
+---
+
+### Q60.
+
+Difference between Pod, Deployment, Service, ConfigMap, and Secret.
+
+**Expected signals**
+
+* pod = runtime unit
+* deployment = desired replica management
+* service = stable network access
+* configmap = non-secret config
+* secret = sensitive values
+
+---
+
+### Q61.
+
+Why should you not bake environment-specific config directly into container images?
+
+**Expected signals**
+
+* immutability
+* reuse across environments
+* deployment flexibility
+* secret separation
+
+---
+
+### Q62.
+
+What is the difference between liveness and readiness probes?
+
+**Expected signals**
+
+* liveness = restart dead app
+* readiness = whether it can receive traffic
+* wrong config can cause outages
+
+---
+
+### Q63.
+
+How would you debug a pod that is running but the application is not reachable?
+
+**Expected signals**
+
+* readiness
+* service selector
+* endpoints
+* port mismatch
+* ingress/gateway
+* app binding address
+* logs
+
+---
+
+### Q64.
+
+What are common causes of CrashLoopBackOff?
+
+**Expected signals**
+
+* bad config
+* missing secret
+* startup failure
+* dependency unavailable
+* wrong command
+* resource issues
+
+---
+
+### Q65.
+
+What is the danger of storing secrets poorly in Kubernetes?
+
+**Expected signals**
+
+* accidental exposure in manifests/logs/repos
+* base64 is not encryption
+* RBAC matters
+* secret management practices
+
+---
+
+### Q66.
+
+How would you roll out a new version safely in K8S?
+
+**Expected signals**
+
+* rolling updates
+* health probes
+* versioned image
+* canary/controlled rollout if possible
+* rollback plan
+* observe logs/metrics
+
+---
+
+### Q67.
+
+How do resource requests and limits affect workload behavior?
+
+**Expected signals**
+
+* scheduling vs throttling/OOM kill
+* performance and stability implications
+
+---
+
+### Q68.
+
+What is the difference between ConfigMap/Secret update and application reload behavior?
+
+**Expected signals**
+
+* app may not automatically reload
+* rollout/restart sometimes needed
+* depends on mounting/env injection/design
+
+---
+
+## 12. Serverless / script-based backend tasks
+
+### Q69.
+
+What kinds of tasks fit serverless well, and what kinds do not?
+
+**Expected signals**
+
+* event-driven, short-lived tasks fit well
+* heavy stateful or long-running workloads less so
+* cold start, time limits, dependency access
+
+---
+
+### Q70.
+
+What risks exist when using serverless scripts for payment or banking logic?
+
+**Expected signals**
+
+* retries/duplicates
+* logging sensitive data
+* timeout handling
+* idempotency
+* network dependency
+* auditability
+
+---
+
+## 13. PSD2, Open Banking, and payments questions
+
+### Q71.
+
+What is the practical purpose of PSD2/Open Banking from an engineering perspective?
+
+**Expected signals**
+
+* secure access to account/payment services via APIs
+* consent
+* regulated integration
+* strong security and auditability
+
+---
+
+### Q72.
+
+Why are consent and scope important in Open Banking APIs?
+
+**Expected signals**
+
+* access must be limited to approved data/actions
+* duration and permissions matter
+* least privilege
+
+---
+
+### Q73.
+
+What is the difference between account information access and payment initiation in practical system terms?
+
+**Expected signals**
+
+* read-only data access vs state-changing financial action
+* risk profile and idempotency/security differences
+
+---
+
+### Q74.
+
+Why is SCA relevant, and where do developers usually make mistakes around it?
+
+**Expected signals**
+
+* strong customer authentication
+* state handling
+* redirect/callback issues
+* wrong session correlation
+* timeout/edge cases
+
+---
+
+### Q75.
+
+What is a good correlation strategy for payment flows across systems?
+
+**Expected signals**
+
+* unique request/business IDs
+* propagate through gateway/backend/logs
+* traceability and reconciliation
+
+---
+
+### Q76.
+
+How would you prevent duplicate payment execution if a client retries after timeout?
+
+**Expected signals**
+
+* idempotency key/business reference
+* persistent deduplication
+* careful retry semantics
+* reconciliation
+
+---
+
+### Q77.
+
+What should be logged for payment transactions for troubleshooting and audit?
+
+**Expected signals**
+
+* timestamps
+* correlation ID
+* business reference
+* auth result
+* step transitions
+* external response codes
+* but not full secrets or excessive PII
+
+---
+
+### Q78.
+
+Why is “HTTP 200 from bank” not enough to conclude payment success?
+
+**Expected signals**
+
+* business status may still be pending/rejected
+* async confirmation
+* settlement/booking state
+* response semantics matter
+
+---
+
+### Q79.
+
+What are common integration failure points in Open Banking ecosystems?
+
+**Expected signals**
+
+* token issues
+* certificate/TLS issues
+* redirect/callback mismatch
+* consent state mismatch
+* clock skew
+* API version mismatch
+* schema differences
+* bank-specific behavior
+
+---
+
+### Q80.
+
+How would you test a payment API safely in non-production?
+
+**Expected signals**
+
+* sandbox/test data
+* idempotency
+* negative cases
+* auth flow
+* callback simulation
+* reconciliation verification
+
+---
+
+## 14. HTML, CSS, JavaScript questions
+
+### Q81.
+
+Why does basic frontend knowledge matter even for backend developers?
+
+**Expected signals**
+
+* inspect requests
+* auth/token flow
+* browser behavior
+* DOM events
+* CORS/cookies/debugging
+
+---
+
+### Q82.
+
+What is the difference between `localStorage`, `sessionStorage`, cookies, and memory storage from a security perspective?
+
+**Expected signals**
+
+* XSS exposure
+* cookie flags
+* browser persistence
+* access patterns
+* token storage tradeoffs
+
+---
+
+### Q83.
+
+How would you debug a button click that appears to do nothing?
+
+**Expected signals**
+
+* browser console
+* network tab
+* JS errors
+* event binding
+* disabled state
+* request not fired vs request failed
+
+---
+
+### Q84.
+
+What is the difference between `==` and `===` in JavaScript and why does it matter?
+
+**Expected signals**
+
+* coercion vs strict equality
+* subtle bugs
+
+---
+
+### Q85.
+
+What CSS issues can make a feature “look broken” while backend is actually fine?
+
+**Expected signals**
+
+* hidden elements
+* z-index
+* disabled overlay
+* responsive layout
+* stale cached assets
+
+---
+
+## 15. Scenario questions that expose real level
+
+### Q86.
+
+A login API works from Postman but fails from browser frontend. What do you check first?
+
+**Expected signals**
+
+* network tab
+* CORS
+* cookies/tokens
+* request URL
+* mixed content
+* frontend JS errors
+* auth header presence
+
+---
+
+### Q87.
+
+A payment endpoint sometimes creates duplicates during temporary network instability. Where do you look and what do you change?
+
+**Expected signals**
+
+* retries
+* timeout behavior
+* idempotency key
+* DB uniqueness/business key
+* message replay
+* external callbacks
+
+---
+
+### Q88.
+
+A K8S deployment is green, pods are up, but users get 503. Walk through debugging.
+
+**Expected signals**
+
+* readiness
+* service endpoints
+* ingress/gateway
+* port mapping
+* app health route
+* dependency failures
+* logs
+
+---
+
+### Q89.
+
+AI generated an Entity Framework query that works but is slow in production. How do you review it?
+
+**Expected signals**
+
+* generated SQL
+* row counts
+* indexes
+* projection
+* Includes
+* pagination
+* no client-side evaluation surprises
+
+---
+
+### Q90.
+
+A stored procedure update caused deadlocks after release. What are likely reasons?
+
+**Expected signals**
+
+* lock order
+* long transaction
+* missing indexes
+* touching rows broadly
+* concurrency spike
+* isolation level awareness
+
+---
+
+### Q91.
+
+A JWT token is accepted in dev but rejected in test. What configuration differences do you compare?
+
+**Expected signals**
+
+* issuer
+* audience
+* signing key/cert
+* clock skew
+* env vars
+* proxy header behavior
+* auth middleware setup
+
+---
+
+### Q92.
+
+A bash script works on Ubuntu but a BAT equivalent fails on Windows. What differences matter?
+
+**Expected signals**
+
+* quoting
+* path separators
+* environment expansion
+* line endings
+* shell behavior
+* curl differences
+
+---
+
+## 16. AI-era trap questions
+
+These are very useful because weak candidates often answer with polished but shallow AI language.
+
+### Q93.
+
+AI says: “Use singleton for performance.” When is that wrong?
+
+**Expected signals**
+
+* mutable shared state
+* scoped dependency injection issue
+* thread safety
+* request leakage
+
+---
+
+### Q94.
+
+AI generated a SQL update statement for production. What is your validation checklist before running it?
+
+**Expected signals**
+
+* backup
+* transaction plan
+* `SELECT` first
+* row count expectation
+* environment confirmation
+* rollback plan
+* lock/impact awareness
+
+---
+
+### Q95.
+
+AI generated a Kubernetes manifest. What do you inspect before applying it?
+
+**Expected signals**
+
+* namespace
+* image/tag
+* env/config
+* probes
+* resources
+* secrets
+* service ports
+* security context
+* replica count
+
+---
+
+### Q96.
+
+AI says an API is idempotent because it returns same response on repeat. Why is that incomplete?
+
+**Expected signals**
+
+* must ensure same side effect, not just same response
+* repeated payment must not execute twice
+
+---
+
+### Q97.
+
+AI explains JWT as “encrypted token.” What is wrong with that statement?
+
+**Expected signals**
+
+* JWT often signed, not encrypted
+* payload may be readable unless using JWE
+
+---
+
+### Q98.
+
+AI generated code that catches all exceptions and returns 200 with an error message in body. Why is that bad?
+
+**Expected signals**
+
+* breaks semantics
+* monitoring and client handling suffer
+* hides failures
+* can mislead downstream systems
+
+---
+
+## 17. Practical exercises
+
+## Exercise A — REST API verification
+
+Give candidate:
+
+* endpoint docs
+* auth flow
+* one broken endpoint behavior
+
+Ask them to:
+
+1. obtain token
+2. call protected endpoint with cURL
+3. reproduce same in Postman
+4. identify whether issue is auth, payload, or business validation
+5. write one automation check
+
+**What good looks like**
+
+* systematic
+* uses headers/body carefully
+* checks status and payload
+* documents findings
+
+---
+
+## Exercise B — .NET Core review
+
+Give candidate a small API with:
+
+* wrong DI lifetime
+* middleware order issue
+* noisy exception handling
+* inefficient EF query
+
+Ask them to:
+
+1. identify issues
+2. explain impact
+3. propose minimal safe fixes
+
+**What good looks like**
+
+* not over-refactoring
+* understands runtime impact
+* explains why fix is safe
+
+---
+
+## Exercise C — SQL debugging
+
+Give candidate:
+
+* one stored procedure
+* one slow query
+* one dangerous update script
+
+Ask them to:
+
+1. explain risk
+2. make script safer
+3. suggest how to verify row impact
+4. explain performance bottleneck
+
+---
+
+## Exercise D — Kubernetes troubleshooting
+
+Provide:
+
+* Deployment
+* Service
+* Ingress
+* logs snippet
+
+Problem:
+
+* pods running
+* endpoint unreachable
+
+Ask candidate to explain step-by-step debugging.
+
+---
+
+## Exercise E — Payment/API idempotency
+
+Give candidate a payment initiation endpoint and retry scenario.
+
+Ask:
+
+1. where duplicate risk exists
+2. how to design idempotency
+3. what to persist
+4. how to test it
+
+---
+
+## 18. Fast cheat detection in interview
+
+Use these follow-ups:
+
+### Follow-up 1
+
+“Give me one real example from your work.”
+
+Weak candidates collapse here.
+
+---
+
+### Follow-up 2
+
+“What breaks if we do it the other way?”
+
+Good intermediates can discuss consequences.
+
+---
+
+### Follow-up 3
+
+“How would you verify that in logs, SQL, or cURL?”
+
+This exposes whether they can operate, not just talk.
+
+---
+
+### Follow-up 4
+
+“What are the top 2 risks in production?”
+
+Very effective for separating theory from practical level.
+
+---
+
+## 19. Compact scorecard by area
+
+```markdown
+# Candidate Scorecard
+
+## 1. C# / .NET Core
+- DI lifetimes:
+- Middleware:
+- Async/await:
+- API layering:
+- EF performance awareness:
+
+## 2. Databases
+- SQL safety:
+- Query reasoning:
+- Transactions:
+- Deadlock awareness:
+- SQL Server/PostgreSQL practical understanding:
+
+## 3. API / Security
+- JWT:
+- Auth vs authz:
+- REST semantics:
+- Idempotency:
+- Logging/security hygiene:
+
+## 4. Automation / Verification
+- Postman:
+- cURL:
+- Bash/BAT:
+- API smoke test thinking:
+- Troubleshooting discipline:
+
+## 5. Kubernetes / Ops
+- Core K8S objects:
+- Probes:
+- Service/debugging:
+- Config/secrets:
+- Deployment safety:
+
+## 6. PSD2 / Open Banking / Payments
+- Consent/scopes:
+- SCA awareness:
+- Payment flow reasoning:
+- Duplicate prevention:
+- Audit/correlation thinking:
+
+## 7. AI-era engineering maturity
+- Validates AI output:
+- Spots hidden risk:
+- Can explain tradeoffs:
+- Can make minimal safe fixes:
+- Can reason end-to-end:
+```
+
+---
+
+## 20. Recommended pass profile for true intermediate
+
+A solid intermediate should usually score:
+
+* **.NET Core / C#**: 2
+* **SQL**: 2
+* **REST/security**: 2
+* **automation/testing**: 2
+* **K8S**: 1 to 2
+* **payments/open banking**: 1 to 2 unless domain-experienced
+* **AI-era validation maturity**: at least 2
+
+If someone sounds polished but scores low on:
+
+* idempotency
+* middleware order
+* DI lifetimes
+* query validation
+* API troubleshooting
+* K8S service/probe debugging
+
+then they are likely not truly intermediate.
+
+---
+
+## 21. Best way to use this pack
+
+Do not ask all questions.
+Pick:
+
+* 8 from .NET/C#
+* 5 from SQL
+* 5 from API/security
+* 4 from Postman/cURL/scripts
+* 4 from K8S
+* 4 from PSD2/payments
+* 3 AI-era trap questions
+* 1 practical exercise
+
+That is enough to detect level quickly.
+
+If you want, I can turn this into a cleaner **ready-to-use markdown test document** with:
+
+* checkbox scoring
+* difficulty tags
+* model answers
+* separate sections for backend developer vs integration engineer vs Open Banking engineer.

@@ -13,6 +13,7 @@ import {
   Rocket,
   ShieldCheck,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
@@ -82,16 +83,111 @@ interface BillingOverview {
   current_period_spend: string;
 }
 
+// ── Sticky nav bar ────────────────────────────────────────────────────────────
+
+interface NavSection {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  badge?: number | string | null;
+  badgeVariant?: 'default' | 'warning' | 'alert';
+}
+
+function StickyNav({ sections }: { sections: NavSection[] }) {
+  const [visible, setVisible] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Show bar once user has scrolled 80px
+  useEffect(() => {
+    const onScroll = () => setVisible(window.scrollY > 80);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Highlight the section currently in view
+  useEffect(() => {
+    const observers: IntersectionObserver[] = [];
+    sections.forEach(({ id }) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const obs = new IntersectionObserver(
+        ([entry]) => { if (entry.isIntersecting) setActiveId(id); },
+        { rootMargin: '-30% 0px -60% 0px', threshold: 0 },
+      );
+      obs.observe(el);
+      observers.push(obs);
+    });
+    return () => observers.forEach((o) => o.disconnect());
+  }, [sections]);
+
+  const scrollTo = (id: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const y = el.getBoundingClientRect().top + window.scrollY - 80;
+    window.scrollTo({ top: y, behavior: 'smooth' });
+  };
+
+  if (sections.length < 2) return null;
+
+  return (
+    <div
+      className={cn(
+        'fixed left-0 right-0 top-0 z-40 flex justify-center transition-all duration-200',
+        visible ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none',
+      )}
+      style={{ paddingTop: '56px' }} // offset below the app topbar
+    >
+      <div className='flex items-center gap-1 rounded-b-xl border border-t-0 bg-white/95 px-3 py-2 shadow-md backdrop-blur-sm'>
+        {sections.map(({ id, label, icon: Icon, badge, badgeVariant }) => {
+          const isActive = activeId === id;
+          return (
+            <button
+              key={id}
+              type='button'
+              onClick={() => scrollTo(id)}
+              className={cn(
+                'relative flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
+                isActive
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              <Icon className='h-3.5 w-3.5 shrink-0' />
+              <span>{label}</span>
+              {badge != null && Number(badge) > 0 && (
+                <span
+                  className={cn(
+                    'ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold',
+                    badgeVariant === 'alert'
+                      ? 'bg-red-500 text-white'
+                      : badgeVariant === 'warning'
+                        ? 'bg-amber-400 text-amber-900'
+                        : isActive
+                          ? 'bg-primary-foreground/20 text-primary-foreground'
+                          : 'bg-muted-foreground/15 text-muted-foreground',
+                  )}
+                >
+                  {badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Shared UI helpers ────────────────────────────────────────────────────────
 
 function MetricCard({ title, value, sub }: { title: string; value: string; sub?: string }) {
   return (
-    <Card>
-      <CardHeader className='pb-2'>
-        <CardDescription>{title}</CardDescription>
-        <CardTitle className='text-2xl'>{value}</CardTitle>
+    <Card className='bg-white'>
+      <CardHeader className='pb-2 pt-3'>
+        <CardDescription className='text-xs'>{title}</CardDescription>
+        <CardTitle className='text-xl font-semibold'>{value}</CardTitle>
       </CardHeader>
-      {sub && <CardContent className='pt-0 text-xs text-muted-foreground'>{sub}</CardContent>}
+      {sub && <CardContent className='pb-3 pt-0 text-xs text-muted-foreground'>{sub}</CardContent>}
     </Card>
   );
 }
@@ -101,24 +197,45 @@ function SectionHeader({
   title,
   href,
   linkLabel = 'Open module',
+  accent,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   title: string;
   href: string;
   linkLabel?: string;
+  accent: string;
 }) {
   return (
     <div className='flex items-center justify-between'>
-      <div className='flex items-center gap-2'>
-        <Icon className='h-5 w-5 text-muted-foreground' />
-        <h2 className='text-lg font-semibold'>{title}</h2>
+      <div className='flex items-center gap-3'>
+        <div className={cn('flex h-8 w-8 items-center justify-center rounded-lg', accent)}>
+          <Icon className='h-4 w-4 text-white' />
+        </div>
+        <h2 className='text-base font-semibold tracking-tight'>{title}</h2>
       </div>
-      <Button variant='ghost' size='sm' asChild>
-        <Link href={href} className='gap-1 text-xs text-muted-foreground'>
-          {linkLabel} <ArrowRight className='h-3.5 w-3.5' />
+      <Button variant='ghost' size='sm' asChild className='h-7 text-xs text-muted-foreground'>
+        <Link href={href} className='gap-1'>
+          {linkLabel} <ArrowRight className='h-3 w-3' />
         </Link>
       </Button>
     </div>
+  );
+}
+
+function SectionShell({
+  id,
+  accent,
+  children,
+}: {
+  id: string;
+  accent: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section id={id} className='overflow-hidden rounded-xl border bg-white shadow-sm'>
+      <div className={cn('h-1', accent)} />
+      <div className='space-y-4 p-5'>{children}</div>
+    </section>
   );
 }
 
@@ -138,8 +255,8 @@ function AssignmentsSection({
   nextTask: NextTaskResponse | null;
 }) {
   return (
-    <section className='space-y-4'>
-      <SectionHeader icon={ClipboardList} title='Tracks & Assignments' href='/assignments' linkLabel='Go to assignments' />
+    <SectionShell id='section-assignments' accent='bg-blue-500'>
+      <SectionHeader icon={ClipboardList} title='Tracks & Assignments' href='/assignments' linkLabel='Go to assignments' accent='bg-blue-500' />
 
       <div className='grid gap-4 md:grid-cols-4'>
         {isAdmin && adminData ? (
@@ -211,7 +328,7 @@ function AssignmentsSection({
           </CardContent>
         </Card>
       )}
-    </section>
+    </SectionShell>
   );
 }
 
@@ -228,8 +345,8 @@ function AssessmentsSection({
   const completed = tests.filter((t) => t.attempt_status === 'completed' || t.attempt_status === 'passed');
 
   return (
-    <section className='space-y-4'>
-      <SectionHeader icon={FileQuestion} title='Assessments' href='/assessments/my-tests' linkLabel='My Tests' />
+    <SectionShell id='section-assessments' accent='bg-indigo-500'>
+      <SectionHeader icon={FileQuestion} title='Assessments' href='/assessments/my-tests' linkLabel='My Tests' accent='bg-indigo-500' />
 
       <div className='grid gap-4 md:grid-cols-3'>
         <MetricCard title='Pending tests' value={String(pending.length)} />
@@ -284,7 +401,7 @@ function AssessmentsSection({
           </Button>
         </div>
       )}
-    </section>
+    </SectionShell>
   );
 }
 
@@ -302,8 +419,8 @@ function ComplianceSection({ data }: { data: ComplianceDashboard }) {
   const severities = Object.entries(data.gaps_by_severity).sort((a, b) => b[1] - a[1]);
 
   return (
-    <section className='space-y-4'>
-      <SectionHeader icon={ShieldCheck} title='Compliance' href='/compliance-hub/profile' linkLabel='Open compliance' />
+    <SectionShell id='section-compliance' accent='bg-emerald-500'>
+      <SectionHeader icon={ShieldCheck} title='Compliance' href='/compliance-hub/profile' linkLabel='Open compliance' accent='bg-emerald-500' />
 
       <div className='grid gap-4 md:grid-cols-4'>
         <MetricCard title='Implementation' value={impl != null ? `${impl.toFixed(1)}%` : '—'} />
@@ -349,7 +466,7 @@ function ComplianceSection({ data }: { data: ComplianceDashboard }) {
           )}
         </div>
       )}
-    </section>
+    </SectionShell>
   );
 }
 
@@ -357,8 +474,8 @@ function ComplianceSection({ data }: { data: ComplianceDashboard }) {
 
 function IntegrationRegistrySection({ data }: { data: IrOverview }) {
   return (
-    <section className='space-y-4'>
-      <SectionHeader icon={Network} title='Integration Registry' href='/integration-registry/overview' linkLabel='Open registry' />
+    <SectionShell id='section-ir' accent='bg-violet-500'>
+      <SectionHeader icon={Network} title='Integration Registry' href='/integration-registry/overview' linkLabel='Open registry' accent='bg-violet-500' />
 
       <div className='grid gap-4 md:grid-cols-4'>
         <MetricCard title='Total connections' value={String(data.total)} />
@@ -387,7 +504,7 @@ function IntegrationRegistrySection({ data }: { data: IrOverview }) {
           </CardContent>
         </Card>
       )}
-    </section>
+    </SectionShell>
   );
 }
 
@@ -395,8 +512,8 @@ function IntegrationRegistrySection({ data }: { data: IrOverview }) {
 
 function ReleasesSection({ releases }: { releases: ReleaseSummary[] }) {
   return (
-    <section className='space-y-4'>
-      <SectionHeader icon={Rocket} title='Release Management' href='/release-center' linkLabel='Release center' />
+    <SectionShell id='section-releases' accent='bg-orange-500'>
+      <SectionHeader icon={Rocket} title='Release Management' href='/release-center' linkLabel='Release center' accent='bg-orange-500' />
 
       {releases.length === 0 ? (
         <EmptyState title='No active releases' description='No releases found for this period.' />
@@ -424,7 +541,7 @@ function ReleasesSection({ releases }: { releases: ReleaseSummary[] }) {
           </CardContent>
         </Card>
       )}
-    </section>
+    </SectionShell>
   );
 }
 
@@ -432,12 +549,11 @@ function ReleasesSection({ releases }: { releases: ReleaseSummary[] }) {
 
 function BillingSection({ data }: { data: BillingOverview }) {
   const sub = data.subscription;
-  const isActive = sub?.status === 'active';
   const isTrial = sub?.trial_ends_at && new Date(sub.trial_ends_at) > new Date();
 
   return (
-    <section className='space-y-4'>
-      <SectionHeader icon={CreditCard} title='Billing' href='/billing' linkLabel='Manage billing' />
+    <SectionShell id='section-billing' accent='bg-slate-500'>
+      <SectionHeader icon={CreditCard} title='Billing' href='/billing' linkLabel='Manage billing' accent='bg-slate-500' />
 
       <div className='grid gap-4 md:grid-cols-3'>
         <MetricCard
@@ -472,7 +588,7 @@ function BillingSection({ data }: { data: BillingOverview }) {
           </CardContent>
         </Card>
       )}
-    </section>
+    </SectionShell>
   );
 }
 
@@ -614,40 +730,108 @@ export default function DashboardPage() {
     return null;
   }
 
+  // Badge counts for the sticky nav
+  const assignmentsBadge = isAdmin
+    ? (adminData?.overdue_tasks ?? 0)
+    : (employeeData?.overdue_tasks ?? 0);
+  const assessmentsBadge = tests.filter(
+    (t) => t.attempt_status === 'not_started' || t.attempt_status === 'in_progress',
+  ).length;
+  const complianceBadge = compliance
+    ? Object.values(compliance.gaps_by_severity).reduce((s, n) => s + n, 0)
+    : 0;
+  const irBadge = ir?.draft_count ?? 0;
+  const releasesBadge = releases.length;
+  const billingBadge = billing?.subscription?.trial_ends_at
+    ? new Date(billing.subscription.trial_ends_at) > new Date() ? 1 : 0
+    : 0;
+
+  const navSections: NavSection[] = [
+    ...(showAssignments ? [{
+      id: 'section-assignments',
+      label: 'Assignments',
+      icon: ClipboardList,
+      badge: assignmentsBadge,
+      badgeVariant: assignmentsBadge > 0 ? 'warning' as const : undefined,
+    }] : []),
+    ...(showAssessments ? [{
+      id: 'section-assessments',
+      label: 'Assessments',
+      icon: FileQuestion,
+      badge: assessmentsBadge,
+      badgeVariant: assessmentsBadge > 0 ? 'default' as const : undefined,
+    }] : []),
+    ...(showCompliance && compliance ? [{
+      id: 'section-compliance',
+      label: 'Compliance',
+      icon: ShieldCheck,
+      badge: complianceBadge,
+      badgeVariant: complianceBadge > 0 ? 'alert' as const : undefined,
+    }] : []),
+    ...(showIr && ir ? [{
+      id: 'section-ir',
+      label: 'Integrations',
+      icon: Network,
+      badge: irBadge,
+      badgeVariant: undefined,
+    }] : []),
+    ...(showReleases ? [{
+      id: 'section-releases',
+      label: 'Releases',
+      icon: Rocket,
+      badge: releasesBadge,
+      badgeVariant: undefined,
+    }] : []),
+    ...(showBilling && billing ? [{
+      id: 'section-billing',
+      label: 'Billing',
+      icon: CreditCard,
+      badge: billingBadge,
+      badgeVariant: billingBadge > 0 ? 'warning' as const : undefined,
+    }] : []),
+  ];
+
+  const sectionNodes = [
+    showAssignments ? (
+      <AssignmentsSection
+        key='assignments'
+        isAdmin={isAdmin}
+        adminData={adminData}
+        employeeData={employeeData}
+        assignments={assignments}
+        nextTask={nextTask}
+      />
+    ) : null,
+    showAssessments ? (
+      <AssessmentsSection key='assessments' canManage={canManageAssessments} tests={tests} />
+    ) : null,
+    showCompliance && compliance ? (
+      <ComplianceSection key='compliance' data={compliance} />
+    ) : null,
+    showIr && ir ? (
+      <IntegrationRegistrySection key='ir' data={ir} />
+    ) : null,
+    showReleases ? (
+      <ReleasesSection key='releases' releases={releases} />
+    ) : null,
+    showBilling && billing ? (
+      <BillingSection key='billing' data={billing} />
+    ) : null,
+  ].filter(Boolean);
+
+  const isOdd = sectionNodes.length % 2 !== 0;
+
   return (
-    <div className='space-y-10'>
-      {showAssignments && (
-        <AssignmentsSection
-          isAdmin={isAdmin}
-          adminData={adminData}
-          employeeData={employeeData}
-          assignments={assignments}
-          nextTask={nextTask}
-        />
-      )}
+    <>
+      <StickyNav sections={navSections} />
 
-      {showAssessments && (
-        <AssessmentsSection
-          canManage={canManageAssessments}
-          tests={tests}
-        />
-      )}
-
-      {showCompliance && compliance && (
-        <ComplianceSection data={compliance} />
-      )}
-
-      {showIr && ir && (
-        <IntegrationRegistrySection data={ir} />
-      )}
-
-      {showReleases && (
-        <ReleasesSection releases={releases} />
-      )}
-
-      {showBilling && billing && (
-        <BillingSection data={billing} />
-      )}
-    </div>
+      <div className='grid gap-6 lg:grid-cols-2'>
+        {sectionNodes.map((node, i) => (
+          <div key={i} className={isOdd && i === sectionNodes.length - 1 ? 'lg:col-span-2' : ''}>
+            {node}
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
