@@ -1,12 +1,13 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -17,9 +18,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Textarea } from '@/components/ui/textarea';
+import { HierarchicalCategoryMenu } from '@/components/assessments/hierarchical-category-menu';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import type { AssessmentCategory, AssessmentQuestion, AssessmentTest, AssessmentTestVersion } from '@/lib/types';
+import type { AssessmentCategory, AssessmentCategoryTreeNode, AssessmentQuestion, AssessmentTest, AssessmentTestVersion, AssessmentTestVersionHistory } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import {
   AlertTriangle,
@@ -92,6 +94,42 @@ function QuestionBadges({ question }: { question: AssessmentQuestion }) {
 }
 
 // ---------------------------------------------------------------------------
+// Section suggestions — edit this list to add / remove / reorder entries
+// ---------------------------------------------------------------------------
+
+const SECTION_SUGGESTIONS = [
+  'General Engineering',
+  '.NET Core / C#',
+  'Entity Framework & Data Access',
+  'SQL',
+  'REST API & Security',
+  'JWT & Authentication',
+  'Postman & cURL',
+  'Bash & Scripting',
+  'Kubernetes',
+  'Serverless',
+  'PSD2 & Open Banking',
+  'Payments',
+  'HTML / CSS / JavaScript',
+  'AI-Era Engineering',
+  'Scenario Questions',
+];
+
+const formatRelativeDate = (dateString?: string | null) => {
+  if (!dateString) return 'recently';
+  const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return 'recently';
+  const diffMs = Math.max(0, Date.now() - date.getTime());
+  if (diffMs < 60_000) return 'just now';
+  const diffMinutes = Math.round(diffMs / 60_000);
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.round(diffHours / 24);
+  return `${diffDays}d ago`;
+};
+
+// ---------------------------------------------------------------------------
 // Interfaces
 // ---------------------------------------------------------------------------
 
@@ -108,13 +146,29 @@ type VersionQuestion = {
   prompt: string;
 };
 
+type AssessmentTestVersionSummary = Omit<AssessmentTestVersion, 'questions'>;
+
+const buildVersionQuestions = (version: AssessmentTestVersion): VersionQuestion[] => {
+  return version.questions
+    .slice()
+    .sort((a, b) => a.order_index - b.order_index)
+    .filter((q) => Boolean(q.question_id))
+    .map((q, idx) => ({
+      question_id: q.question_id as string,
+      order_index: idx,
+      points: q.points || 1,
+      section: q.section || '',
+      prompt: (q.question_snapshot?.prompt as string) || 'Untitled',
+    }));
+};
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export default function AssessmentTestBuilderPage() {
   const { id } = useParams<{ id: string }>();
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
   const router = useRouter();
 
   // -- Core data --
@@ -123,6 +177,7 @@ export default function AssessmentTestBuilderPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   // -- Metadata --
   const [title, setTitle] = useState('');
@@ -131,6 +186,7 @@ export default function AssessmentTestBuilderPage() {
   const [roleTarget, setRoleTarget] = useState('');
   const [editingTitle, setEditingTitle] = useState(false);
   const [metaSheetOpen, setMetaSheetOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
 
   // -- Version settings --
   const [passingScore, setPassingScore] = useState(80);
@@ -146,19 +202,76 @@ export default function AssessmentTestBuilderPage() {
   const [bankLoading, setBankLoading] = useState(false);
   const [bankPage, setBankPage] = useState(1);
   const [bankTotal, setBankTotal] = useState(0);
-  const bankPageSize = 20;
+  const [bankPageSize, setBankPageSize] = useState(20);
   const [bankQuery, setBankQuery] = useState('');
   const [bankDifficulties, setBankDifficulties] = useState<string[]>([]);
   const [bankCategories, setBankCategories] = useState<string[]>([]);
   const [bankChecked, setBankChecked] = useState<Set<string>>(new Set());
   const [categories, setCategories] = useState<AssessmentCategory[]>([]);
+  const [categoryTree, setCategoryTree] = useState<AssessmentCategoryTreeNode[]>([]);
+  const [bankStats, setBankStats] = useState<{ total: number; unclassified_category: number; by_category: Record<string, number> } | null>(null);
+
+  // -- Version history --
+  const [versionHistory, setVersionHistory] = useState<AssessmentTestVersionHistory[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionsError, setVersionsError] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [versionActionId, setVersionActionId] = useState<string | null>(null);
+  const [versionToDelete, setVersionToDelete] = useState<AssessmentTestVersionHistory | null>(null);
+
+  // -- Resizable sidebars --
+  const [leftWidth, setLeftWidth] = useState(208);   // default: w-52
+  const [rightWidth, setRightWidth] = useState(320); // default: w-80
+  const dragRef = useRef<{ side: 'left' | 'right'; startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => {
+    if (!success) return;
+    const timer = window.setTimeout(() => setSuccess(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [success]);
+
+  useEffect(() => {
+    const storedLeft = localStorage.getItem('test-builder-left-width');
+    const storedRight = localStorage.getItem('test-builder-right-width');
+    if (storedLeft) setLeftWidth(Number(storedLeft));
+    if (storedRight) setRightWidth(Number(storedRight));
+  }, []);
+
+  const handleDividerMouseDown = useCallback((side: 'left' | 'right', e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { side, startX: e.clientX, startWidth: side === 'left' ? leftWidth : rightWidth };
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const delta = ev.clientX - dragRef.current.startX;
+      if (dragRef.current.side === 'left') {
+        const w = Math.max(150, Math.min(480, dragRef.current.startWidth + delta));
+        setLeftWidth(w);
+        localStorage.setItem('test-builder-left-width', String(w));
+      } else {
+        const w = Math.max(200, Math.min(560, dragRef.current.startWidth - delta));
+        setRightWidth(w);
+        localStorage.setItem('test-builder-right-width', String(w));
+      }
+    };
+
+    const handleMouseUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  }, [leftWidth, rightWidth]);
 
   // ---------------------------------------------------------------------------
   // Load test + version
   // ---------------------------------------------------------------------------
-  const loadTest = useCallback(async () => {
+  const loadTest = useCallback(async (opts?: { showLoading?: boolean }) => {
     if (!accessToken || !id) return;
-    setLoading(true);
+    const showLoading = opts?.showLoading ?? true;
+    if (showLoading) setLoading(true);
     try {
       const t = await api.get<AssessmentTest>(`/assessments/tests/${id}`, accessToken);
       setTest(t);
@@ -176,23 +289,11 @@ export default function AssessmentTestBuilderPage() {
       setTimeLimit(draft.time_limit_minutes ?? '');
       setShuffleQuestions(Boolean(draft.shuffle_questions));
       setAttemptsAllowed(draft.attempts_allowed ?? '');
-      setVersionQuestions(
-        draft.questions
-          .slice()
-          .sort((a, b) => a.order_index - b.order_index)
-          .filter((q) => Boolean(q.question_id))
-          .map((q, idx) => ({
-            question_id: q.question_id as string,
-            order_index: idx,
-            points: q.points || 1,
-            section: q.section || '',
-            prompt: (q.question_snapshot?.prompt as string) || 'Untitled',
-          })),
-      );
+      setVersionQuestions(buildVersionQuestions(draft));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load test');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [accessToken, id]);
 
@@ -213,27 +314,55 @@ export default function AssessmentTestBuilderPage() {
     } finally {
       setBankLoading(false);
     }
-  }, [accessToken, bankPage, bankQuery, bankDifficulties, bankCategories]);
+  }, [accessToken, bankPage, bankPageSize, bankQuery, bankDifficulties, bankCategories]);
 
   const loadCategories = useCallback(async () => {
     if (!accessToken) return;
     try {
-      const resp = await api.get<{ items: AssessmentCategory[] }>('/assessments/categories', accessToken);
-      setCategories(resp.items);
+      const [flat, tree, stats] = await Promise.all([
+        api.get<{ items: AssessmentCategory[] }>('/assessments/categories', accessToken),
+        api.get<{ items: AssessmentCategoryTreeNode[] }>('/assessments/categories/tree', accessToken),
+        api.get<{ total: number; unclassified_category: number; by_category: Record<string, number> }>(
+          '/assessments/questions/stats?status=published',
+          accessToken,
+        ),
+      ]);
+      setCategories(flat.items);
+      setCategoryTree(tree.items);
+      setBankStats(stats);
     } catch {
       setCategories([]);
+      setCategoryTree([]);
     }
   }, [accessToken]);
 
+  const loadVersionHistory = useCallback(async () => {
+    if (!accessToken || !id) return;
+    setVersionsLoading(true);
+    setVersionsError(null);
+    try {
+      const resp = await api.get<{ items: AssessmentTestVersionHistory[] }>(
+        `/assessments/tests/${id}/versions?include_archived=${showArchived ? '1' : '0'}`,
+        accessToken,
+      );
+      setVersionHistory(resp.items);
+    } catch (err) {
+      setVersionsError(err instanceof Error ? err.message : 'Failed to load versions');
+    } finally {
+      setVersionsLoading(false);
+    }
+  }, [accessToken, id, showArchived]);
+
   useEffect(() => { void loadTest(); }, [loadTest]);
   useEffect(() => { void loadCategories(); }, [loadCategories]);
+  useEffect(() => { if (versionsOpen) void loadVersionHistory(); }, [versionsOpen, loadVersionHistory]);
 
   useEffect(() => {
     const t = setTimeout(() => void loadBank(), 200);
     return () => clearTimeout(t);
   }, [loadBank]);
 
-  useEffect(() => { setBankPage(1); }, [bankQuery, bankDifficulties, bankCategories]);
+  useEffect(() => { setBankPage(1); }, [bankQuery, bankDifficulties, bankCategories, bankPageSize]);
 
   // ---------------------------------------------------------------------------
   // Derived
@@ -249,6 +378,17 @@ export default function AssessmentTestBuilderPage() {
     if (passingScore < 0 || passingScore > 100) e.push('Invalid passing score');
     return e;
   }, [title, versionQuestions, passingScore]);
+
+  const metaDirty = useMemo(() => {
+    if (!test) return false;
+    const norm = (v?: string | null) => (v ?? '').trim();
+    return (
+      norm(title) !== norm(test.title) ||
+      norm(description) !== norm(test.description) ||
+      norm(category) !== norm(test.category) ||
+      norm(roleTarget) !== norm(test.role_target)
+    );
+  }, [test, title, description, category, roleTarget]);
 
   const bankTotalPages = Math.max(1, Math.ceil(bankTotal / bankPageSize));
 
@@ -324,25 +464,55 @@ export default function AssessmentTestBuilderPage() {
   // ---------------------------------------------------------------------------
   // Save / Publish
   // ---------------------------------------------------------------------------
-  const saveDraft = async () => {
-    if (!accessToken || !version) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await api.put(`/assessments/test-versions/${version.id}`, {
-        passing_score: passingScore,
-        time_limit_minutes: timeLimit || null,
-        shuffle_questions: shuffleQuestions,
-        attempts_allowed: attemptsAllowed || null,
-        questions: versionQuestions.map((q, idx) => ({ question_id: q.question_id, order_index: idx, points: q.points || 1, section: q.section || null })),
-      }, accessToken);
-      await api.put(`/assessments/tests/${id}`, {
+  // Shared inner save — throws on failure so callers can react to errors.
+  const _doSave = async () => {
+    const updatedVersion = await api.put<AssessmentTestVersionSummary>(`/assessments/test-versions/${version!.id}?summary=1`, {
+      passing_score: passingScore,
+      time_limit_minutes: timeLimit || null,
+      shuffle_questions: shuffleQuestions,
+      attempts_allowed: attemptsAllowed || null,
+      questions: versionQuestions.map((q, idx) => ({ question_id: q.question_id, order_index: idx, points: q.points || 1, section: q.section || null })),
+    }, accessToken!);
+    let updatedTest: AssessmentTest | null = null;
+    if (metaDirty) {
+      updatedTest = await api.put<AssessmentTest>(`/assessments/tests/${id}`, {
         title: title.trim(),
         description: description.trim() || null,
         category: category.trim() || null,
         role_target: roleTarget.trim() || null,
-      }, accessToken);
-      await loadTest();
+      }, accessToken!);
+    }
+
+    setVersion((prev) => {
+      const next = {
+        ...(prev || { questions: [] }),
+        ...updatedVersion,
+      } as AssessmentTestVersion;
+      return next;
+    });
+    setPassingScore(updatedVersion.passing_score || 80);
+    setTimeLimit(updatedVersion.time_limit_minutes ?? '');
+    setShuffleQuestions(Boolean(updatedVersion.shuffle_questions));
+    setAttemptsAllowed(updatedVersion.attempts_allowed ?? '');
+    setTest((prev) => {
+      const base = updatedTest || prev;
+      if (!base) return base;
+      return {
+        ...base,
+        versions: base.versions.map((v) => (v.id === updatedVersion.id ? { ...v, ...updatedVersion } : v)),
+      };
+    });
+    return { updatedVersion, updatedTest };
+  };
+
+  const saveDraft = async () => {
+    if (!accessToken || !version) return;
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await _doSave();
+      setSuccess('Draft saved');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
     } finally {
@@ -354,14 +524,72 @@ export default function AssessmentTestBuilderPage() {
     if (!accessToken || !version) return;
     setSaving(true);
     setError(null);
+    setSuccess(null);
     try {
-      await saveDraft();
-      await api.post(`/assessments/test-versions/${version.id}/publish`, {}, accessToken);
-      await loadTest();
+      await _doSave();                                                          // save; throws on error — publish is skipped
+      const published = await api.post<AssessmentTestVersionSummary>(
+        `/assessments/test-versions/${version.id}/publish?summary=1`,
+        {},
+        accessToken,
+      );
+      const newDraft = await api.post<AssessmentTestVersionSummary>(
+        `/assessments/tests/${id}/versions?summary=1`,
+        {},
+        accessToken,
+      );
+      setVersion((prev) => {
+        const next = {
+          ...(prev || { questions: [] }),
+          ...newDraft,
+        } as AssessmentTestVersion;
+        return next;
+      });
+      setPassingScore(newDraft.passing_score || 80);
+      setTimeLimit(newDraft.time_limit_minutes ?? '');
+      setShuffleQuestions(Boolean(newDraft.shuffle_questions));
+      setAttemptsAllowed(newDraft.attempts_allowed ?? '');
+      setTest((prev) => {
+        const base = prev || test;
+        if (!base) return base;
+        const replaced = base.versions.map((v) => (v.id === published.id ? { ...v, ...published } : v));
+        const hasDraft = replaced.some((v) => v.id === newDraft.id);
+        return {
+          ...base,
+          versions: hasDraft ? replaced : [...replaced, { ...newDraft, questions: [] }],
+        };
+      });
+      setSuccess('Published successfully');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Publish failed');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const toggleArchiveVersion = async (ver: AssessmentTestVersionHistory, archived: boolean) => {
+    if (!accessToken) return;
+    setVersionActionId(ver.id);
+    try {
+      const action = archived ? 'archive' : 'unarchive';
+      await api.post(`/assessments/test-versions/${ver.id}/${action}?summary=1`, {}, accessToken);
+      await loadVersionHistory();
+    } catch (err) {
+      setVersionsError(err instanceof Error ? err.message : 'Failed to update version');
+    } finally {
+      setVersionActionId(null);
+    }
+  };
+
+  const handleDeleteVersion = async (ver: AssessmentTestVersionHistory) => {
+    if (!accessToken) return;
+    setVersionActionId(ver.id);
+    try {
+      await api.delete(`/assessments/test-versions/${ver.id}`, accessToken);
+      await loadVersionHistory();
+    } catch (err) {
+      setVersionsError(err instanceof Error ? err.message : 'Failed to delete version');
+    } finally {
+      setVersionActionId(null);
     }
   };
 
@@ -412,11 +640,25 @@ export default function AssessmentTestBuilderPage() {
             Edit details
           </button>
 
+          <button
+            type='button'
+            onClick={() => setVersionsOpen(true)}
+            className='shrink-0 text-xs text-muted-foreground underline-offset-2 hover:underline'
+          >
+            Versions
+          </button>
+
           <Badge variant='outline' className='shrink-0'>v{version.version_number} {version.status}</Badge>
         </div>
 
         <div className='flex items-center gap-2'>
           {error && <span className='text-xs text-red-600 max-w-[200px] truncate' title={error}>{error}</span>}
+          {success && (
+            <span className='inline-flex items-center gap-1 text-xs text-emerald-600'>
+              <CheckCircle2 className='h-3.5 w-3.5' />
+              {success}
+            </span>
+          )}
           <Button variant='outline' size='sm' onClick={saveDraft} disabled={saving}>
             {saving ? 'Saving...' : 'Save draft'}
           </Button>
@@ -429,71 +671,26 @@ export default function AssessmentTestBuilderPage() {
       {/* ── 3-column body ── */}
       <div className='flex min-h-0 flex-1'>
         {/* ── LEFT SIDEBAR ── */}
-        <aside className='flex w-52 shrink-0 flex-col border-r bg-muted/20'>
-          {/* Category tree */}
+        <aside className='flex shrink-0 flex-col bg-muted/20' style={{ width: leftWidth }}>
+          {/* Category tree — scrollable */}
           <div className='flex-1 overflow-auto p-3'>
             <p className='mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground'>Categories</p>
-            <div className='space-y-0.5'>
-              <button
-                type='button'
-                className={cn(
-                  'flex w-full items-center justify-between rounded px-2 py-1.5 text-xs',
-                  bankCategories.length === 0 ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-muted',
-                )}
-                onClick={() => setBankCategories([])}
-              >
-                All categories
-              </button>
-              <button
-                type='button'
-                className={cn(
-                  'flex w-full items-center justify-between rounded px-2 py-1.5 text-xs',
-                  bankCategories.includes('unclassified') ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-muted',
-                )}
-                onClick={() => setBankCategories((prev) => prev.includes('unclassified') ? prev.filter((c) => c !== 'unclassified') : [...prev, 'unclassified'])}
-              >
-                Unclassified
-              </button>
-              {categories.map((cat) => (
-                <button
-                  key={cat.slug}
-                  type='button'
-                  className={cn(
-                    'flex w-full items-center justify-between rounded px-2 py-1.5 text-xs',
-                    bankCategories.includes(cat.slug) ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-muted',
-                  )}
-                  onClick={() => setBankCategories((prev) => prev.includes(cat.slug) ? prev.filter((c) => c !== cat.slug) : [...prev, cat.slug])}
-                >
-                  <span className='truncate'>{cat.name}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Settings */}
-            <div className='mt-6 space-y-3'>
-              <p className='text-xs font-semibold uppercase tracking-wider text-muted-foreground'>Test settings</p>
-              <div className='space-y-2'>
-                <label className='block text-[11px] text-muted-foreground'>Passing score (%)</label>
-                <Input type='number' min={0} max={100} value={passingScore} onChange={(e) => setPassingScore(Number(e.target.value || 0))} className='h-8 text-xs' />
-              </div>
-              <div className='space-y-2'>
-                <label className='block text-[11px] text-muted-foreground'>Time limit (min)</label>
-                <Input type='number' min={1} value={timeLimit} onChange={(e) => setTimeLimit(e.target.value ? Number(e.target.value) : '')} className='h-8 text-xs' placeholder='No limit' />
-              </div>
-              <div className='space-y-2'>
-                <label className='block text-[11px] text-muted-foreground'>Max attempts</label>
-                <Input type='number' min={1} value={attemptsAllowed} onChange={(e) => setAttemptsAllowed(e.target.value ? Number(e.target.value) : '')} className='h-8 text-xs' placeholder='Unlimited' />
-              </div>
-              <label className='flex items-center gap-2 text-xs'>
-                <input type='checkbox' checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} className='h-3.5 w-3.5' />
-                Shuffle questions
-              </label>
-            </div>
+            <HierarchicalCategoryMenu
+              tree={categoryTree}
+              unclassifiedCount={bankStats?.unclassified_category ?? 0}
+              countsBySlag={Object.fromEntries(
+                categories.map((c) => [c.slug, bankStats?.by_category[c.slug] ?? 0]),
+              )}
+              totalCount={bankStats?.total}
+              selectedSlugs={bankCategories}
+              onChange={setBankCategories}
+              className='text-xs'
+            />
           </div>
 
           {/* Validation */}
           {hasErrors && (
-            <div className='border-t p-3'>
+            <div className='shrink-0 border-t px-3 py-2'>
               <div className='flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-2'>
                 <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600' />
                 <div className='space-y-0.5'>
@@ -504,7 +701,41 @@ export default function AssessmentTestBuilderPage() {
               </div>
             </div>
           )}
+
+          {/* Test settings — pinned to bottom, compact */}
+          <div className='shrink-0 border-t bg-muted/30 px-3 py-3'>
+            <p className='mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground'>Test settings</p>
+            <div className='grid grid-cols-2 gap-x-2 gap-y-1.5'>
+              <div>
+                <label className='block text-[10px] text-muted-foreground'>Pass score (%)</label>
+                <Input type='number' min={0} max={100} value={passingScore} onChange={(e) => setPassingScore(Number(e.target.value || 0))} className='h-6 px-1.5 text-xs' />
+              </div>
+              <div>
+                <label className='block text-[10px] text-muted-foreground'>Time limit (min)</label>
+                <Input type='number' min={1} value={timeLimit} onChange={(e) => setTimeLimit(e.target.value ? Number(e.target.value) : '')} className='h-6 px-1.5 text-xs' placeholder='∞' />
+              </div>
+              <div>
+                <label className='block text-[10px] text-muted-foreground'>Max attempts</label>
+                <Input type='number' min={1} value={attemptsAllowed} onChange={(e) => setAttemptsAllowed(e.target.value ? Number(e.target.value) : '')} className='h-6 px-1.5 text-xs' placeholder='∞' />
+              </div>
+              <div className='flex items-end pb-0.5'>
+                <label className='flex cursor-pointer items-center gap-1.5 text-[11px]'>
+                  <input type='checkbox' checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} className='h-3 w-3' />
+                  Shuffle
+                </label>
+              </div>
+            </div>
+          </div>
         </aside>
+
+        {/* ── LEFT DRAG DIVIDER ── */}
+        <div
+          onMouseDown={(e) => handleDividerMouseDown('left', e)}
+          className='group relative w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/60 active:bg-primary'
+          title='Drag to resize'
+        >
+          <div className='absolute inset-y-0 -left-1 -right-1' />
+        </div>
 
         {/* ── CENTER: Question Bank ── */}
         <div className='flex min-w-0 flex-1 flex-col'>
@@ -576,13 +807,17 @@ export default function AssessmentTestBuilderPage() {
                         </div>
                       </div>
                       {isAdded ? (
-                        <Badge variant='outline' className='shrink-0 border-emerald-300 text-emerald-700 text-[10px]'>
-                          <Check className='mr-0.5 h-3 w-3' />Added
-                        </Badge>
+                        <span className='inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 text-[10px] font-medium text-emerald-700'>
+                          <Check className='h-3 w-3' />Added
+                        </span>
                       ) : (
-                        <Button variant='outline' size='sm' className='h-7 shrink-0 text-xs' onClick={() => addSingle(q)}>
-                          <Plus className='mr-1 h-3 w-3' />Add
-                        </Button>
+                        <button
+                          type='button'
+                          onClick={() => addSingle(q)}
+                          className='inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-input bg-background px-2 text-[10px] font-medium text-foreground transition-colors hover:bg-muted'
+                        >
+                          <Plus className='h-3 w-3' />Add
+                        </button>
                       )}
                     </div>
                   );
@@ -592,19 +827,45 @@ export default function AssessmentTestBuilderPage() {
           </div>
 
           {/* Pagination */}
-          <div className='flex shrink-0 items-center justify-between border-t px-4 py-2'>
+          <div className='flex shrink-0 items-center justify-between border-t px-4 py-3'>
             <span className='text-xs text-muted-foreground'>
-              Page {bankPage} of {bankTotalPages}
+              {bankPageSize >= 9999
+                ? `Showing all ${bankTotal}`
+                : `Page ${bankPage} of ${bankTotalPages}`}
             </span>
-            <div className='flex gap-1'>
-              <Button variant='outline' size='sm' className='h-7 text-xs' disabled={bankPage <= 1} onClick={() => setBankPage((p) => p - 1)}>Prev</Button>
-              <Button variant='outline' size='sm' className='h-7 text-xs' disabled={bankPage >= bankTotalPages} onClick={() => setBankPage((p) => p + 1)}>Next</Button>
+            <div className='flex items-center gap-1'>
+              <select
+                className='h-7 rounded-md border border-input bg-background px-1.5 text-xs'
+                value={bankPageSize}
+                onChange={(e) => { setBankPageSize(Number(e.target.value)); setBankPage(1); }}
+              >
+                <option value={10}>10 / page</option>
+                <option value={20}>20 / page</option>
+                <option value={50}>50 / page</option>
+                <option value={100}>100 / page</option>
+                <option value={9999}>All</option>
+              </select>
+              {bankPageSize < 9999 && (
+                <>
+                  <Button variant='outline' size='sm' className='h-7 text-xs' disabled={bankPage <= 1} onClick={() => setBankPage((p) => p - 1)}>Prev</Button>
+                  <Button variant='outline' size='sm' className='h-7 text-xs' disabled={bankPage >= bankTotalPages} onClick={() => setBankPage((p) => p + 1)}>Next</Button>
+                </>
+              )}
             </div>
           </div>
         </div>
 
+        {/* ── RIGHT DRAG DIVIDER ── */}
+        <div
+          onMouseDown={(e) => handleDividerMouseDown('right', e)}
+          className='group relative w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/60 active:bg-primary'
+          title='Drag to resize'
+        >
+          <div className='absolute inset-y-0 -left-1 -right-1' />
+        </div>
+
         {/* ── RIGHT: Test Composition ── */}
-        <aside className='flex w-80 shrink-0 flex-col border-l bg-background'>
+        <aside className='flex shrink-0 flex-col bg-background' style={{ width: rightWidth }}>
           {/* Header */}
           <div className='shrink-0 border-b px-4 py-3'>
             <div className='flex items-center justify-between'>
@@ -694,24 +955,121 @@ export default function AssessmentTestBuilderPage() {
         </aside>
       </div>
 
-      {/* Section suggestions datalist */}
+      {/* Section suggestions datalist — sourced from SECTION_SUGGESTIONS above */}
       <datalist id='section-suggestions'>
-        <option value='General Engineering' />
-        <option value='.NET Core / C#' />
-        <option value='Entity Framework & Data Access' />
-        <option value='SQL' />
-        <option value='REST API & Security' />
-        <option value='JWT & Authentication' />
-        <option value='Postman & cURL' />
-        <option value='Bash & Scripting' />
-        <option value='Kubernetes' />
-        <option value='Serverless' />
-        <option value='PSD2 & Open Banking' />
-        <option value='Payments' />
-        <option value='HTML / CSS / JavaScript' />
-        <option value='AI-Era Engineering' />
-        <option value='Scenario Questions' />
+        {SECTION_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
       </datalist>
+
+      {/* ── Versions Sheet ── */}
+      <Sheet open={versionsOpen} onOpenChange={setVersionsOpen}>
+        <SheetContent side='right' className='sm:max-w-lg'>
+          <SheetHeader>
+            <SheetTitle>Version history</SheetTitle>
+          </SheetHeader>
+          <div className='mt-4 flex items-center justify-between'>
+            <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+              <input
+                type='checkbox'
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+                className='h-3.5 w-3.5'
+              />
+              Show archived
+            </label>
+            <Button variant='outline' size='sm' className='h-7 text-xs' onClick={loadVersionHistory} disabled={versionsLoading}>
+              Refresh
+            </Button>
+          </div>
+          {versionsError && <p className='mt-2 text-xs text-red-600'>{versionsError}</p>}
+
+          <div className='mt-3 divide-y rounded-md border'>
+            {versionsLoading ? (
+              <div className='px-3 py-4 text-xs text-muted-foreground'>Loading versions…</div>
+            ) : versionHistory.length === 0 ? (
+              <div className='px-3 py-4 text-xs text-muted-foreground'>No versions found.</div>
+            ) : (
+              versionHistory.map((v) => {
+                const isCurrent = version?.id === v.id;
+                const inUse = v.deliveries_count > 0;
+                const canDelete = !isCurrent && !inUse;
+                const createdBy = v.created_by
+                  ? (v.created_by === user?.id ? 'You' : (v.created_by_name || v.created_by_email || v.created_by.slice(0, 8)))
+                  : 'Unknown';
+                const statusLabel = v.status === 'published' ? 'Published' : v.status === 'archived' ? 'Archived' : 'Draft';
+                const statusClass =
+                  v.status === 'published'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : v.status === 'archived'
+                      ? 'border-slate-200 bg-slate-100 text-slate-600'
+                      : 'border-amber-200 bg-amber-50 text-amber-700';
+                return (
+                  <div key={v.id} className='px-3 py-3'>
+                    <div className='flex items-center justify-between gap-2'>
+                      <div className='flex items-center gap-2'>
+                        <Badge variant='outline' className='text-[10px]'>v{v.version_number}</Badge>
+                        <Badge variant='outline' className={cn('text-[10px]', statusClass)}>{statusLabel}</Badge>
+                        {isCurrent && <Badge variant='secondary' className='text-[10px]'>Current</Badge>}
+                      </div>
+                      <div className='flex items-center gap-1'>
+                        {v.status === 'published' && (
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            className='h-7 text-[10px]'
+                            onClick={() => toggleArchiveVersion(v, true)}
+                            disabled={versionActionId === v.id}
+                          >
+                            Archive
+                          </Button>
+                        )}
+                        {v.status === 'archived' && (
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            className='h-7 text-[10px]'
+                            onClick={() => toggleArchiveVersion(v, false)}
+                            disabled={versionActionId === v.id}
+                          >
+                            Restore
+                          </Button>
+                        )}
+                        {canDelete ? (
+                          <ConfirmDialog
+                            title='Delete version'
+                            description='This will permanently delete the version. This cannot be undone.'
+                            confirmText='Delete'
+                            onConfirm={() => handleDeleteVersion(v)}
+                            trigger={(
+                              <Button size='sm' variant='destructive' className='h-7 text-[10px]' disabled={versionActionId === v.id}>
+                                Delete
+                              </Button>
+                            )}
+                          />
+                        ) : (
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            className='h-7 text-[10px]'
+                            disabled
+                            title={isCurrent ? 'Cannot delete the current draft' : inUse ? 'Version has deliveries' : 'Not deletable'}
+                          >
+                            Delete
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    <div className='mt-1 text-[11px] text-muted-foreground'>
+                      Created {formatRelativeDate(v.created_at)} by {createdBy}
+                      {v.published_at && ` · Published ${formatRelativeDate(v.published_at)}`}
+                      {` · Deliveries ${v.deliveries_count}`}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* ── Metadata Sheet ── */}
       <Sheet open={metaSheetOpen} onOpenChange={setMetaSheetOpen}>

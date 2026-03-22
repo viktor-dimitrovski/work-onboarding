@@ -40,8 +40,26 @@ class AssessmentCategory(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Ba
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     slug: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('assessment_categories.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
 
     questions: Mapped[list['AssessmentQuestion']] = relationship(back_populates='category')
+    children: Mapped[list['AssessmentCategory']] = relationship(
+        'AssessmentCategory',
+        back_populates='parent',
+        foreign_keys='AssessmentCategory.parent_id',
+        order_by='AssessmentCategory.name',
+    )
+    parent: Mapped['AssessmentCategory | None'] = relationship(
+        'AssessmentCategory',
+        back_populates='children',
+        foreign_keys='AssessmentCategory.parent_id',
+        remote_side='AssessmentCategory.id',
+    )
 
 
 class AssessmentQuestion(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):

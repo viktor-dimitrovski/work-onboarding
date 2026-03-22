@@ -6,6 +6,8 @@ import time
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, UploadFile, File, Form, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -19,7 +21,13 @@ from app.schemas.assessment import (
     AssessmentAttemptStartOut,
     AssessmentAttemptSubmitOut,
     AssessmentAttemptOut,
+    AssessmentCategoryCreate,
+    AssessmentCategoryUpdate,
+    AssessmentCategoryMergeIn,
     AssessmentCategoryListResponse,
+    AssessmentCategoryOut,
+    AssessmentCategoryTreeResponse,
+    AssessmentCategoryTreeNode,
     AssessmentClassificationJobCreate,
     AssessmentClassificationJobOut,
     AssessmentClassificationJobItemListResponse,
@@ -42,15 +50,17 @@ from app.schemas.assessment import (
     AssessmentTextImportJobStatus,
     AssessmentResultListResponse,
     AssessmentResultSummary,
+    AttemptReviewOut,
     AssessmentTestCreate,
     AssessmentTestListResponse,
     AssessmentTestOut,
     AssessmentTestUpdate,
+    AssessmentTestVersionHistoryResponse,
     AssessmentTestVersionOut,
     AssessmentTestVersionUpdate,
 )
 from app.schemas.common import PaginationMeta
-from app.models.assessment import AssessmentAttempt, AssessmentClassificationJob, AssessmentDelivery
+from app.models.assessment import AssessmentAttempt, AssessmentClassificationJob, AssessmentDelivery, AssessmentTestVersion
 from app.models.assessment import AssessmentClassificationJobItem
 from app.services import assessment_classification_service, assessment_service, audit_service, usage_service
 from app.services.openai_responses_service import call_openai_responses_json
@@ -621,7 +631,7 @@ def cancel_text_import_job(
 @router.get('/questions', response_model=AssessmentQuestionListResponse)
 def list_questions(
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page_size: int = Query(default=20, ge=1, le=10000),
     status_filter: str | None = Query(default=None, alias='status'),
     query: str | None = Query(default=None, alias='q'),
     tag: str | None = Query(default=None),
@@ -629,7 +639,7 @@ def list_questions(
     category: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-    __: object = Depends(require_access('assessments', 'assessments:read')),
+    ctx: TenantContext = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentQuestionListResponse:
     status_filters = _split_csv(status_filter)
     difficulties = _split_csv(difficulty)
@@ -637,6 +647,7 @@ def list_questions(
     categories = _split_csv(category)
     items, total = assessment_service.list_questions(
         db,
+        tenant_id=ctx.tenant.id,
         page=page,
         page_size=page_size,
         status_filters=status_filters,
@@ -658,7 +669,134 @@ def list_categories(
     __: object = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentCategoryListResponse:
     items = assessment_service.list_categories(db)
-    return AssessmentCategoryListResponse(items=[item for item in items])
+    return AssessmentCategoryListResponse(items=list(items))
+
+
+@router.get('/categories/tree', response_model=AssessmentCategoryTreeResponse)
+def list_categories_tree(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> AssessmentCategoryTreeResponse:
+    all_cats = assessment_service.list_categories(db)
+    # Build tree: parents first, then attach children
+    parents: list[AssessmentCategoryTreeNode] = []
+    children_map: dict[str, list[AssessmentCategoryTreeNode]] = {}
+
+    for cat in all_cats:
+        node = AssessmentCategoryTreeNode(
+            id=cat.id,
+            name=cat.name,
+            slug=cat.slug,
+            parent_id=cat.parent_id,
+            children=[],
+        )
+        if cat.parent_id is None:
+            parents.append(node)
+        else:
+            pid = str(cat.parent_id)
+            children_map.setdefault(pid, []).append(node)
+
+    for parent in parents:
+        parent.children = sorted(
+            children_map.get(str(parent.id), []),
+            key=lambda n: n.name,
+        )
+
+    # Orphan children (parent not in list) are appended as top-level
+    parent_ids = {str(p.id) for p in parents}
+    for pid, nodes in children_map.items():
+        if pid not in parent_ids:
+            parents.extend(nodes)
+
+    return AssessmentCategoryTreeResponse(items=sorted(parents, key=lambda n: n.name))
+
+
+# ---------------------------------------------------------------------------
+# Category CRUD
+# ---------------------------------------------------------------------------
+
+@router.post('/categories', response_model=AssessmentCategoryOut, status_code=201)
+def create_category(
+    payload: AssessmentCategoryCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentCategoryOut:
+    cat = assessment_service.create_category(db, name=payload.name, slug=payload.slug, parent_id=payload.parent_id)
+    audit_service.log_action(db, actor_user_id=current_user.id, action='create', entity_type='assessment_category', entity_id=str(cat.id), details={'name': cat.name, 'slug': cat.slug})
+    db.commit()
+    counts = assessment_service.category_question_counts(db)
+    out = AssessmentCategoryOut.model_validate(cat)
+    out.question_count = counts.get(str(cat.id), 0)
+    out.children_count = len(cat.children)
+    return out
+
+
+@router.get('/categories/{category_id}', response_model=AssessmentCategoryOut)
+def get_category(
+    category_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> AssessmentCategoryOut:
+    cat = assessment_service.get_category(db, category_id)
+    counts = assessment_service.category_question_counts(db)
+    out = AssessmentCategoryOut.model_validate(cat)
+    out.question_count = counts.get(str(cat.id), 0)
+    out.children_count = len(cat.children)
+    return out
+
+
+@router.put('/categories/{category_id}', response_model=AssessmentCategoryOut)
+def update_category(
+    category_id: UUID,
+    payload: AssessmentCategoryUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentCategoryOut:
+    data = payload.model_dump(exclude_unset=True)
+    cat = assessment_service.update_category(db, category_id, data)
+    audit_service.log_action(db, actor_user_id=current_user.id, action='update', entity_type='assessment_category', entity_id=str(cat.id), details=data)
+    db.commit()
+    counts = assessment_service.category_question_counts(db)
+    out = AssessmentCategoryOut.model_validate(cat)
+    out.question_count = counts.get(str(cat.id), 0)
+    out.children_count = len(cat.children)
+    return out
+
+
+@router.delete('/categories/{category_id}', status_code=204)
+def delete_category(
+    category_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> None:
+    assessment_service.delete_category(db, category_id)
+    audit_service.log_action(db, actor_user_id=current_user.id, action='delete', entity_type='assessment_category', entity_id=str(category_id), details={})
+    db.commit()
+
+
+@router.post('/categories/{category_id}/merge', response_model=AssessmentCategoryOut)
+def merge_category(
+    category_id: UUID,
+    payload: AssessmentCategoryMergeIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentCategoryOut:
+    """Merge payload.target_id INTO category_id. Target is deleted; category_id survives."""
+    assessment_service.merge_categories(db, source_id=payload.target_id, target_id=category_id)
+    audit_service.log_action(db, actor_user_id=current_user.id, action='merge', entity_type='assessment_category', entity_id=str(category_id), details={'merged_from': str(payload.target_id)})
+    db.commit()
+    cat = assessment_service.get_category(db, category_id)
+    counts = assessment_service.category_question_counts(db)
+    out = AssessmentCategoryOut.model_validate(cat)
+    out.question_count = counts.get(str(cat.id), 0)
+    out.children_count = len(cat.children)
+    return out
 
 
 @router.get('/questions/stats', response_model=AssessmentQuestionStatsOut)
@@ -670,7 +808,7 @@ def question_stats(
     category: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-    __: object = Depends(require_access('assessments', 'assessments:read')),
+    ctx: TenantContext = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentQuestionStatsOut:
     status_filters = _split_csv(status_filter)
     difficulties = _split_csv(difficulty)
@@ -678,6 +816,7 @@ def question_stats(
     categories = _split_csv(category)
     data = assessment_service.question_stats(
         db,
+        tenant_id=ctx.tenant.id,
         status_filters=status_filters,
         query=query,
         tags=tags,
@@ -1173,6 +1312,18 @@ def get_test(
     return AssessmentTestOut.model_validate(test)
 
 
+@router.get('/tests/{test_id}/versions', response_model=AssessmentTestVersionHistoryResponse)
+def list_test_versions(
+    test_id: UUID,
+    include_archived: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> AssessmentTestVersionHistoryResponse:
+    items = assessment_service.list_test_versions(db, test_id=test_id, include_archived=include_archived)
+    return AssessmentTestVersionHistoryResponse(items=items)
+
+
 @router.put('/tests/{test_id}', response_model=AssessmentTestOut)
 def update_test(
     test_id: UUID,
@@ -1194,6 +1345,22 @@ def update_test(
     )
     db.commit()
     return AssessmentTestOut.model_validate(assessment_service.get_test(db, test.id))
+
+
+def _version_summary(version: AssessmentTestVersion) -> dict[str, object]:
+    return {
+        'id': version.id,
+        'test_id': version.test_id,
+        'version_number': version.version_number,
+        'status': version.status,
+        'passing_score': version.passing_score,
+        'time_limit_minutes': version.time_limit_minutes,
+        'shuffle_questions': version.shuffle_questions,
+        'attempts_allowed': version.attempts_allowed,
+        'published_at': version.published_at,
+        'created_at': version.created_at,
+        'updated_at': version.updated_at,
+    }
 
 
 @router.delete('/tests/{test_id}', status_code=status.HTTP_204_NO_CONTENT)
@@ -1220,6 +1387,7 @@ def delete_test(
 @router.post('/tests/{test_id}/versions', response_model=AssessmentTestVersionOut, status_code=status.HTTP_201_CREATED)
 def create_test_version(
     test_id: UUID,
+    summary: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access('assessments', 'assessments:write')),
@@ -1234,6 +1402,8 @@ def create_test_version(
         details={'test_id': str(test_id)},
     )
     db.commit()
+    if summary:
+        return JSONResponse(content=jsonable_encoder(_version_summary(version)))
     return AssessmentTestVersionOut.model_validate(version)
 
 
@@ -1241,15 +1411,18 @@ def create_test_version(
 def update_test_version(
     version_id: UUID,
     payload: AssessmentTestVersionUpdate,
+    summary: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
-    __: object = Depends(require_access('assessments', 'assessments:write')),
+    ctx: TenantContext = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentTestVersionOut:
     version = assessment_service.update_test_version(
         db,
         version_id=version_id,
         payload=payload.model_dump(exclude_unset=True),
         actor_user_id=current_user.id,
+        tenant_id=ctx.tenant.id,
+        load_questions=not summary,
     )
     audit_service.log_action(
         db,
@@ -1259,17 +1432,98 @@ def update_test_version(
         entity_id=version.id,
     )
     db.commit()
+    if summary:
+        return JSONResponse(content=jsonable_encoder(_version_summary(version)))
     return AssessmentTestVersionOut.model_validate(version)
+
+
+@router.post('/test-versions/{version_id}/archive', response_model=AssessmentTestVersionOut)
+def archive_test_version(
+    version_id: UUID,
+    summary: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentTestVersionOut:
+    version = assessment_service.set_test_version_archived(
+        db,
+        version_id=version_id,
+        actor_user_id=current_user.id,
+        archived=True,
+    )
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_test_version_archive',
+        entity_type='assessment_test_version',
+        entity_id=version.id,
+    )
+    db.commit()
+    if summary:
+        return JSONResponse(content=jsonable_encoder(_version_summary(version)))
+    return AssessmentTestVersionOut.model_validate(version)
+
+
+@router.post('/test-versions/{version_id}/unarchive', response_model=AssessmentTestVersionOut)
+def unarchive_test_version(
+    version_id: UUID,
+    summary: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AssessmentTestVersionOut:
+    version = assessment_service.set_test_version_archived(
+        db,
+        version_id=version_id,
+        actor_user_id=current_user.id,
+        archived=False,
+    )
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_test_version_unarchive',
+        entity_type='assessment_test_version',
+        entity_id=version.id,
+    )
+    db.commit()
+    if summary:
+        return JSONResponse(content=jsonable_encoder(_version_summary(version)))
+    return AssessmentTestVersionOut.model_validate(version)
+
+
+@router.delete('/test-versions/{version_id}', status_code=status.HTTP_204_NO_CONTENT)
+def delete_test_version(
+    version_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> Response:
+    assessment_service.delete_test_version(db, version_id=version_id)
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_test_version_delete',
+        entity_type='assessment_test_version',
+        entity_id=version_id,
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post('/test-versions/{version_id}/publish', response_model=AssessmentTestVersionOut)
 def publish_test_version(
     version_id: UUID,
+    summary: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentTestVersionOut:
-    version = assessment_service.publish_test_version(db, version_id=version_id, actor_user_id=current_user.id)
+    version = assessment_service.publish_test_version(
+        db,
+        version_id=version_id,
+        actor_user_id=current_user.id,
+        load_questions=not summary,
+    )
     audit_service.log_action(
         db,
         actor_user_id=current_user.id,
@@ -1278,6 +1532,8 @@ def publish_test_version(
         entity_id=version.id,
     )
     db.commit()
+    if summary:
+        return JSONResponse(content=jsonable_encoder(_version_summary(version)))
     return AssessmentTestVersionOut.model_validate(version)
 
 
@@ -1363,6 +1619,11 @@ def create_delivery(
         entity_id=delivery.id,
     )
     db.commit()
+    assessment_service.send_delivery_assignment_email(
+        db,
+        delivery_id=delivery.id,
+        actor_user_id=current_user.id,
+    )
     return AssessmentDeliveryOut.model_validate(delivery)
 
 
@@ -1542,6 +1803,25 @@ def submit_attempt(
         correct_count=correct_count,
         total_questions=total_questions,
     )
+
+
+@router.get('/attempts/{attempt_id}/review', response_model=AttemptReviewOut)
+def get_attempt_review(
+    attempt_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
+) -> AttemptReviewOut:
+    perms = permissions_for_roles(ctx.roles)
+    is_admin = 'assessments:write' in perms
+    review = assessment_service.get_attempt_review(
+        db,
+        attempt_id=attempt_id,
+        requesting_user_id=current_user.id,
+        is_admin=is_admin,
+    )
+    return AttemptReviewOut(**review)
 
 
 @router.get('/results', response_model=AssessmentResultListResponse)

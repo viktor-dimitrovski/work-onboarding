@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 from uuid import UUID
 
-from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session, joinedload
+# Use uvicorn.error so diagnostic output is guaranteed visible in journalctl
+# even if the root logger is configured at WARNING level.
+logger = logging.getLogger("uvicorn.error")
 
+from fastapi import HTTPException, status
+from sqlalchemy import cast, func, or_, select, text, update
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Session, joinedload, selectinload
+
+from app.core.config import settings
 from app.models.assignment import AssignmentTask
 from app.models.assessment import (
     AssessmentAttempt,
@@ -20,6 +28,9 @@ from app.models.assessment import (
     AssessmentTestVersion,
     AssessmentTestVersionQuestion,
 )
+from app.models.rbac import User
+from app.models.tenant import Tenant
+from app.services import email_service
 
 
 def build_question_query(
@@ -30,12 +41,31 @@ def build_question_query(
     difficulties: list[str] | None,
     categories: list[str] | None,
     include_joins: bool,
+    tenant_id: UUID | None = None,
 ):
+    """Build a filtered SELECT on AssessmentQuestion.
+
+    When include_joins=True the query is annotated with ORM eager-loading
+    options.  We use:
+      - selectinload  for the 1-to-many options relationship — this fires a
+        *separate* SELECT … WHERE question_id IN (…) after the paged main
+        query, so no JOIN is added here, avoiding row-multiplication and
+        keeping LIMIT/OFFSET meaningful.
+      - joinedload    for the many-to-one category relationship — a single
+        extra row column per question, no explosion risk.
+
+    When include_joins=False (used for COUNT queries) no loading annotations
+    are added, so the generated SQL is a plain filtered SELECT with no JOINs.
+    """
     base = select(AssessmentQuestion)
+    if tenant_id is not None:
+        # Explicit tenant isolation as defense-in-depth. This ensures we never
+        # leak/operate on cross-tenant rows even if the DB role bypasses RLS.
+        base = base.where(AssessmentQuestion.tenant_id == tenant_id)
     if include_joins:
         base = base.options(
-            joinedload(AssessmentQuestion.options),
-            joinedload(AssessmentQuestion.category),
+            selectinload(AssessmentQuestion.options),   # avoids row explosion
+            joinedload(AssessmentQuestion.category),    # safe: many-to-one
         )
 
     if status_filters:
@@ -56,11 +86,22 @@ def build_question_query(
         category_slugs = [slug for slug in categories if slug != 'unclassified']
         filters = []
         if category_slugs:
-            filters.append(AssessmentCategory.slug.in_(category_slugs))
+            # Correlated subquery: ties the category lookup to the same
+            # tenant_id as the outer question row.  This is explicit tenant
+            # isolation that does not rely on RLS being active for the
+            # subquery scope.
+            filters.append(
+                AssessmentQuestion.category_id.in_(
+                    select(AssessmentCategory.id).where(
+                        AssessmentCategory.slug.in_(category_slugs),
+                        AssessmentCategory.tenant_id == AssessmentQuestion.tenant_id,
+                    )
+                )
+            )
         if include_unclassified:
             filters.append(AssessmentQuestion.category_id.is_(None))
         if filters:
-            base = base.outerjoin(AssessmentQuestion.category).where(or_(*filters))
+            base = base.where(or_(*filters))
 
     return base
 
@@ -68,6 +109,7 @@ def build_question_query(
 def list_questions(
     db: Session,
     *,
+    tenant_id: UUID,
     page: int,
     page_size: int,
     status_filters: list[str] | None,
@@ -76,18 +118,51 @@ def list_questions(
     difficulties: list[str] | None,
     categories: list[str] | None,
 ) -> tuple[list[AssessmentQuestion], int]:
-    base = build_question_query(
+    filter_kwargs = dict(
+        tenant_id=tenant_id,
         status_filters=status_filters,
         query=query,
         tags=tags,
         difficulties=difficulties,
         categories=categories,
-        include_joins=True,
     )
 
-    total = db.scalar(select(func.count()).select_from(base.subquery()))
+    # ── Diagnostic logging — remove once category filtering is confirmed stable ──
+    logger.info(
+        "list_questions params  | tenant_id=%s | page=%s page_size=%s status=%s difficulties=%s "
+        "tags=%s categories=%s query=%r",
+        tenant_id, page, page_size, status_filters, difficulties, tags, categories, query,
+    )
+    if categories:
+        _slug_check = db.execute(
+            select(AssessmentCategory.slug, AssessmentCategory.tenant_id, AssessmentCategory.id)
+            .where(
+                AssessmentCategory.slug.in_(categories),
+                AssessmentCategory.tenant_id == tenant_id,
+            )
+        ).fetchall()
+        logger.info("list_questions category slug lookup → %s", _slug_check)
+
+    # COUNT — plain filtered query, no joins, no eager-loading overhead.
+    count_q = build_question_query(**filter_kwargs, include_joins=False)
+    total = db.scalar(select(func.count()).select_from(count_q.subquery()))
+    logger.info("list_questions total=%s", total)
+
+    # ITEMS — selectinload for options fires a second query after the paged
+    # main query; LIMIT/OFFSET here apply to distinct question rows only.
+    items_q = build_question_query(**filter_kwargs, include_joins=True)
+    items_q = items_q.order_by(AssessmentQuestion.created_at.desc())
+
+    try:
+        from sqlalchemy.dialects import postgresql as pg_dialect
+        _dialect = pg_dialect.dialect()
+        _compiled = items_q.compile(dialect=_dialect, compile_kwargs={"literal_binds": True})
+        logger.info("list_questions SQL:\n%s", str(_compiled))
+    except Exception as _log_err:
+        logger.debug("list_questions: could not render SQL with literal binds: %s", _log_err)
+
     items = (
-        db.scalars(base.order_by(AssessmentQuestion.created_at.desc()).offset((page - 1) * page_size).limit(page_size))
+        db.scalars(items_q.offset((page - 1) * page_size).limit(page_size))
         .unique()
         .all()
     )
@@ -97,6 +172,7 @@ def list_questions(
 def question_stats(
     db: Session,
     *,
+    tenant_id: UUID,
     status_filters: list[str] | None,
     query: str | None,
     tags: list[str] | None,
@@ -104,6 +180,7 @@ def question_stats(
     categories: list[str] | None,
 ) -> dict[str, object]:
     base = build_question_query(
+        tenant_id=tenant_id,
         status_filters=status_filters,
         query=query,
         tags=tags,
@@ -247,19 +324,211 @@ def bulk_update_questions(
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid action')
 
 
+def _tenant_id_expr():
+    """SQLAlchemy expression for the current session's tenant UUID."""
+    return cast(func.current_setting('app.tenant_id'), PG_UUID(as_uuid=True))
+
+
 def list_categories(db: Session) -> list[AssessmentCategory]:
-    return db.scalars(select(AssessmentCategory).order_by(AssessmentCategory.name.asc())).all()
+    return db.scalars(
+        select(AssessmentCategory)
+        .where(AssessmentCategory.tenant_id == _tenant_id_expr())
+        .order_by(AssessmentCategory.name.asc())
+    ).all()
 
 
-def get_question(db: Session, question_id: UUID) -> AssessmentQuestion:
-    question = db.scalar(
+def get_category(db: Session, category_id: UUID) -> AssessmentCategory:
+    # Filter by both id AND the current session tenant so we never return
+    # a row that belongs to a different tenant (which would cause the composite
+    # FK on assessment_questions(tenant_id, category_id) to fail on merge/delete).
+    cat = db.scalar(
+        select(AssessmentCategory)
+        .where(
+            AssessmentCategory.id == category_id,
+            AssessmentCategory.tenant_id == _tenant_id_expr(),
+        )
+    )
+    if cat is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail='Category not found')
+    return cat
+
+
+def category_question_counts(db: Session) -> dict[str, int]:
+    """Return a mapping of category_id (str) → question count."""
+    rows = db.execute(
+        select(AssessmentQuestion.category_id, func.count(AssessmentQuestion.id))
+        .where(
+            AssessmentQuestion.tenant_id == _tenant_id_expr(),
+            AssessmentQuestion.category_id.isnot(None),
+        )
+        .group_by(AssessmentQuestion.category_id)
+    ).all()
+    return {str(r[0]): r[1] for r in rows}
+
+
+def create_category(db: Session, name: str, slug: str, parent_id: UUID | None) -> AssessmentCategory:
+    existing = db.scalar(
+        select(AssessmentCategory).where(
+            AssessmentCategory.tenant_id == _tenant_id_expr(),
+            AssessmentCategory.slug == slug,
+        )
+    )
+    if existing:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Slug '{slug}' already exists")
+    if parent_id is not None:
+        get_category(db, parent_id)  # validates parent exists
+    cat = AssessmentCategory(name=name, slug=slug, parent_id=parent_id)
+    db.add(cat)
+    db.flush()
+    return cat
+
+
+def update_category(db: Session, category_id: UUID, data: dict) -> AssessmentCategory:
+    cat = get_category(db, category_id)
+    if 'slug' in data and data['slug'] != cat.slug:
+        existing = db.scalar(
+            select(AssessmentCategory).where(
+                AssessmentCategory.tenant_id == _tenant_id_expr(),
+                AssessmentCategory.slug == data['slug'],
+            )
+        )
+        if existing:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Slug '{data['slug']}' already exists")
+    if 'parent_id' in data and data['parent_id'] is not None:
+        if data['parent_id'] == category_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail='A category cannot be its own parent')
+        get_category(db, data['parent_id'])  # validates parent exists
+    for key, value in data.items():
+        setattr(cat, key, value)
+    db.flush()
+    return cat
+
+
+def delete_category(db: Session, category_id: UUID) -> None:
+    cat = get_category(db, category_id)
+    parent_id = cat.parent_id
+    db.flush()
+
+    # Promote children to cat's parent — raw text() bypasses ORM self-referential
+    # relationship processing and is scoped to the current tenant implicitly via RLS.
+    if parent_id is not None:
+        db.execute(
+            text("""UPDATE assessment_categories
+                       SET parent_id = :parent, updated_at = now()
+                     WHERE parent_id = :cat
+                       AND tenant_id = current_setting('app.tenant_id')::uuid"""),
+            {'parent': str(parent_id), 'cat': str(category_id)},
+        )
+    else:
+        db.execute(
+            text("""UPDATE assessment_categories
+                       SET parent_id = NULL, updated_at = now()
+                     WHERE parent_id = :cat
+                       AND tenant_id = current_setting('app.tenant_id')::uuid"""),
+            {'cat': str(category_id)},
+        )
+
+    # Unlink questions (NULL is always valid for the composite FK)
+    db.execute(
+        text("""UPDATE assessment_questions
+                   SET category_id = NULL, updated_at = now()
+                 WHERE category_id = :cat
+                   AND tenant_id = current_setting('app.tenant_id')::uuid"""),
+        {'cat': str(category_id)},
+    )
+
+    db.expire(cat)  # ensure stale in-memory children list is not re-processed
+    cat = get_category(db, category_id)
+    db.delete(cat)
+    db.flush()
+
+
+def merge_categories(db: Session, source_id: UUID, target_id: UUID) -> None:
+    """Move all questions and children from source into target, then delete source.
+
+    Both get_category calls filter by the current session tenant, so if a user
+    picks a category that visually looks like a duplicate but actually belongs to
+    a different tenant, the call raises 404 before we ever touch any rows.
+    """
+    if source_id == target_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail='Source and target must be different')
+
+    source = get_category(db, source_id)
+    target = get_category(db, target_id)
+
+    # Belt-and-suspenders: both rows must share the same tenant_id so that the
+    # composite FK  assessment_questions(tenant_id, category_id) is satisfied.
+    if source.tenant_id != target.tenant_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail='Cannot merge categories that belong to different tenants',
+        )
+
+    db.flush()
+
+    # Reassign child categories — raw text() avoids ORM self-referential cascade
+    db.execute(
+        text("""UPDATE assessment_categories
+                   SET parent_id = :target, updated_at = now()
+                 WHERE parent_id = :source
+                   AND tenant_id = current_setting('app.tenant_id')::uuid"""),
+        {'target': str(target.id), 'source': str(source_id)},
+    )
+
+    # Move questions — the composite FK is satisfied because target.tenant_id ==
+    # source.tenant_id (verified above) and target.id exists for that tenant.
+    db.execute(
+        text("""UPDATE assessment_questions
+                   SET category_id = :target, updated_at = now()
+                 WHERE category_id = :source
+                   AND tenant_id = current_setting('app.tenant_id')::uuid"""),
+        {'target': str(target.id), 'source': str(source_id)},
+    )
+
+    db.expire(source)  # ensure stale children list is not re-processed on delete
+    source = get_category(db, source_id)
+    db.delete(source)
+    db.flush()
+
+
+def get_question(db: Session, question_id: UUID, *, tenant_id: UUID | None = None) -> AssessmentQuestion:
+    stmt = (
         select(AssessmentQuestion)
         .where(AssessmentQuestion.id == question_id)
         .options(joinedload(AssessmentQuestion.options))
     )
+    if tenant_id is not None:
+        stmt = stmt.where(AssessmentQuestion.tenant_id == tenant_id)
+    question = db.scalar(stmt)
     if not question:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Question not found')
     return question
+
+
+def _load_questions_for_version(
+    db: Session,
+    question_ids: list[UUID],
+    effective_tenant_id: UUID,
+) -> dict[str, AssessmentQuestion]:
+    """Bulk-load questions (and options) for version updates."""
+    if not question_ids:
+        return {}
+    rows = db.scalars(
+        select(AssessmentQuestion)
+        .where(
+            AssessmentQuestion.id.in_(question_ids),
+            AssessmentQuestion.tenant_id == effective_tenant_id,
+        )
+        .options(selectinload(AssessmentQuestion.options))
+    ).all()
+    by_id = {str(q.id): q for q in rows}
+    missing = [str(qid) for qid in question_ids if str(qid) not in by_id]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f'Question {missing[0]} not found for tenant {effective_tenant_id}',
+        )
+    return by_id
 
 
 def create_question(db: Session, *, payload: dict, actor_user_id: UUID) -> AssessmentQuestion:
@@ -394,6 +663,10 @@ def create_test(db: Session, *, payload: dict, actor_user_id: UUID) -> Assessmen
 
 def create_test_version(db: Session, *, test_id: UUID, actor_user_id: UUID) -> AssessmentTestVersion:
     test = get_test(db, test_id)
+    existing_drafts = [v for v in test.versions if v.status == 'draft']
+    if existing_drafts:
+        # Enforce single-draft rule: return the most recent draft instead of creating another.
+        return max(existing_drafts, key=lambda v: v.updated_at or v.created_at)
     latest = max(test.versions, key=lambda v: v.version_number, default=None)
     next_version_number = (latest.version_number + 1) if latest else 1
 
@@ -429,6 +702,148 @@ def create_test_version(db: Session, *, test_id: UUID, actor_user_id: UUID) -> A
     return new_version
 
 
+def list_test_versions(
+    db: Session,
+    *,
+    test_id: UUID,
+    include_archived: bool,
+) -> list[dict[str, object]]:
+    deliveries_subq = (
+        select(
+            AssessmentDelivery.test_version_id.label('version_id'),
+            func.count(AssessmentDelivery.id).label('deliveries_count'),
+        )
+        .group_by(AssessmentDelivery.test_version_id)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            AssessmentTestVersion,
+            deliveries_subq.c.deliveries_count,
+            User.full_name,
+            User.email,
+        )
+        .outerjoin(deliveries_subq, deliveries_subq.c.version_id == AssessmentTestVersion.id)
+        .outerjoin(User, User.id == AssessmentTestVersion.created_by)
+        .where(AssessmentTestVersion.test_id == test_id)
+        .order_by(AssessmentTestVersion.version_number.desc())
+    )
+    if not include_archived:
+        stmt = stmt.where(AssessmentTestVersion.status != 'archived')
+
+    rows = db.execute(stmt).all()
+    items: list[dict[str, object]] = []
+    for version, deliveries_count, creator_name, creator_email in rows:
+        items.append({
+            'id': version.id,
+            'test_id': version.test_id,
+            'version_number': version.version_number,
+            'status': version.status,
+            'passing_score': version.passing_score,
+            'time_limit_minutes': version.time_limit_minutes,
+            'shuffle_questions': version.shuffle_questions,
+            'attempts_allowed': version.attempts_allowed,
+            'published_at': version.published_at,
+            'created_at': version.created_at,
+            'updated_at': version.updated_at,
+            'created_by': version.created_by,
+            'created_by_name': creator_name,
+            'created_by_email': creator_email,
+            'deliveries_count': int(deliveries_count or 0),
+        })
+    return items
+
+
+def set_test_version_archived(
+    db: Session,
+    *,
+    version_id: UUID,
+    actor_user_id: UUID,
+    archived: bool,
+) -> AssessmentTestVersion:
+    version = get_test_version(db, version_id)
+    if version.status == 'draft':
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Draft versions cannot be archived')
+
+    if archived:
+        if version.status == 'archived':
+            return version
+        version.status = 'archived'
+    else:
+        if version.status != 'archived':
+            return version
+        version.status = 'published'
+
+    version.updated_by = actor_user_id
+    db.flush()
+    return version
+
+
+def delete_test_version(
+    db: Session,
+    *,
+    version_id: UUID,
+) -> None:
+    version = get_test_version(db, version_id)
+    deliveries_count = db.scalar(
+        select(func.count(AssessmentDelivery.id)).where(AssessmentDelivery.test_version_id == version.id)
+    )
+    if int(deliveries_count or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Cannot delete a version that has deliveries',
+        )
+    db.delete(version)
+    db.flush()
+
+
+def prune_test_versions(
+    db: Session,
+    *,
+    test_id: UUID,
+    keep_published: int = 3,
+    draft_retention_days: int = 30,
+) -> None:
+    cutoff = datetime.now(UTC) - timedelta(days=draft_retention_days)
+
+    # Auto-delete stale drafts (unused only)
+    stale_drafts = db.scalars(
+        select(AssessmentTestVersion)
+        .where(
+            AssessmentTestVersion.test_id == test_id,
+            AssessmentTestVersion.status == 'draft',
+            AssessmentTestVersion.updated_at < cutoff,
+        )
+        .order_by(AssessmentTestVersion.updated_at.asc())
+    ).all()
+    for draft in stale_drafts:
+        deliveries_count = db.scalar(
+            select(func.count(AssessmentDelivery.id)).where(AssessmentDelivery.test_version_id == draft.id)
+        )
+        if int(deliveries_count or 0) == 0:
+            db.delete(draft)
+
+    # Keep last N published versions (unless referenced by deliveries)
+    published = db.scalars(
+        select(AssessmentTestVersion)
+        .where(
+            AssessmentTestVersion.test_id == test_id,
+            AssessmentTestVersion.status == 'published',
+        )
+        .order_by(
+            AssessmentTestVersion.published_at.desc().nullslast(),
+            AssessmentTestVersion.version_number.desc(),
+        )
+    ).all()
+    for old in published[keep_published:]:
+        deliveries_count = db.scalar(
+            select(func.count(AssessmentDelivery.id)).where(AssessmentDelivery.test_version_id == old.id)
+        )
+        if int(deliveries_count or 0) == 0:
+            db.delete(old)
+
+
 def _snapshot_question(question: AssessmentQuestion) -> dict[str, Any]:
     return {
         'prompt': question.prompt,
@@ -460,10 +875,14 @@ def update_test_version(
     version_id: UUID,
     payload: dict,
     actor_user_id: UUID,
+    tenant_id: UUID | None = None,
+    load_questions: bool = True,
 ) -> AssessmentTestVersion:
     version = get_test_version(db, version_id)
     if version.status != 'draft':
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Only draft versions can be updated')
+
+    effective_tenant_id = tenant_id or version.tenant_id
 
     for field in ['passing_score', 'time_limit_minutes', 'shuffle_questions', 'attempts_allowed']:
         if field in payload:
@@ -471,12 +890,17 @@ def update_test_version(
     version.updated_by = actor_user_id
 
     if 'questions' in payload and payload['questions'] is not None:
+        q_items = payload['questions']
+        q_ids = [item['question_id'] for item in q_items if item.get('question_id')]
+        question_map = _load_questions_for_version(db, q_ids, effective_tenant_id)
+
         version.questions.clear()
         db.flush()
-        for item in payload['questions']:
-            question = get_question(db, item['question_id'])
+        for item in q_items:
+            question = question_map[str(item['question_id'])]
             version.questions.append(
                 AssessmentTestVersionQuestion(
+                    tenant_id=effective_tenant_id,
                     test_version_id=version.id,
                     question_id=question.id,
                     order_index=item.get('order_index', 0),
@@ -489,10 +913,16 @@ def update_test_version(
             )
         db.flush()
 
-    return get_test_version(db, version.id)
+    return get_test_version(db, version.id) if load_questions else version
 
 
-def publish_test_version(db: Session, *, version_id: UUID, actor_user_id: UUID) -> AssessmentTestVersion:
+def publish_test_version(
+    db: Session,
+    *,
+    version_id: UUID,
+    actor_user_id: UUID,
+    load_questions: bool = True,
+) -> AssessmentTestVersion:
     version = get_test_version(db, version_id)
     if version.status == 'published':
         return version
@@ -506,7 +936,11 @@ def publish_test_version(db: Session, *, version_id: UUID, actor_user_id: UUID) 
         test.status = 'published'
         test.updated_by = actor_user_id
     db.flush()
-    return get_test_version(db, version.id)
+
+    # Retention rules: keep last N published + prune stale drafts
+    prune_test_versions(db, test_id=version.test_id)
+
+    return get_test_version(db, version.id) if load_questions else version
 
 
 def get_published_test_version(db: Session, *, test_id: UUID) -> AssessmentTestVersion:
@@ -545,6 +979,53 @@ def create_delivery(db: Session, *, payload: dict, actor_user_id: UUID) -> Asses
     db.add(delivery)
     db.flush()
     return delivery
+
+
+def send_delivery_assignment_email(
+    db: Session,
+    *,
+    delivery_id: UUID,
+    actor_user_id: UUID | None = None,
+) -> None:
+    delivery = db.scalar(select(AssessmentDelivery).where(AssessmentDelivery.id == delivery_id))
+    if not delivery:
+        return
+    if delivery.audience_type != 'assignment' or not delivery.participant_user_id:
+        return
+
+    participant = db.scalar(select(User).where(User.id == delivery.participant_user_id))
+    if not participant or not participant.email:
+        return
+
+    tenant = db.scalar(select(Tenant).where(Tenant.id == delivery.tenant_id))
+    tenant_name = tenant.name if tenant else 'SolveBox'
+
+    assigned_by = None
+    if actor_user_id:
+        actor = db.scalar(select(User).where(User.id == actor_user_id))
+        if actor:
+            assigned_by = (actor.full_name or actor.email or '').strip() or None
+
+    # Build a tenant-scoped URL so the middleware can resolve the tenant from the subdomain.
+    # e.g. http://localtest.me:3001 → http://acme.localtest.me:3001/assessments/take/{id}
+    _base = settings.FRONTEND_BASE_URL.rstrip('/')
+    if tenant and tenant.slug:
+        _parsed = urlparse(_base)
+        _netloc = f'{tenant.slug}.{_parsed.netloc}'
+        _base = urlunparse(_parsed._replace(netloc=_netloc))
+    delivery_url = _base + f'/assessments/take/{delivery.id}'
+
+    email_service.send_assessment_assigned(
+        to_email=participant.email,
+        to_name=participant.full_name or '',
+        tenant_name=tenant_name,
+        test_title=delivery.title,
+        delivery_url=delivery_url,
+        due_date=delivery.due_date,
+        attempts_allowed=delivery.attempts_allowed,
+        duration_minutes=delivery.duration_minutes,
+        assigned_by=assigned_by,
+    )
 
 
 def list_deliveries(
@@ -821,3 +1302,87 @@ def list_attempts(
         else:
             return []
     return db.scalars(base.order_by(AssessmentAttempt.submitted_at.desc().nulls_last())).all()
+
+
+def get_attempt_review(
+    db: Session,
+    *,
+    attempt_id: UUID,
+    requesting_user_id: UUID,
+    is_admin: bool,
+) -> dict:
+    """Return per-question review data for a scored attempt (reveals correct answers)."""
+    attempt = db.scalar(
+        select(AssessmentAttempt)
+        .where(AssessmentAttempt.id == attempt_id)
+        .options(joinedload(AssessmentAttempt.answers))
+    )
+    if not attempt:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Attempt not found')
+
+    # Only the attempt owner or admins may view the review
+    if not is_admin and attempt.user_id != requesting_user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Not allowed to view this review')
+
+    # Attempt must be scored (or submitted – still show what we have)
+    if attempt.status == 'in_progress':
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Attempt is still in progress',
+        )
+
+    delivery = get_delivery(db, attempt.delivery_id)
+    version = get_test_version(db, delivery.test_version_id)
+
+    questions_by_id = {str(item.id): item for item in version.questions}
+    if attempt.question_order:
+        ordered_items = [questions_by_id[qid] for qid in attempt.question_order if qid in questions_by_id]
+    else:
+        ordered_items = sorted(version.questions, key=lambda q: q.order_index)
+
+    answers_by_index = {a.question_index: a for a in attempt.answers}
+
+    questions_out = []
+    for idx, item in enumerate(ordered_items):
+        snapshot = dict(item.question_snapshot or {})
+        snap_options = snapshot.get('options', [])
+        answer = answers_by_index.get(idx)
+        selected_keys: list[str] = answer.selected_option_keys if answer else []
+        is_correct: bool | None = answer.is_correct if answer else None
+
+        correct_keys = {opt.get('key') for opt in snap_options if opt.get('is_correct')}
+        earned = item.points if is_correct else 0.0
+
+        options_out = [
+            {
+                'key': opt.get('key', ''),
+                'text': opt.get('text', ''),
+                'is_correct': bool(opt.get('is_correct', False)),
+            }
+            for opt in snap_options
+        ]
+
+        questions_out.append(
+            {
+                'index': idx,
+                'prompt': snapshot.get('prompt', ''),
+                'question_type': snapshot.get('question_type', 'mcq_single'),
+                'points': item.points,
+                'earned_points': earned,
+                'explanation': snapshot.get('explanation'),
+                'section': item.section,
+                'options': options_out,
+                'selected_keys': selected_keys,
+                'is_correct': is_correct,
+            }
+        )
+
+    return {
+        'attempt_id': attempt.id,
+        'score': attempt.score,
+        'max_score': attempt.max_score,
+        'score_percent': attempt.score_percent,
+        'passed': bool(attempt.passed),
+        'status': attempt.status,
+        'questions': questions_out,
+    }

@@ -200,8 +200,31 @@ export interface AssessmentCategory {
   id: string;
   name: string;
   slug: string;
+  parent_id?: string | null;
+  question_count?: number;
+  children_count?: number;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface AssessmentCategoryCreate {
+  name: string;
+  slug: string;
+  parent_id?: string | null;
+}
+
+export interface AssessmentCategoryUpdate {
+  name?: string;
+  slug?: string;
+  parent_id?: string | null;
+}
+
+export interface AssessmentCategoryTreeNode {
+  id: string;
+  name: string;
+  slug: string;
+  parent_id?: string | null;
+  children: AssessmentCategoryTreeNode[];
 }
 
 export interface AssessmentClassificationJob {
@@ -289,6 +312,24 @@ export interface AssessmentTestVersion {
   questions: AssessmentTestVersionQuestion[];
 }
 
+export interface AssessmentTestVersionHistory {
+  id: string;
+  test_id: string;
+  version_number: number;
+  status: string;
+  passing_score: number;
+  time_limit_minutes?: number | null;
+  shuffle_questions: boolean;
+  attempts_allowed?: number | null;
+  published_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  created_by?: string | null;
+  created_by_name?: string | null;
+  created_by_email?: string | null;
+  deliveries_count: number;
+}
+
 export interface AssessmentTest {
   id: string;
   title: string;
@@ -355,6 +396,36 @@ export interface AssessmentAttemptQuestion {
 export interface AssessmentAttemptStart {
   attempt: AssessmentAttempt;
   questions: AssessmentAttemptQuestion[];
+}
+
+// ── Review (read-only, reveals correct answers) ───────────────────────────────
+export interface AttemptReviewOption {
+  key: string;
+  text: string;
+  is_correct: boolean;
+}
+
+export interface AttemptReviewQuestion {
+  index: number;
+  prompt: string;
+  question_type: string;
+  points: number;
+  earned_points: number;
+  explanation: string | null;
+  section: string | null;
+  options: AttemptReviewOption[];
+  selected_keys: string[];
+  is_correct: boolean | null;
+}
+
+export interface AttemptReview {
+  attempt_id: string;
+  score: number | null;
+  max_score: number | null;
+  score_percent: number | null;
+  passed: boolean;
+  status: string;
+  questions: AttemptReviewQuestion[];
 }
 
 export interface UserRow {

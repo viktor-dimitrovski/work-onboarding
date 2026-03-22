@@ -15,11 +15,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const isWorkOrderEditor = Boolean(pathname?.startsWith('/work-orders/'));
+  const isFullScreenPage =
+    isWorkOrderEditor ||
+    Boolean(pathname?.match(/^\/assessments\/tests\/.+/)) ||
+    Boolean(pathname?.match(/^\/assessments\/take\/.+/));
   const mustChangePassword = Boolean(user?.must_change_password);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated && pathname !== '/login') {
-      router.replace('/login');
+      const redirect = pathname && pathname !== '/' ? `?redirect=${encodeURIComponent(pathname)}` : '';
+      router.replace(`/login${redirect}`);
     }
   }, [isAuthenticated, isLoading, pathname, router]);
 
@@ -30,13 +35,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [isAuthenticated, isLoading, mustChangePassword, pathname, router]);
 
   useEffect(() => {
-    if (!isWorkOrderEditor) return;
+    if (!isFullScreenPage) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [isWorkOrderEditor]);
+  }, [isFullScreenPage]);
 
   if (isLoading) {
     return <LoadingState label='Authenticating session...' />;
@@ -56,11 +61,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <TenantProvider>
-      <div className={cn('flex min-h-screen', isWorkOrderEditor && 'h-screen overflow-hidden')}>
-        <SidebarNav />
-        <div className={cn('flex min-h-screen flex-1 flex-col', isWorkOrderEditor && 'h-screen')}>
+      <div className={cn('flex min-h-screen overflow-x-hidden', isFullScreenPage && 'h-screen overflow-hidden')}>
+        <div className='hidden lg:block'>
+          <SidebarNav />
+        </div>
+        <div className={cn('flex min-h-screen min-w-0 flex-1 flex-col', isFullScreenPage && 'h-screen')}>
           <TopHeader />
-          <main className={cn('flex-1 p-6', isWorkOrderEditor && 'overflow-hidden')}>{children}</main>
+          <main
+            className={cn(
+              'flex-1 min-w-0 min-h-0',
+              isFullScreenPage ? 'overflow-hidden p-0' : 'overflow-x-hidden p-4 sm:p-6',
+            )}
+          >
+            {children}
+          </main>
         </div>
       </div>
     </TenantProvider>

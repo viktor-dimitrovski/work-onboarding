@@ -362,16 +362,21 @@ function AssessmentsSection({
           <CardContent className='p-0'>
             <div className='divide-y'>
               {pending.slice(0, 5).map((t) => (
-                <div key={t.delivery_id} className='flex items-center justify-between px-4 py-3 hover:bg-muted/20'>
-                  <div>
-                    <p className='font-medium'>{t.test_title}</p>
+                <div key={t.delivery_id} className='flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 hover:bg-muted/20'>
+                  {/* Text block — grows and truncates */}
+                  <div className='min-w-0 flex-1'>
+                    <p className='truncate font-medium'>{t.test_title}</p>
                     <p className='text-xs text-muted-foreground'>
                       {t.question_count} questions
                       {t.due_date && ` · Due ${new Date(t.due_date).toLocaleDateString()}`}
                     </p>
                   </div>
-                  <div className='flex items-center gap-2'>
-                    <Badge variant={t.attempt_status === 'in_progress' ? 'secondary' : 'outline'} className='text-xs'>
+                  {/* Actions — never shrink, never wrap badge text */}
+                  <div className='flex shrink-0 items-center gap-2'>
+                    <Badge
+                      variant={t.attempt_status === 'in_progress' ? 'secondary' : 'outline'}
+                      className='whitespace-nowrap text-xs'
+                    >
                       {t.attempt_status === 'in_progress' ? 'In progress' : 'Not started'}
                     </Badge>
                     <Button size='sm' asChild>

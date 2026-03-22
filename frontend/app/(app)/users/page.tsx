@@ -348,9 +348,9 @@ export default function UsersPage() {
               {filteredUsers.length === 0 ? (
                 <EmptyState title='No users found' description='Create your first user account.' />
               ) : (
-                <div className='overflow-hidden rounded-md border'>
+                <div className='overflow-x-auto rounded-md border'>
                   <div className='max-h-[520px] overflow-auto'>
-                    <table className='w-full text-sm'>
+                    <table className='w-full min-w-[540px] text-sm'>
                       <thead className='sticky top-0 z-10 bg-muted/60 text-xs text-muted-foreground'>
                         <tr className='border-b'>
                           <th className='px-3 py-2 text-left font-medium'>User</th>

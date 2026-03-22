@@ -44,12 +44,49 @@ class AssessmentQuestionOptionOut(BaseSchema):
     updated_at: datetime
 
 
+class AssessmentCategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    slug: str = Field(min_length=1, max_length=200, pattern=r'^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$')
+    parent_id: UUID | None = None
+
+
+class AssessmentCategoryUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    slug: str | None = Field(default=None, min_length=1, max_length=200, pattern=r'^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$')
+    parent_id: UUID | None = None  # explicitly passed null → set to root; omitted → unchanged
+
+
+class AssessmentCategoryMergeIn(BaseModel):
+    target_id: UUID  # all questions + children move from this category into the one at /:id
+
+
 class AssessmentCategoryOut(BaseSchema):
     id: UUID
     name: str
     slug: str
+    parent_id: UUID | None = None
+    question_count: int = 0
+    children_count: int = 0
     created_at: datetime
     updated_at: datetime
+
+
+class AssessmentCategoryTreeNode(BaseSchema):
+    """Category with nested children — used by the /categories/tree endpoint."""
+    id: UUID
+    name: str
+    slug: str
+    parent_id: UUID | None = None
+    children: list['AssessmentCategoryTreeNode'] = []
+
+    model_config = {'from_attributes': True}
+
+
+AssessmentCategoryTreeNode.model_rebuild()
+
+
+class AssessmentCategoryTreeResponse(BaseModel):
+    items: list[AssessmentCategoryTreeNode]
 
 
 class AssessmentQuestionOut(BaseSchema):
@@ -278,6 +315,24 @@ class AssessmentTestVersionOut(BaseSchema):
     updated_at: datetime
 
 
+class AssessmentTestVersionHistoryOut(BaseSchema):
+    id: UUID
+    test_id: UUID
+    version_number: int
+    status: str
+    passing_score: int
+    time_limit_minutes: int | None
+    shuffle_questions: bool
+    attempts_allowed: int | None
+    published_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    created_by: UUID | None = None
+    created_by_name: str | None = None
+    created_by_email: str | None = None
+    deliveries_count: int = 0
+
+
 class AssessmentTestOut(BaseSchema):
     id: UUID
     title: str
@@ -294,6 +349,10 @@ class AssessmentTestOut(BaseSchema):
 class AssessmentTestListResponse(BaseModel):
     items: list[AssessmentTestOut]
     meta: PaginationMeta
+
+
+class AssessmentTestVersionHistoryResponse(BaseModel):
+    items: list[AssessmentTestVersionHistoryOut]
 
 
 class AssessmentDeliveryCreate(BaseModel):
@@ -389,6 +448,35 @@ class AssessmentAttemptSubmitOut(BaseModel):
     attempt: AssessmentAttemptOut
     correct_count: int
     total_questions: int
+
+
+class AttemptReviewOption(BaseModel):
+    key: str
+    text: str
+    is_correct: bool
+
+
+class AttemptReviewQuestion(BaseModel):
+    index: int
+    prompt: str
+    question_type: str
+    points: float
+    earned_points: float
+    explanation: str | None
+    section: str | None
+    options: list[AttemptReviewOption]
+    selected_keys: list[str]
+    is_correct: bool | None  # None if attempt not yet scored
+
+
+class AttemptReviewOut(BaseModel):
+    attempt_id: UUID
+    score: float | None
+    max_score: float | None
+    score_percent: float | None
+    passed: bool
+    status: str
+    questions: list[AttemptReviewQuestion]
 
 
 class AssessmentResultSummary(BaseModel):

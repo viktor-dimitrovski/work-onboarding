@@ -21,14 +21,33 @@
   --warning: 36 95% 45%;
 }
 
+/* Prevent iOS automatic font size inflation and horizontal overflow */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overflow-x: hidden;
+  /* Bump base font on mobile so all rem-based Tailwind sizes grow proportionally.
+     text-sm (0.875rem) becomes ~15px, text-base (1rem) becomes ~17px. */
+  font-size: 17px;
+}
+
+@media (min-width: 640px) {
+  html {
+    font-size: 16px;
+  }
+}
+
 * {
   @apply border-border;
+  box-sizing: border-box;
 }
 
 body {
   @apply bg-background text-foreground antialiased;
   font-family: var(--font-ibm-plex-sans), ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
     sans-serif;
+  line-height: 1.5;
+  overflow-x: hidden;
   background-image:
     radial-gradient(circle at 90% -20%, rgba(41, 121, 255, 0.16), transparent 35%),
     radial-gradient(circle at 0% 100%, rgba(0, 173, 181, 0.12), transparent 30%);
@@ -41,4 +60,23 @@ h4 {
   font-family: var(--font-space-grotesk), ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
     sans-serif;
   letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+/* Improve touch tap targets globally */
+button,
+[role='button'],
+a {
+  touch-action: manipulation;
+}
+
+/* Prevent long words from breaking layout on small screens.
+   Only apply to block-level text elements, NOT spans/badges. */
+p,
+li,
+h1,
+h2,
+h3,
+h4 {
+  overflow-wrap: break-word;
 }

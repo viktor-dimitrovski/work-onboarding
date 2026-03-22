@@ -26,6 +26,28 @@ def _resolve_default_tenant_id(db: Session) -> str | None:
     if tenant_id:
         return str(tenant_id)
 
+    # Prefer a tenant that actually has active members. This prevents background
+    # jobs (or unauthenticated endpoints) from accidentally defaulting to a
+    # phantom/seeding tenant that has no real users.
+    tenant_id = db.execute(
+        text(
+            """
+            select t.id::text
+            from tenants t
+            where exists (
+              select 1
+              from tenant_memberships tm
+              where tm.tenant_id = t.id
+                and tm.status = 'active'
+            )
+            order by t.created_at asc
+            limit 1
+            """
+        )
+    ).scalar()
+    if tenant_id:
+        return str(tenant_id)
+
     tenant_id = db.execute(text("select id::text from tenants order by created_at asc limit 1")).scalar()
     return str(tenant_id) if tenant_id else None
 

@@ -12,7 +12,7 @@ from app.multitenancy.permissions import permissions_for_roles, require_access
 from app.schemas.assignment import AssignmentCreate, AssignmentListResponse, AssignmentOut
 from app.schemas.track import TaskResourceOut
 from app.schemas.common import PaginationMeta
-from app.services import assignment_service, audit_service, track_service
+from app.services import assignment_service, audit_service, track_service, assessment_service
 
 
 router = APIRouter(prefix='/assignments', tags=['assignments'])
@@ -113,7 +113,7 @@ def create_assignment(
 ) -> AssignmentOut:
     track_version = track_service.get_published_track_version(db, payload.track_version_id)
 
-    assignment = assignment_service.create_assignment_from_track(
+    assignment, deliveries = assignment_service.create_assignment_from_track(
         db,
         actor_user_id=current_user.id,
         employee_id=payload.employee_id,
@@ -135,6 +135,13 @@ def create_assignment(
         },
     )
     db.commit()
+
+    for delivery in deliveries:
+        assessment_service.send_delivery_assignment_email(
+            db,
+            delivery_id=delivery.id,
+            actor_user_id=current_user.id,
+        )
 
     return AssignmentOut.model_validate(assignment)
 

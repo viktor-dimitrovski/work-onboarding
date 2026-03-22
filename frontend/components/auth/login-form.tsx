@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Eye, EyeOff } from 'lucide-react';
 import { useForm } from 'react-hook-form';
@@ -24,6 +24,7 @@ type LoginValues = z.infer<typeof loginSchema>;
 export function LoginForm() {
   const { login, logout } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
@@ -32,6 +33,9 @@ export function LoginForm() {
     typeof window !== 'undefined' &&
     (window.location.hostname === 'admin' ||
       window.location.hostname.startsWith('admin.'));
+
+  // After login, go to the ?redirect= destination, or fall back to dashboard/admin
+  const redirectAfterLogin = searchParams?.get('redirect') || (isAdminHost ? '/admin' : '/dashboard');
 
   const startOAuth = (provider: string) => {
     const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '/api/v1').replace(/\/$/, '');
@@ -55,7 +59,7 @@ export function LoginForm() {
         setError('Access denied. This portal is restricted to platform administrators.');
         return;
       }
-      router.replace(isAdminHost ? '/admin' : '/dashboard');
+      router.replace(redirectAfterLogin);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Failed to sign in');
     }

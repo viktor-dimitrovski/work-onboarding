@@ -21,7 +21,7 @@ from app.schemas.release_center import (
     ReleaseMetadataOut,
     ReleaseMetadataUpdate,
 )
-from app.services import assignment_service, track_service
+from app.services import assignment_service, track_service, assessment_service
 
 
 router = APIRouter(prefix="/release-center", tags=["release-center"])
@@ -145,7 +145,7 @@ def create_release_plan(
     if track_version.track_type != "RELEASE":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Track version is not a release template.")
 
-    assignment = assignment_service.create_assignment_from_track(
+    assignment, deliveries = assignment_service.create_assignment_from_track(
         db,
         actor_user_id=current_user.id,
         employee_id=current_user.id,
@@ -171,6 +171,13 @@ def create_release_plan(
     )
     db.add(plan)
     db.commit()
+
+    for delivery in deliveries:
+        assessment_service.send_delivery_assignment_email(
+            db,
+            delivery_id=delivery.id,
+            actor_user_id=current_user.id,
+        )
 
     return ReleaseMetadataOut(assignment_id=assignment.id, metadata=assignment.metadata_json)
 

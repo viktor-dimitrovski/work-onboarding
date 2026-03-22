@@ -186,24 +186,82 @@ export default function AssessmentTestsPage() {
         <SheetContent side='right' className='flex h-full flex-col'>
           <SheetHeader>
             <SheetTitle>{editing ? 'Edit test' : 'New test'}</SheetTitle>
+            <p className='text-sm text-muted-foreground'>
+              Fields marked <span className='text-destructive'>*</span> are required.
+            </p>
           </SheetHeader>
-          <div className='mt-4 flex-1 space-y-4 overflow-auto pr-1'>
-            <div className='space-y-2'>
-              <Label>Title</Label>
-              <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+
+          {/* px-1 gives the focus ring room so it isn't clipped by overflow-auto */}
+          <div className='mt-4 flex-1 space-y-5 overflow-y-auto px-1'>
+
+            {/* Title — required */}
+            <div className='space-y-1.5'>
+              <Label htmlFor='test-title'>
+                Title <span className='text-destructive'>*</span>
+              </Label>
+              <Input
+                id='test-title'
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder='e.g. Kubernetes Infrastructure Assessment'
+              />
             </div>
-            <div className='space-y-2'>
-              <Label>Description</Label>
-              <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+
+            {/* Description — optional */}
+            <div className='space-y-1.5'>
+              <Label htmlFor='test-description'>
+                Description <span className='text-muted-foreground font-normal text-xs'>(optional)</span>
+              </Label>
+              <textarea
+                id='test-description'
+                rows={3}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder='Short description shown to participants…'
+                className='flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 resize-none'
+              />
             </div>
-            <div className='space-y-2'>
-              <Label>Category</Label>
-              <Input value={category} onChange={(e) => setCategory(e.target.value)} />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='role-target'>Target audience <span className='text-muted-foreground font-normal'>(optional)</span></Label>
+
+            {/* Category — optional, datalist from existing tests */}
+            <div className='space-y-1.5'>
+              <Label htmlFor='test-category'>
+                Category <span className='text-muted-foreground font-normal text-xs'>(optional)</span>
+              </Label>
               <p className='text-[11px] text-muted-foreground'>
-                Which job role or group is this test intended for? Used for display and filtering only — it does not restrict who can take the test.
+                Groups tests for filtering. Pick an existing one or type a new name.
+              </p>
+              <input
+                id='test-category'
+                list='test-category-suggestions'
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                placeholder='e.g. DevOps, Security, Compliance…'
+                className='flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+              />
+              <datalist id='test-category-suggestions'>
+                {/* Dynamic: unique categories already used across tests */}
+                {Array.from(new Set(tests.map((t) => t.category).filter(Boolean) as string[])).sort().map((c) => (
+                  <option key={c} value={c} />
+                ))}
+                {/* Static suggestions if no data yet */}
+                <option value='DevOps' />
+                <option value='Security' />
+                <option value='Compliance' />
+                <option value='Networking' />
+                <option value='Cloud Infrastructure' />
+                <option value='Software Development' />
+                <option value='Leadership' />
+                <option value='HR & Onboarding' />
+              </datalist>
+            </div>
+
+            {/* Target audience — optional, datalist from existing tests */}
+            <div className='space-y-1.5'>
+              <Label htmlFor='role-target'>
+                Target audience <span className='text-muted-foreground font-normal text-xs'>(optional)</span>
+              </Label>
+              <p className='text-[11px] text-muted-foreground'>
+                For display and filtering only — does not restrict who can take the test.
               </p>
               <input
                 id='role-target'
@@ -214,11 +272,17 @@ export default function AssessmentTestsPage() {
                 className='flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
               />
               <datalist id='role-target-suggestions'>
+                {/* Dynamic: unique audiences already used across tests */}
+                {Array.from(new Set(tests.map((t) => t.role_target).filter(Boolean) as string[])).sort().map((r) => (
+                  <option key={r} value={r} />
+                ))}
+                {/* Static fallbacks */}
                 <option value='All employees' />
                 <option value='New hires' />
                 <option value='Developer' />
-                <option value='Manager' />
+                <option value='Senior Developer' />
                 <option value='Team Lead' />
+                <option value='Manager' />
                 <option value='Sales' />
                 <option value='Customer Support' />
                 <option value='Finance' />
@@ -227,9 +291,11 @@ export default function AssessmentTestsPage() {
                 <option value='Compliance Officer' />
               </datalist>
             </div>
+
             {error && <p className='text-sm text-destructive'>{error}</p>}
           </div>
-          <SheetFooter className='mt-4'>
+
+          <SheetFooter className='mt-4 pt-4 border-t'>
             <Button variant='outline' onClick={() => setSheetOpen(false)} disabled={saving}>
               Cancel
             </Button>

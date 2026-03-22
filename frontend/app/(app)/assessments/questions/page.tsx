@@ -22,7 +22,8 @@ import { Progress } from '@/components/ui/progress';
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import type { AssessmentCategory, AssessmentClassificationJob, AssessmentQuestion } from '@/lib/types';
+import { HierarchicalCategoryMenu } from '@/components/assessments/hierarchical-category-menu';
+import type { AssessmentCategory, AssessmentCategoryTreeNode, AssessmentClassificationJob, AssessmentQuestion } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { LayoutGrid, List, MoreVertical, RefreshCw, Search, Sparkles, X } from 'lucide-react';
 
@@ -72,7 +73,7 @@ function FilterMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant={isActive ? 'secondary' : 'outline'} size='sm' className='h-9'>
+        <Button variant={isActive ? 'secondary' : 'outline'} size='sm' className='h-8 text-xs font-normal'>
           {label}
           {selected.length > 0 ? ` (${selected.length})` : ''}
         </Button>
@@ -228,25 +229,17 @@ function QuestionCardSkeleton() {
 
 function QuestionRowSkeleton() {
   return (
-    <Card className='animate-pulse'>
-      <CardContent className='flex items-start justify-between gap-4 py-3'>
-        <div className='flex-1 space-y-3'>
-          <div className='h-4 w-4/5 rounded bg-muted/40' />
-          <div className='flex flex-wrap gap-2'>
-            <div className='h-5 w-16 rounded-full bg-muted/40' />
-            <div className='h-5 w-12 rounded-full bg-muted/40' />
-            <div className='h-5 w-14 rounded-full bg-muted/40' />
-            <div className='h-5 w-20 rounded-full bg-muted/40' />
-          </div>
-          <div className='flex flex-wrap items-center gap-2'>
-            <div className='h-3 w-16 rounded bg-muted/40' />
-            <div className='h-3 w-20 rounded bg-muted/40' />
-            <div className='h-3 w-24 rounded bg-muted/40' />
-          </div>
-        </div>
-        <div className='h-8 w-8 rounded bg-muted/40' />
-      </CardContent>
-    </Card>
+    <div className='flex animate-pulse items-center gap-2 px-3 py-1.5'>
+      <div className='h-3.5 w-3.5 rounded bg-muted/40' />
+      <div className='h-4 flex-1 rounded bg-muted/40' />
+      <div className='flex items-center gap-1'>
+        <div className='h-5 w-16 rounded-full bg-muted/40' />
+        <div className='h-5 w-12 rounded-full bg-muted/40' />
+        <div className='h-5 w-14 rounded-full bg-muted/40' />
+      </div>
+      <div className='h-3 w-16 rounded bg-muted/40' />
+      <div className='h-6 w-6 rounded bg-muted/40' />
+    </div>
   );
 }
 
@@ -254,6 +247,7 @@ export default function AssessmentQuestionsPage() {
   const { accessToken } = useAuth();
   const [questions, setQuestions] = useState<AssessmentQuestion[]>([]);
   const [categories, setCategories] = useState<AssessmentCategory[]>([]);
+  const [categoryTree, setCategoryTree] = useState<AssessmentCategoryTreeNode[]>([]);
   const [stats, setStats] = useState<QuestionStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -310,10 +304,15 @@ export default function AssessmentQuestionsPage() {
   const loadCategories = async () => {
     if (!accessToken) return;
     try {
-      const response = await api.get<{ items: AssessmentCategory[] }>('/assessments/categories', accessToken);
-      setCategories(response.items);
+      const [flat, tree] = await Promise.all([
+        api.get<{ items: AssessmentCategory[] }>('/assessments/categories', accessToken),
+        api.get<{ items: AssessmentCategoryTreeNode[] }>('/assessments/categories/tree', accessToken),
+      ]);
+      setCategories(flat.items);
+      setCategoryTree(tree.items);
     } catch {
       setCategories([]);
+      setCategoryTree([]);
     }
   };
 
@@ -586,12 +585,13 @@ export default function AssessmentQuestionsPage() {
 
   const tagOptions: FilterOption[] = availableTags.map((tag) => ({ value: tag, label: tagLabel(tag) }));
 
-  const hasActiveFilters =
+  const hasActiveFilters = !!(
     query.trim() ||
     selectedStatuses.length ||
     selectedDifficulties.length ||
     selectedCategories.length ||
-    selectedTags.length;
+    selectedTags.length
+  );
 
   const clearFilters = () => {
     setQuery('');
@@ -656,20 +656,31 @@ export default function AssessmentQuestionsPage() {
     }
   };
 
+  const [publishing, setPublishing] = useState(false);
+  const [publishedCount, setPublishedCount] = useState<number | null>(null);
+
   const publishQuestions = async (ids: string[]) => {
     if (!accessToken || ids.length === 0) return;
-    await api.post(
-      '/assessments/questions/bulk-update',
-      {
-        scope: 'selected',
-        question_ids: ids,
-        action: 'set_status',
-        status_value: 'published',
-      },
-      accessToken,
-    );
-    setSelectedQuestionIds((prev) => prev.filter((id) => !ids.includes(id)));
-    await load();
+    setPublishing(true);
+    setPublishedCount(null);
+    try {
+      await api.post(
+        '/assessments/questions/bulk-update',
+        {
+          scope: 'selected',
+          question_ids: ids,
+          action: 'set_status',
+          status_value: 'published',
+        },
+        accessToken,
+      );
+      setSelectedQuestionIds((prev) => prev.filter((id) => !ids.includes(id)));
+      setPublishedCount(ids.length);
+      await load();
+    } finally {
+      setPublishing(false);
+      setTimeout(() => setPublishedCount(null), 3000);
+    }
   };
 
   const duplicateQuestion = async (question: AssessmentQuestion) => {
@@ -711,21 +722,19 @@ export default function AssessmentQuestionsPage() {
   const allCategoriesCount = stats?.total ?? total;
 
   return (
-    <div className='space-y-6'>
-      <div className='flex flex-wrap items-start justify-between gap-4'>
-        <div className='space-y-1'>
-          <h1 className='text-3xl font-semibold tracking-tight'>Question Bank</h1>
-          <p className='text-sm text-muted-foreground'>Maintain reusable questions for assessments.</p>
-        </div>
-        <div className='flex flex-wrap items-center gap-2'>
-          <Button variant='outline' onClick={() => setImportOpen(true)}>
+    <div className='space-y-3'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <h1 className='text-xl font-semibold tracking-tight'>Question Bank</h1>
+        <div className='flex flex-wrap items-center gap-1.5'>
+          <Button variant='outline' size='sm' onClick={() => setImportOpen(true)}>
             Import PDF
           </Button>
-          <Button variant='outline' onClick={() => setTextImportOpen(true)}>
+          <Button variant='outline' size='sm' onClick={() => setTextImportOpen(true)}>
             Import Text
           </Button>
           <Button
             variant='outline'
+            size='sm'
             onClick={async () => {
               if (!accessToken) return;
               setDedupeRunning(true);
@@ -748,11 +757,12 @@ export default function AssessmentQuestionsPage() {
           >
             {dedupeRunning ? 'Scanning…' : 'Remove duplicates'}
           </Button>
-          <Button variant='outline' onClick={() => setClassifyOpen(true)}>
-            <Sparkles className='mr-2 h-4 w-4' />
+          <Button variant='outline' size='sm' onClick={() => setClassifyOpen(true)}>
+            <Sparkles className='mr-1.5 h-3.5 w-3.5' />
             Smart classify
           </Button>
           <Button
+            size='sm'
             onClick={() => {
               setEditing(null);
               setEditorOpen(true);
@@ -828,148 +838,131 @@ export default function AssessmentQuestionsPage() {
 
       <div className='grid gap-6 lg:grid-cols-[240px,1fr]'>
         <aside className='sticky top-4 h-fit rounded-lg border bg-muted/20 p-3'>
-          <div className='flex items-center justify-between'>
-            <p className='text-sm font-semibold'>Categories</p>
-          </div>
-          <div className='mt-3 space-y-1'>
-            <Button
-              type='button'
-              variant={selectedCategories.length === 0 ? 'secondary' : 'ghost'}
-              className='w-full justify-between px-2 py-1.5 text-sm'
-              onClick={() => setSelectedCategories([])}
-            >
-              <span>All categories</span>
-              <span className='text-xs text-muted-foreground'>{allCategoriesCount}</span>
-            </Button>
-            <Button
-              type='button'
-              variant={selectedCategories.includes('unclassified') ? 'secondary' : 'ghost'}
-              className='w-full justify-between px-2 py-1.5 text-sm'
-              onClick={() => {
-                setSelectedCategories((prev) =>
-                  prev.includes('unclassified') ? prev.filter((item) => item !== 'unclassified') : [...prev, 'unclassified'],
-                );
-              }}
-            >
-              <span>Unclassified</span>
-              <span className='text-xs text-muted-foreground'>{stats?.unclassified_category ?? 0}</span>
-            </Button>
-            {categoryOptions.map((category) => (
-              <Button
-                key={category.value}
-                type='button'
-                variant={selectedCategories.includes(category.value) ? 'secondary' : 'ghost'}
-                className='w-full justify-between px-2 py-1.5 text-sm'
-                onClick={() => {
-                  setSelectedCategories((prev) =>
-                    prev.includes(category.value)
-                      ? prev.filter((item) => item !== category.value)
-                      : [...prev, category.value],
-                  );
-                }}
-              >
-                <span>{category.label}</span>
-                <span className='text-xs text-muted-foreground'>{category.count ?? 0}</span>
-              </Button>
-            ))}
-          </div>
+          <p className='mb-2 text-sm font-semibold'>Categories</p>
+          <HierarchicalCategoryMenu
+            tree={categoryTree}
+            unclassifiedCount={stats?.unclassified_category ?? 0}
+            countsBySlag={Object.fromEntries(
+              categories.map((c) => [c.slug, categoryCounts.get(c.slug) ?? 0]),
+            )}
+            totalCount={allCategoriesCount}
+            selectedSlugs={selectedCategories}
+            onChange={setSelectedCategories}
+          />
         </aside>
 
         <div className='space-y-4'>
-          <div className='sticky top-0 z-10 rounded-md border bg-background/80 p-3 backdrop-blur supports-[backdrop-filter]:bg-background/70'>
-            <div className='flex flex-col gap-3 lg:flex-row lg:items-start'>
-              <div className='flex flex-wrap items-center gap-2'>
-                <div className='relative w-full sm:max-w-xs'>
-                  <Search className='absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
-                  <Input
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder='Search questions…'
-                    className='pl-9'
-                  />
-                </div>
-                <FilterMenu
-                  label='Status'
-                  options={statusOptions}
-                  selected={selectedStatuses}
-                  onChange={setSelectedStatuses}
+          <div className='sticky top-0 z-10 rounded-md border bg-background/90 px-2.5 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80'>
+            <div className='flex flex-wrap items-center gap-1.5'>
+              <div className='relative'>
+                <Search className='absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground' />
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder='Search…'
+                  className='h-8 w-44 pl-8 text-xs'
                 />
-                <FilterMenu
-                  label='Difficulty'
-                  options={difficultyOptions}
-                  selected={selectedDifficulties}
-                  onChange={setSelectedDifficulties}
-                />
-                <div className='lg:hidden'>
-                  <FilterMenu
-                    label='Category'
-                    options={categoryFilterOptions}
-                    selected={selectedCategories}
-                    onChange={setSelectedCategories}
-                  />
-                </div>
-                <FilterMenu label='Tags' options={tagOptions} selected={selectedTags} onChange={setSelectedTags} />
-                <div className='flex items-center gap-2'>
-                  <span className='text-xs text-muted-foreground'>Sort</span>
-                  <select
-                    className='h-9 rounded-md border border-input bg-background px-2 text-xs'
-                    value={sort}
-                    onChange={(event) => setSort(event.target.value as SortOption)}
-                  >
-                    <option value='updated_desc'>Updated: newest</option>
-                    <option value='updated_asc'>Updated: oldest</option>
-                    <option value='title_asc'>Title: A–Z</option>
-                    <option value='title_desc'>Title: Z–A</option>
-                  </select>
-                </div>
-                <Button variant='outline' size='icon' onClick={() => void load()} aria-label='Refresh'>
-                  <RefreshCw className='h-4 w-4' />
-                </Button>
               </div>
-              <div className='flex flex-wrap items-start gap-2 lg:ml-auto lg:flex-nowrap lg:self-start'>
+              <FilterMenu
+                label='Status'
+                options={statusOptions}
+                selected={selectedStatuses}
+                onChange={setSelectedStatuses}
+              />
+              <FilterMenu
+                label='Difficulty'
+                options={difficultyOptions}
+                selected={selectedDifficulties}
+                onChange={setSelectedDifficulties}
+              />
+              <div className='lg:hidden'>
+                <FilterMenu
+                  label='Category'
+                  options={categoryFilterOptions}
+                  selected={selectedCategories}
+                  onChange={setSelectedCategories}
+                />
+              </div>
+              <FilterMenu label='Tags' options={tagOptions} selected={selectedTags} onChange={setSelectedTags} />
+              <select
+                className='h-8 rounded-md border border-input bg-background px-2 text-xs'
+                value={sort}
+                onChange={(event) => setSort(event.target.value as SortOption)}
+              >
+                <option value='updated_desc'>Newest</option>
+                <option value='updated_asc'>Oldest</option>
+                <option value='title_asc'>A–Z</option>
+                <option value='title_desc'>Z–A</option>
+              </select>
+              <Button variant='outline' size='icon' className='h-8 w-8 shrink-0' onClick={() => void load()} aria-label='Refresh'>
+                <RefreshCw className='h-3.5 w-3.5' />
+              </Button>
+
+              <div className='ml-auto flex items-center gap-2'>
                 {hasActiveFilters && (
-                  <Button variant='ghost' size='sm' onClick={clearFilters}>
+                  <Button variant='ghost' size='sm' className='h-8 px-2 text-xs' onClick={clearFilters}>
                     <X className='mr-1 h-3 w-3' />
-                    Clear filters
+                    Clear
                   </Button>
                 )}
-                <div className='flex h-9 items-center gap-3'>
-                  <label className='flex h-9 items-center gap-2 whitespace-nowrap text-xs leading-none text-muted-foreground'>
-                    <input
-                      type='checkbox'
-                      className='h-4 w-4 rounded border-input'
-                      checked={allVisibleSelected}
-                      onChange={(event) => toggleSelectAll(event.target.checked)}
-                      aria-label='Select all questions on page'
-                    />
-                    Select page
-                  </label>
-                  <span className='whitespace-nowrap text-xs font-medium text-muted-foreground'>{resultsLabel}</span>
-                  <span
-                    className={cn(
-                      'min-w-[92px] whitespace-nowrap text-xs text-muted-foreground tabular-nums',
-                      selectedCount === 0 && 'invisible',
-                    )}
-                  >
-                    {selectedCount} selected
-                  </span>
-                </div>
+                <label className='flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground'>
+                  <input
+                    type='checkbox'
+                    className='h-3.5 w-3.5 rounded border-input'
+                    checked={allVisibleSelected}
+                    onChange={(event) => toggleSelectAll(event.target.checked)}
+                    aria-label='Select all questions on page'
+                  />
+                  All
+                </label>
+                <span className='whitespace-nowrap text-xs font-medium text-muted-foreground'>{resultsLabel}</span>
+                <span
+                  className={cn(
+                    'whitespace-nowrap text-xs text-muted-foreground tabular-nums',
+                    selectedCount === 0 && 'invisible',
+                  )}
+                >
+                  {selectedCount} selected
+                </span>
+              </div>
 
                 <Button
                   size='sm'
                   variant='outline'
-                  className={cn('h-9', selectedCount === 0 && 'invisible pointer-events-none')}
-                  tabIndex={selectedCount === 0 ? -1 : 0}
-                  aria-hidden={selectedCount === 0}
+                  className={cn(
+                    'h-8 text-xs',
+                    selectedCount === 0 && !publishing && 'invisible pointer-events-none',
+                    publishedCount !== null && 'border-green-500 text-green-600',
+                  )}
+                  tabIndex={selectedCount === 0 && !publishing ? -1 : 0}
+                  aria-hidden={selectedCount === 0 && !publishing}
+                  disabled={publishing}
                   onClick={() => void publishQuestions(selectedQuestionIds)}
                 >
-                  Publish selected
+                  {publishing ? (
+                    <>
+                      <svg className='mr-2 h-3.5 w-3.5 animate-spin' viewBox='0 0 24 24' fill='none'>
+                        <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4' />
+                        <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8v8H4z' />
+                      </svg>
+                      Publishing…
+                    </>
+                  ) : publishedCount !== null ? (
+                    <>
+                      <svg className='mr-1.5 h-3.5 w-3.5 text-green-500' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5'>
+                        <polyline points='20 6 9 17 4 12' />
+                      </svg>
+                      {publishedCount} published
+                    </>
+                  ) : (
+                    'Publish'
+                  )}
                 </Button>
 
                 <Button
                   size='sm'
                   variant='outline'
-                  className={cn('h-9', selectedCount === 0 && 'invisible pointer-events-none')}
+                  className={cn('h-8 text-xs', selectedCount === 0 && 'invisible pointer-events-none')}
                   tabIndex={selectedCount === 0 ? -1 : 0}
                   aria-hidden={selectedCount === 0}
                   onClick={() =>
@@ -979,48 +972,47 @@ export default function AssessmentQuestionsPage() {
                     })
                   }
                 >
-                  Archive selected
+                  Archive
                 </Button>
 
-                <div className='flex h-9 items-center gap-2'>
-                  {isRefreshing && <span className='text-xs text-muted-foreground'>Updating…</span>}
-                  <select
-                    className='h-9 rounded-md border border-input bg-background px-2 text-xs'
-                    value={pageSize}
-                    onChange={(e) => setPageSize(Number(e.target.value || 24))}
+                {isRefreshing && <span className='text-xs text-muted-foreground'>Updating…</span>}
+                <select
+                  className='h-8 rounded-md border border-input bg-background px-1.5 text-xs'
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value || 24)); setPage(1); }}
+                >
+                  <option value={12}>12</option>
+                  <option value={24}>24</option>
+                  <option value={48}>48</option>
+                  <option value={100}>100</option>
+                  <option value={9999}>All</option>
+                </select>
+                <div className='flex h-8 items-center gap-0.5 rounded-md border p-0.5'>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+                    onClick={() => setViewMode('grid')}
+                    aria-label='Grid view'
+                    className='h-7 px-1.5'
                   >
-                    <option value={12}>12 / page</option>
-                    <option value={24}>24 / page</option>
-                    <option value={48}>48 / page</option>
-                  </select>
-                  <div className='flex h-9 items-center gap-1 rounded-md border p-0.5'>
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
-                      onClick={() => setViewMode('grid')}
-                      aria-label='Grid view'
-                      className='h-8 px-2'
-                    >
-                      <LayoutGrid className='h-4 w-4' />
-                    </Button>
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant={viewMode === 'list' ? 'secondary' : 'ghost'}
-                      onClick={() => setViewMode('list')}
-                      aria-label='List view'
-                      className='h-8 px-2'
-                    >
-                      <List className='h-4 w-4' />
-                    </Button>
-                  </div>
+                    <LayoutGrid className='h-3.5 w-3.5' />
+                  </Button>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+                    onClick={() => setViewMode('list')}
+                    aria-label='List view'
+                    className='h-7 px-1.5'
+                  >
+                    <List className='h-3.5 w-3.5' />
+                  </Button>
                 </div>
-              </div>
             </div>
 
             {hasActiveFilters && (
-              <div className='mt-3 flex flex-wrap items-center gap-2 border-t pt-3'>
+              <div className='mt-1.5 flex flex-wrap items-center gap-1 border-t pt-1.5'>
                 {query.trim() && (
                   <Badge variant='secondary' className='flex items-center gap-1'>
                     Search: {query.trim()}
@@ -1100,7 +1092,7 @@ export default function AssessmentQuestionsPage() {
                 ))}
               </div>
             ) : (
-              <div className='space-y-2'>
+              <div className='divide-y rounded-md border'>
                 {Array.from({ length: 6 }).map((_, idx) => (
                   <QuestionRowSkeleton key={`list-skeleton-${idx}`} />
                 ))}
@@ -1158,60 +1150,78 @@ export default function AssessmentQuestionsPage() {
               ))}
             </div>
           ) : (
-            <div className='space-y-2'>
+            <div className='divide-y rounded-md border'>
               {sortedQuestions.map((question) => (
-                <Card key={question.id} className='transition-colors hover:border-primary/40'>
-                  <CardContent className='flex items-start justify-between gap-4 py-3'>
-                    <div className='flex min-w-0 flex-1 items-start gap-3'>
-                      <input
-                        type='checkbox'
-                        className='mt-1 h-4 w-4 rounded border-input'
-                        checked={selectedQuestionIds.includes(question.id)}
-                        onChange={() => toggleSelect(question.id)}
-                        aria-label='Select question'
-                      />
-                      <div className='min-w-0 flex-1 space-y-2'>
-                        <p className='text-sm font-semibold leading-snug line-clamp-2'>{question.prompt}</p>
-                        <QuestionMetaBadges question={question} />
-                        <QuestionFooterMeta question={question} />
-                      </div>
-                    </div>
-                    <QuestionActionsMenu
-                      onEdit={() => {
-                        setEditing(question);
-                        setEditorOpen(true);
-                      }}
-                      onPreview={() => setPreviewQuestion(question)}
-                      onDuplicate={() => void duplicateQuestion(question)}
-                      onPublish={() => void publishQuestions([question.id])}
-                      onArchive={() => setArchiveTarget({ ids: [question.id], label: 'this question' })}
-                    />
-                  </CardContent>
-                </Card>
+                <div
+                  key={question.id}
+                  className='flex items-center gap-2 px-3 py-1.5 transition-colors hover:bg-muted/40'
+                >
+                  <input
+                    type='checkbox'
+                    className='h-3.5 w-3.5 shrink-0 rounded border-input'
+                    checked={selectedQuestionIds.includes(question.id)}
+                    onChange={() => toggleSelect(question.id)}
+                    aria-label='Select question'
+                  />
+                  <p className='min-w-0 flex-1 truncate text-sm font-medium' title={question.prompt}>
+                    {question.prompt}
+                  </p>
+                  <div className='flex shrink-0 items-center gap-1'>
+                    <Badge variant='secondary' className='text-[10px] font-medium'>
+                      {formatQuestionType(question.question_type)}
+                    </Badge>
+                    <Badge variant='outline' className='text-[10px] capitalize'>
+                      {question.status}
+                    </Badge>
+                    <Badge variant='outline' className='text-[10px] capitalize'>
+                      {question.difficulty ?? 'unspecified'}
+                    </Badge>
+                    <Badge variant='outline' className='hidden text-[10px] xl:inline-flex'>
+                      {question.category?.name ?? 'Unclassified'}
+                    </Badge>
+                  </div>
+                  <span className='hidden shrink-0 whitespace-nowrap text-right text-[11px] text-muted-foreground lg:block'>
+                    {formatRelativeDate(question.updated_at)}
+                  </span>
+                  <QuestionActionsMenu
+                    onEdit={() => {
+                      setEditing(question);
+                      setEditorOpen(true);
+                    }}
+                    onPreview={() => setPreviewQuestion(question)}
+                    onDuplicate={() => void duplicateQuestion(question)}
+                    onPublish={() => void publishQuestions([question.id])}
+                    onArchive={() => setArchiveTarget({ ids: [question.id], label: 'this question' })}
+                  />
+                </div>
               ))}
             </div>
           )}
 
           <div className='flex flex-wrap items-center justify-between gap-3 pt-2'>
             <p className='text-xs text-muted-foreground'>
-              Showing {fromRow}–{toRow} of {total}
+              {pageSize >= 9999
+                ? `Showing all ${total}`
+                : `Showing ${fromRow}–${toRow} of ${total}`}
             </p>
-            <div className='flex items-center gap-2'>
-              <Button variant='outline' size='sm' onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
-                Prev
-              </Button>
-              <span className='text-xs text-muted-foreground'>
-                Page {page} / {totalPages}
-              </span>
-              <Button
-                variant='outline'
-                size='sm'
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page >= totalPages}
-              >
-                Next
-              </Button>
-            </div>
+            {pageSize < 9999 && (
+              <div className='flex items-center gap-2'>
+                <Button variant='outline' size='sm' onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+                  Prev
+                </Button>
+                <span className='text-xs text-muted-foreground'>
+                  Page {page} / {totalPages}
+                </span>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                >
+                  Next
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </div>

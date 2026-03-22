@@ -2,6 +2,9 @@ from contextlib import asynccontextmanager
 import logging
 
 from fastapi import FastAPI
+
+# Ensure application-level loggers (not just uvicorn.*) emit INFO messages.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router

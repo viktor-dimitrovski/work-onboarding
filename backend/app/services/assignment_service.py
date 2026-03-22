@@ -6,6 +6,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.assignment import AssignmentPhase, AssignmentTask, OnboardingAssignment, QuizAttempt
+from app.models.assessment import AssessmentDelivery
 from app.services import assessment_service
 from app.schemas.assignment import AssignmentOut
 from app.models.track import TrackPhase, TrackTask, TrackVersion
@@ -102,7 +103,7 @@ def create_assignment_from_track(
     track_version: TrackVersion,
     start_date: date,
     target_date: date,
-) -> OnboardingAssignment:
+) -> tuple[OnboardingAssignment, list[AssessmentDelivery]]:
     snapshot = _serialize_snapshot(track_version)
 
     assignment = OnboardingAssignment(
@@ -122,6 +123,7 @@ def create_assignment_from_track(
     db.add(assignment)
     db.flush()
 
+    created_deliveries: list[AssessmentDelivery] = []
     for phase in sorted(track_version.phases, key=lambda row: row.order_index):
         assignment_phase = AssignmentPhase(
             assignment_id=assignment.id,
@@ -200,6 +202,7 @@ def create_assignment_from_track(
                     },
                     actor_user_id=actor_user_id,
                 )
+                created_deliveries.append(delivery)
                 metadata['assessment'] = {
                     **assessment_meta,
                     'test_id': str(test_id),
@@ -214,7 +217,7 @@ def create_assignment_from_track(
     refresh_next_task(db, assignment)
     db.flush()
 
-    return get_assignment_by_id(db, assignment.id)
+    return get_assignment_by_id(db, assignment.id), created_deliveries
 
 
 def get_assignment_by_id(db: Session, assignment_id: UUID) -> OnboardingAssignment:

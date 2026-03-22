@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { LoginForm } from '@/components/auth/login-form';
 import { ShieldCheck } from 'lucide-react';
 
@@ -19,7 +20,10 @@ export default function LoginPage() {
 
       <div className="relative flex min-h-0 flex-1 flex-col items-center justify-start pt-6 sm:pt-8 px-4 sm:px-6">
         <div className="w-full max-w-[380px]">
-          <LoginForm />
+          {/* Suspense required because LoginForm uses useSearchParams() */}
+          <Suspense fallback={<div className="h-64 animate-pulse rounded-lg bg-muted" />}>
+            <LoginForm />
+          </Suspense>
         </div>
       </div>
     </main>

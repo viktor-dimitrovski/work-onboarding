@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { api } from '@/lib/api';
 import { useTrackPurposeLabels } from '@/lib/track-purpose';
+import { useTrackTypeLabels } from '@/lib/track-type';
 import { useAuth } from '@/lib/auth-context';
 import { useTenant } from '@/lib/tenant-context';
 import { Plus, Trash2 } from 'lucide-react';
@@ -21,7 +22,16 @@ export default function SettingsPage() {
   const { isLoading, accessToken } = useAuth();
   const { hasModule, hasPermission, isLoading: tenantLoading } = useTenant();
   const { items, addPurpose, removePurpose, updateLabel, updateValue, resetItems } = useTrackPurposeLabels();
+  const {
+    items: typeItems,
+    addType,
+    removeType,
+    updateLabel: updateTypeLabel,
+    updateValue: updateTypeValue,
+    resetItems: resetTypeItems,
+  } = useTrackTypeLabels();
   const [newLabel, setNewLabel] = useState('');
+  const [newTypeLabel, setNewTypeLabel] = useState('');
   const [defaultTargetDays, setDefaultTargetDays] = useState<number | ''>(45);
   const [escalationEmail, setEscalationEmail] = useState('onboarding-ops@example.com');
   const [policyNotes, setPolicyNotes] = useState(
@@ -288,6 +298,86 @@ export default function SettingsPage() {
               Reset defaults
             </Button>
           </div>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            <AccordionItem value='track-types' className='px-4'>
+              <AccordionTrigger className='py-3'>Track type labels</AccordionTrigger>
+              <AccordionContent className='pb-4'>
+                <p className='mb-3 text-xs text-muted-foreground'>
+                  Manage the options available in the <span className='font-medium'>Track type</span> dropdown when
+                  editing a track. The <span className='font-medium'>value</span> is stored in the database; the{' '}
+                  <span className='font-medium'>label</span> is what users see.
+                </p>
+                <div className='space-y-3'>
+                  <div className='space-y-2'>
+                    {typeItems.map((item) => (
+                      <div
+                        key={item.value}
+                        className='flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2'
+                      >
+                        <div className='min-w-0 flex-1 space-y-1 sm:flex sm:flex-1 sm:items-center sm:gap-2'>
+                          <Input
+                            className='h-8 w-[160px] font-mono text-xs font-medium'
+                            value={item.value}
+                            onChange={(e) => updateTypeValue(item.value, e.target.value)}
+                            placeholder='VALUE_KEY'
+                          />
+                          <Input
+                            className='h-8 flex-1 text-sm'
+                            value={item.label}
+                            onChange={(e) => updateTypeLabel(item.value, e.target.value)}
+                            placeholder='Display label'
+                          />
+                        </div>
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='icon'
+                          className='h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive'
+                          onClick={() => removeType(item.value)}
+                          disabled={typeItems.length <= 1}
+                          aria-label={`Remove ${item.label}`}
+                        >
+                          <Trash2 className='h-4 w-4' />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <div className='flex flex-1 items-center gap-2'>
+                      <Input
+                        placeholder='New type label…'
+                        className='h-8 max-w-[200px] text-sm'
+                        value={newTypeLabel}
+                        onChange={(e) => setNewTypeLabel(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (newTypeLabel.trim()) addType(newTypeLabel.trim());
+                            setNewTypeLabel('');
+                          }
+                        }}
+                      />
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        onClick={() => {
+                          if (newTypeLabel.trim()) addType(newTypeLabel.trim());
+                          setNewTypeLabel('');
+                        }}
+                        disabled={!newTypeLabel.trim()}
+                      >
+                        <Plus className='mr-1.5 h-4 w-4' />
+                        Add
+                      </Button>
+                    </div>
+                    <Button type='button' variant='ghost' size='sm' onClick={resetTypeItems}>
+                      Reset defaults
+                    </Button>
+                  </div>
                 </div>
               </AccordionContent>
             </AccordionItem>

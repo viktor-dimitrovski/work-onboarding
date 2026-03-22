@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { useSearchParams } from 'next/navigation';
+
 import { EmptyState } from '@/components/common/empty-state';
 import { LoadingState } from '@/components/common/loading-state';
 import { Badge } from '@/components/ui/badge';
@@ -11,7 +13,8 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { AssessmentAttempt, AssessmentSectionScore } from '@/lib/types';
-import { BarChart3, CheckCircle2, XCircle } from 'lucide-react';
+import { BarChart3, CheckCircle2, ClipboardList, XCircle } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 interface ResultsResponse {
   items: AssessmentAttempt[];
@@ -63,6 +66,12 @@ const durationText = (start?: string | null, end?: string | null) => {
 
 export default function AssessmentResultsPage() {
   const { accessToken } = useAuth();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const deliveryId = searchParams.get('delivery_id');
+  const testId = searchParams.get('test_id');
+  const userId = searchParams.get('user_id');
+
   const [results, setResults] = useState<ResultsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<AssessmentAttempt | null>(null);
@@ -71,7 +80,12 @@ export default function AssessmentResultsPage() {
     if (!accessToken) return;
     setLoading(true);
     try {
-      const response = await api.get<ResultsResponse>('/assessments/results', accessToken);
+      const params = new URLSearchParams();
+      if (deliveryId) params.set('delivery_id', deliveryId);
+      if (testId) params.set('test_id', testId);
+      if (userId) params.set('user_id', userId);
+      const qs = params.toString();
+      const response = await api.get<ResultsResponse>(`/assessments/results${qs ? `?${qs}` : ''}`, accessToken);
       setResults(response);
     } finally {
       setLoading(false);
@@ -80,11 +94,25 @@ export default function AssessmentResultsPage() {
 
   useEffect(() => {
     void load();
-  }, [accessToken]);
+  }, [accessToken, deliveryId, testId, userId]);
 
   if (loading) return <LoadingState label='Loading results...' />;
+
+  const filterLabel = deliveryId
+    ? 'Filtered by delivery'
+    : testId
+      ? 'Filtered by test'
+      : null;
+
   if (!results || results.items.length === 0) {
-    return <EmptyState title='No results yet' description='Assessment results will appear here after completing a test.' />;
+    return (
+      <div className='space-y-4'>
+        {filterLabel && (
+          <p className='text-xs text-muted-foreground'>{filterLabel} — <a href='/assessments/results' className='underline underline-offset-2'>Clear filter</a></p>
+        )}
+        <EmptyState title='No results yet' description='Assessment results will appear here after completing a test.' />
+      </div>
+    );
   }
 
   const items = results.items;
@@ -94,10 +122,12 @@ export default function AssessmentResultsPage() {
 
   return (
     <div className='space-y-6'>
-      {/* <div>
-        <h2 className='text-2xl font-semibold'>Results</h2>
-        <p className='text-sm text-muted-foreground'>Assessment performance and history.</p>
-      </div> */}
+      {filterLabel && (
+        <div className='flex items-center justify-between'>
+          <p className='text-xs text-muted-foreground'>{filterLabel}</p>
+          <a href='/assessments/results' className='text-xs text-primary underline underline-offset-2'>Clear filter</a>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
@@ -197,9 +227,22 @@ export default function AssessmentResultsPage() {
                       {durationText(attempt.started_at, attempt.submitted_at)}
                     </td>
                     <td className='py-3'>
-                      <Button variant='ghost' size='sm' className='h-7 text-xs' onClick={() => setDetail(attempt)}>
-                        Details
-                      </Button>
+                      <div className='flex items-center gap-1'>
+                        <Button variant='ghost' size='sm' className='h-7 text-xs' onClick={() => setDetail(attempt)}>
+                          Details
+                        </Button>
+                        {(attempt.status === 'scored' || attempt.status === 'submitted') && (
+                          <Button
+                            variant='ghost'
+                            size='sm'
+                            className='h-7 text-xs text-primary hover:text-primary'
+                            onClick={() => router.push(`/assessments/review/${attempt.id}`)}
+                          >
+                            <ClipboardList className='mr-1 h-3.5 w-3.5' />
+                            Review
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -247,8 +290,8 @@ export default function AssessmentResultsPage() {
                   <p className='mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground'>
                     Score by section
                   </p>
-                  <div className='overflow-hidden rounded-lg border'>
-                    <table className='w-full text-sm'>
+                  <div className='overflow-x-auto rounded-lg border'>
+                    <table className='w-full min-w-[320px] text-sm'>
                       <thead>
                         <tr className='border-b bg-muted/40 text-xs text-muted-foreground'>
                           <th className='px-3 py-2 text-left font-medium'>Section</th>
@@ -286,6 +329,17 @@ export default function AssessmentResultsPage() {
                 <p><span className='text-muted-foreground'>Started:</span> {formatDate(detail.started_at)}</p>
                 {detail.submitted_at && <p><span className='text-muted-foreground'>Submitted:</span> {formatDate(detail.submitted_at)}</p>}
               </div>
+
+              {/* Review CTA */}
+              {(detail.status === 'scored' || detail.status === 'submitted') && (
+                <Button
+                  className='mt-2 w-full'
+                  onClick={() => router.push(`/assessments/review/${detail.id}`)}
+                >
+                  <ClipboardList className='mr-2 h-4 w-4' />
+                  Review answers (right &amp; wrong)
+                </Button>
+              )}
             </div>
           )}
         </SheetContent>

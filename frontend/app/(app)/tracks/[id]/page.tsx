@@ -25,6 +25,8 @@ import { SingleSelect } from '@/components/inputs/single-select';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useTrackPurposeLabels } from '@/lib/track-purpose';
+import { useTrackTypeLabels } from '@/lib/track-type';
+import { useTrackRoleTargetLabels } from '@/lib/track-role-target';
 import type { TrackTemplate, TrackVersion } from '@/lib/types';
 import { ArrowLeft } from 'lucide-react';
 
@@ -91,7 +93,9 @@ export default function TrackDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { accessToken } = useAuth();
   const router = useRouter();
-  const { options: trackPurposeOptions, getLabel: getPurposeLabel, addPurpose } = useTrackPurposeLabels();
+  const { options: trackPurposeOptions, getLabel: getPurposeLabel } = useTrackPurposeLabels();
+  const { options: trackTypeOptions, addType } = useTrackTypeLabels();
+  const { options: roleTargetOptions, addRoleTarget } = useTrackRoleTargetLabels();
   const defaultPurpose = trackPurposeOptions[0]?.value ?? 'onboarding';
   const [track, setTrack] = useState<TrackTemplate | null>(null);
   const [phases, setPhases] = useState<DraftPhase[]>([]);
@@ -175,17 +179,13 @@ export default function TrackDetailPage() {
 
   const estimatedDays = form.watch('estimated_duration_days');
   const selectedPurpose = form.watch('purpose');
+  const purposeOptions = useMemo(() => {
+    if (!selectedPurpose) return trackPurposeOptions;
+    if (trackPurposeOptions.some((opt) => opt.value === selectedPurpose)) return trackPurposeOptions;
+    return [{ value: selectedPurpose, label: `Custom: ${selectedPurpose}`, disabled: true }, ...trackPurposeOptions];
+  }, [selectedPurpose, trackPurposeOptions]);
   const selectedPurposeLabel = getPurposeLabel(selectedPurpose);
 
-  const trackTypeOptions = useMemo(
-    () => [
-      { value: 'GENERAL', label: 'General' },
-      { value: 'RELEASE', label: 'Release template' },
-      { value: 'TENANT_CREATION', label: 'Tenant creation' },
-      { value: 'WORK_ORDER', label: 'Work order' },
-    ],
-    [],
-  );
 
   const summary = useMemo(() => {
     const totalPhases = phases.length;
@@ -461,7 +461,19 @@ export default function TrackDetailPage() {
 
                         <div className='space-y-2'>
                           <Label htmlFor='role_target'>Role target</Label>
-                          <Input id='role_target' {...form.register('role_target')} />
+                          <SingleSelect
+                            value={form.watch('role_target') ?? ''}
+                            onChange={(next) => form.setValue('role_target', next, { shouldDirty: true })}
+                            options={roleTargetOptions}
+                            placeholder='Select role…'
+                            creatable={{
+                              enabled: true,
+                              onCreate: async (label) => {
+                                const createdValue = addRoleTarget(label);
+                                form.setValue('role_target', createdValue, { shouldDirty: true });
+                              },
+                            }}
+                          />
                         </div>
 
                         <div className='space-y-2 md:col-span-2'>
@@ -488,17 +500,8 @@ export default function TrackDetailPage() {
                           <SingleSelect
                             value={form.watch('purpose')}
                             onChange={(next) => form.setValue('purpose', next, { shouldDirty: true })}
-                            options={trackPurposeOptions}
+                            options={purposeOptions}
                             placeholder='Select purpose…'
-                            creatable={{
-                              enabled: true,
-                              placeholder: 'Add new purpose…',
-                              actionLabel: 'Add',
-                              onCreate: async (label) => {
-                                const createdValue = addPurpose(label);
-                                form.setValue('purpose', createdValue, { shouldDirty: true });
-                              },
-                            }}
                           />
                         </div>
 
@@ -509,9 +512,27 @@ export default function TrackDetailPage() {
                             onChange={(next) => form.setValue('track_type', next, { shouldDirty: true })}
                             options={trackTypeOptions}
                             placeholder='Select type…'
+                            creatable={{
+                              enabled: true,
+                              placeholder: 'Add new type…',
+                              actionLabel: 'Add',
+                              onCreate: async (label) => {
+                                const createdValue = addType(label);
+                                form.setValue('track_type', createdValue, { shouldDirty: true });
+                              },
+                            }}
                           />
                           <p className='text-xs text-muted-foreground'>
                             Use <span className='font-medium'>RELEASE</span> to make templates appear in Release Center.
+                            New types can be managed in{' '}
+                            <button
+                              type='button'
+                              className='underline underline-offset-2 hover:text-foreground'
+                              onClick={() => { window.location.href = '/settings'; }}
+                            >
+                              Settings
+                            </button>
+                            .
                           </p>
                         </div>
                       </div>
