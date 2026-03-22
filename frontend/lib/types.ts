@@ -398,6 +398,31 @@ export interface AssessmentAttemptStart {
   questions: AssessmentAttemptQuestion[];
 }
 
+// ── Personal results history ─────────────────────────────────────────────────
+export interface MyResultAttempt {
+  attempt_id: string;
+  attempt_number: number;
+  delivery_id: string;
+  test_id: string | null;
+  test_title: string;
+  status: string;
+  started_at: string;
+  submitted_at: string | null;
+  score: number | null;
+  max_score: number | null;
+  score_percent: number | null;
+  passed: boolean;
+  section_scores?: Record<string, AssessmentSectionScore> | null;
+}
+
+export interface MyResultsResponse {
+  items: MyResultAttempt[];
+  total_attempts: number;
+  average_score_percent: number | null;
+  pass_count: number;
+  fail_count: number;
+}
+
 // ── Review (read-only, reveals correct answers) ───────────────────────────────
 export interface AttemptReviewOption {
   key: string;

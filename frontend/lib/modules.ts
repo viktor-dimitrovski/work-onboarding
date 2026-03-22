@@ -22,6 +22,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Trophy,
   Users,
 } from 'lucide-react';
 
@@ -105,6 +106,13 @@ export const MODULES: ModuleDefinition[] = [
         href: '/assessments/my-tests',
         label: 'My Tests',
         icon: PlayCircle,
+        moduleKey: 'assessments',
+        permission: 'assessments:take',
+      },
+      {
+        href: '/assessments/my-results',
+        label: 'My Results',
+        icon: Trophy,
         moduleKey: 'assessments',
         permission: 'assessments:take',
       },

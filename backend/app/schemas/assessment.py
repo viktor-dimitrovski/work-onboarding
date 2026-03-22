@@ -479,6 +479,30 @@ class AttemptReviewOut(BaseModel):
     questions: list[AttemptReviewQuestion]
 
 
+class MyResultAttemptOut(BaseModel):
+    attempt_id: UUID
+    attempt_number: int
+    delivery_id: UUID
+    test_id: UUID | None
+    test_title: str
+    status: str
+    started_at: datetime
+    submitted_at: datetime | None
+    score: float | None
+    max_score: float | None
+    score_percent: float | None
+    passed: bool
+    section_scores: dict[str, Any] | None = None
+
+
+class MyResultsResponse(BaseModel):
+    items: list[MyResultAttemptOut]
+    total_attempts: int
+    average_score_percent: float | None
+    pass_count: int
+    fail_count: int
+
+
 class AssessmentResultSummary(BaseModel):
     delivery_id: UUID | None
     test_id: UUID | None

@@ -51,6 +51,8 @@ from app.schemas.assessment import (
     AssessmentResultListResponse,
     AssessmentResultSummary,
     AttemptReviewOut,
+    MyResultsResponse,
+    MyResultAttemptOut,
     AssessmentTestCreate,
     AssessmentTestListResponse,
     AssessmentTestOut,
@@ -1822,6 +1824,29 @@ def get_attempt_review(
         is_admin=is_admin,
     )
     return AttemptReviewOut(**review)
+
+
+@router.get('/my-results', response_model=MyResultsResponse)
+def list_my_results(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
+) -> MyResultsResponse:
+    """Personal test history for the currently authenticated user."""
+    items_raw = assessment_service.list_my_results(db, user_id=current_user.id)
+    items = [MyResultAttemptOut(**item) for item in items_raw]
+    scores = [i.score_percent for i in items if i.score_percent is not None]
+    avg = (sum(scores) / len(scores)) if scores else None
+    pass_count = sum(1 for i in items if i.passed and i.status == 'scored')
+    fail_count = sum(1 for i in items if not i.passed and i.status == 'scored')
+    return MyResultsResponse(
+        items=items,
+        total_attempts=len(items),
+        average_score_percent=avg,
+        pass_count=pass_count,
+        fail_count=fail_count,
+    )
 
 
 @router.get('/results', response_model=AssessmentResultListResponse)

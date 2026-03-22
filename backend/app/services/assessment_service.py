@@ -1386,3 +1386,47 @@ def get_attempt_review(
         'status': attempt.status,
         'questions': questions_out,
     }
+
+
+def list_my_results(db: Session, *, user_id: UUID) -> list[dict]:
+    """Return all completed attempts for a given user, enriched with test title."""
+    stmt = (
+        select(
+            AssessmentAttempt,
+            AssessmentDelivery.test_version_id,
+            AssessmentTestVersion.test_id,
+            AssessmentTest.title.label('test_title'),
+        )
+        .join(AssessmentDelivery, AssessmentAttempt.delivery_id == AssessmentDelivery.id)
+        .join(AssessmentTestVersion, AssessmentDelivery.test_version_id == AssessmentTestVersion.id)
+        .join(AssessmentTest, AssessmentTestVersion.test_id == AssessmentTest.id)
+        .where(
+            AssessmentAttempt.user_id == user_id,
+            AssessmentAttempt.status.in_(['scored', 'submitted', 'expired']),
+        )
+        .order_by(AssessmentAttempt.submitted_at.desc().nulls_last())
+    )
+    rows = db.execute(stmt).all()
+    result = []
+    for row in rows:
+        attempt: AssessmentAttempt = row[0]
+        test_id = row[2]
+        test_title: str = row[3] or 'Untitled test'
+        result.append(
+            {
+                'attempt_id': attempt.id,
+                'attempt_number': attempt.attempt_number,
+                'delivery_id': attempt.delivery_id,
+                'test_id': test_id,
+                'test_title': test_title,
+                'status': attempt.status,
+                'started_at': attempt.started_at,
+                'submitted_at': attempt.submitted_at,
+                'score': attempt.score,
+                'max_score': attempt.max_score,
+                'score_percent': attempt.score_percent,
+                'passed': bool(attempt.passed),
+                'section_scores': attempt.section_scores,
+            }
+        )
+    return result
