@@ -14,7 +14,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  ClipboardList,
   Target,
   Trophy,
   XCircle,
@@ -184,7 +183,6 @@ function AttemptCard({ item }: { item: MyResultAttempt }) {
                 className='h-8 px-3 text-[13px]'
                 onClick={() => router.push(`/assessments/review/${item.attempt_id}`)}
               >
-                <ClipboardList className='mr-1.5 h-3.5 w-3.5' />
                 Review
               </Button>
             )}
