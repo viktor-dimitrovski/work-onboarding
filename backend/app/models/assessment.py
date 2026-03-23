@@ -450,3 +450,20 @@ Index('ix_assessment_deliveries_participant_user', AssessmentDelivery.participan
 Index('ix_assessment_deliveries_source_assignment', AssessmentDelivery.source_assignment_id)
 Index('ix_assessment_attempts_delivery_id', AssessmentAttempt.delivery_id)
 Index('ix_assessment_attempts_user_id', AssessmentAttempt.user_id)
+
+
+class AiImportTemplate(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
+    __tablename__ = 'ai_import_templates'
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        server_default=text("current_setting('app.tenant_id')::uuid"),
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    context_placeholder: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    extra_instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    auto_question_count: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

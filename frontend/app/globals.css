@@ -26,6 +26,8 @@ html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   overflow-x: hidden;
+  /* Reserve scrollbar gutter space always so dropdown/modal open doesn't shift page */
+  scrollbar-gutter: stable;
   /* Bump base font on mobile so all rem-based Tailwind sizes grow proportionally.
      text-sm (0.875rem) becomes ~15px, text-base (1rem) becomes ~17px. */
   font-size: 17px;

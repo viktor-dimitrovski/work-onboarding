@@ -63,13 +63,12 @@ const addUserSchema = z.object({
 type AddUserValues = z.infer<typeof addUserSchema>;
 
 function normalizeTenantRoles(value: unknown): string[] {
-  if (!Array.isArray(value)) return ['member'];
+  if (!Array.isArray(value)) return [];
   const roles = value
     .filter((v) => typeof v === 'string')
     .map((v) => v.trim())
     .filter(Boolean);
-  const unique = Array.from(new Set(roles));
-  return unique.length ? unique : ['member'];
+  return Array.from(new Set(roles));
 }
 
 function rolesEqual(a: string[], b: string[]) {
@@ -107,7 +106,7 @@ export default function UsersPage() {
       email: '',
       full_name: '',
       password: '',
-      tenant_roles: ['member'],
+      tenant_roles: [],
     },
   });
 
@@ -153,7 +152,7 @@ export default function UsersPage() {
         email: '',
         full_name: '',
         password: '',
-        tenant_roles: ['member'],
+        tenant_roles: [],
       });
       await loadUsers();
     } catch (submitError) {
@@ -292,7 +291,7 @@ export default function UsersPage() {
           <CardDescription>Directory + access controls in one compact view.</CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue='directory'>
+          <Tabs defaultValue='directory' onValueChange={() => setError(null)}>
             <TabsList>
               <TabsTrigger value='directory'>Directory</TabsTrigger>
               <TabsTrigger value='add'>Add user</TabsTrigger>
@@ -506,6 +505,11 @@ export default function UsersPage() {
 
             <TabsContent value='add'>
               <form className='grid gap-4 md:grid-cols-2' onSubmit={onSubmit}>
+                {error && (
+                  <div className='md:col-span-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive'>
+                    {error}
+                  </div>
+                )}
                 <div className='space-y-2'>
                   <Label>Email</Label>
                   <Input type='email' {...form.register('email')} />

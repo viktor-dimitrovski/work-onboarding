@@ -3,21 +3,16 @@
 /**
  * HierarchicalCategoryMenu
  *
- * iPhone-style two-level sliding panel for category navigation.
+ * Infinite-depth sliding panel for category navigation.
  *
- * Level 0 — root panel
- *   • "All categories" (clears selection)
- *   • "Unclassified"
- *   • Each parent group  → chevron right → drill into level 1
- *   • Orphan leaf categories (no parent) rendered directly
+ * Navigation state is a breadcrumb stack (path). Each entry in the stack is
+ * an AssessmentCategoryTreeNode. The currently-visible panel renders the
+ * children of path[path.length - 1], or the root tree when path is empty.
  *
- * Level 1 — children panel
- *   • Back arrow
- *   • "All in <Group>" shortcut
- *   • Each child leaf with a checkbox
+ * Nodes that have children → GroupItem (chevron, drill-in)
+ * Nodes that have no children → LeafItem (checkbox, toggle)
  *
- * Multi-select is supported. selectedSlugs is the source of truth.
- * A parent group shows a count badge of how many of its children are active.
+ * Multi-select is supported via selectedSlugs.
  */
 
 import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -29,7 +24,7 @@ import type { AssessmentCategoryTreeNode } from '@/lib/types';
 export interface HierarchicalCategoryMenuProps {
   /** Tree returned from GET /assessments/categories/tree */
   tree: AssessmentCategoryTreeNode[];
-  /** Count for "Unclassified" bucket – pass stats.unclassified_category */
+  /** Count for "Unclassified" bucket */
   unclassifiedCount?: number;
   /** Count per category slug → shown next to label */
   countsBySlag?: Record<string, number>;
@@ -45,9 +40,15 @@ export interface HierarchicalCategoryMenuProps {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function collectDescendantSlugs(node: AssessmentCategoryTreeNode): string[] {
+/** Collect all leaf slugs beneath (and including) a node. */
+function collectLeafSlugs(node: AssessmentCategoryTreeNode): string[] {
   if (node.children.length === 0) return [node.slug];
-  return node.children.flatMap(collectDescendantSlugs);
+  return node.children.flatMap(collectLeafSlugs);
+}
+
+/** Sum question counts for all leaves under a node. */
+function countForNode(node: AssessmentCategoryTreeNode, counts: Record<string, number>): number {
+  return collectLeafSlugs(node).reduce((a, s) => a + (counts[s] ?? 0), 0);
 }
 
 // ─── component ──────────────────────────────────────────────────────────────
@@ -61,7 +62,8 @@ export function HierarchicalCategoryMenu({
   onChange,
   className,
 }: HierarchicalCategoryMenuProps) {
-  const [activeParent, setActiveParent] = useState<AssessmentCategoryTreeNode | null>(null);
+  // Breadcrumb stack – each entry is the node whose children are currently shown.
+  const [path, setPath] = useState<AssessmentCategoryTreeNode[]>([]);
   const [sliding, setSliding] = useState<'in' | 'out' | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -73,117 +75,119 @@ export function HierarchicalCategoryMenu({
     );
   };
 
-  const drillInto = (parent: AssessmentCategoryTreeNode) => {
+  const drillInto = (node: AssessmentCategoryTreeNode) => {
     setSliding('in');
-    setActiveParent(parent);
+    setPath((p) => [...p, node]);
   };
 
   const drillOut = () => {
     setSliding('out');
     setTimeout(() => {
-      setActiveParent(null);
+      setPath((p) => p.slice(0, -1));
       setSliding(null);
-    }, 220);
+    }, 200);
   };
 
-  // reset animation class after transition
+  // Clear 'in' animation flag after transition
   useEffect(() => {
     if (sliding === 'in') {
-      const t = setTimeout(() => setSliding(null), 220);
+      const t = setTimeout(() => setSliding(null), 200);
       return () => clearTimeout(t);
     }
   }, [sliding]);
 
-  // ── root-level items ──────────────────────────────────────────────────────
-  const parents = tree.filter((n) => n.children.length > 0);
-  const orphans = tree.filter((n) => n.children.length === 0);
+  // The children to display at the current level
+  const currentNode = path.length > 0 ? path[path.length - 1] : null;
+  const currentChildren: AssessmentCategoryTreeNode[] = currentNode ? currentNode.children : tree;
 
-  const renderRoot = () => (
-    <div className='space-y-0.5'>
-      {/* All categories */}
-      <RootItem
-        label='All categories'
-        count={totalCount}
-        active={selectedSlugs.length === 0}
-        onClick={() => onChange([])}
-      />
+  // ── root panel (path is empty) ────────────────────────────────────────────
+  const renderRoot = () => {
+    const parents = tree.filter((n) => n.children.length > 0);
+    const orphans = tree.filter((n) => n.children.length === 0);
 
-      {/* Unclassified */}
-      <RootItem
-        label='Unclassified'
-        count={unclassifiedCount}
-        active={selectedSlugs.includes('unclassified')}
-        onClick={() => toggle('unclassified')}
-      />
-
-      {parents.length > 0 && (
-        <div className='my-2 border-t border-border/60' />
-      )}
-
-      {/* Parent groups */}
-      {parents.map((parent) => {
-        const childSlugs = collectDescendantSlugs(parent);
-        const selectedCount = childSlugs.filter((s) => selectedSlugs.includes(s)).length;
-        const totalInGroup = childSlugs.reduce((a, s) => a + (countsBySlag[s] ?? 0), 0);
-        return (
-          <GroupItem
-            key={parent.slug}
-            label={parent.name}
-            count={totalInGroup || undefined}
-            selectedCount={selectedCount}
-            onClick={() => drillInto(parent)}
-          />
-        );
-      })}
-
-      {/* Orphan leaf categories (no parent group) */}
-      {orphans.length > 0 && (
-        <div className='my-2 border-t border-border/60' />
-      )}
-      {orphans.map((cat) => (
-        <LeafItem
-          key={cat.slug}
-          label={cat.name}
-          count={countsBySlag[cat.slug]}
-          selected={selectedSlugs.includes(cat.slug)}
-          onClick={() => toggle(cat.slug)}
+    return (
+      <div className='space-y-0.5'>
+        <RootItem
+          label='All categories'
+          count={totalCount}
+          active={selectedSlugs.length === 0}
+          onClick={() => onChange([])}
         />
-      ))}
-    </div>
-  );
+        <RootItem
+          label='Unclassified'
+          count={unclassifiedCount}
+          active={selectedSlugs.includes('unclassified')}
+          onClick={() => toggle('unclassified')}
+        />
 
-  // ── child panel ───────────────────────────────────────────────────────────
-  const renderChildren = (parent: AssessmentCategoryTreeNode) => {
-    const childSlugs = parent.children.map((c) => c.slug);
-    const allSelected = childSlugs.every((s) => selectedSlugs.includes(s));
-    const noneSelected = childSlugs.every((s) => !selectedSlugs.includes(s));
+        {parents.length > 0 && <div className='my-2 border-t border-border/60' />}
+
+        {parents.map((node) => {
+          const leafSlugs = collectLeafSlugs(node);
+          const selCount = leafSlugs.filter((s) => selectedSlugs.includes(s)).length;
+          const total = countForNode(node, countsBySlag);
+          return (
+            <GroupItem
+              key={node.slug}
+              label={node.name}
+              count={total || undefined}
+              selectedCount={selCount}
+              onClick={() => drillInto(node)}
+            />
+          );
+        })}
+
+        {orphans.length > 0 && <div className='my-2 border-t border-border/60' />}
+        {orphans.map((cat) => (
+          <LeafItem
+            key={cat.slug}
+            label={cat.name}
+            count={countsBySlag[cat.slug]}
+            selected={selectedSlugs.includes(cat.slug)}
+            onClick={() => toggle(cat.slug)}
+          />
+        ))}
+      </div>
+    );
+  };
+
+  // ── deep panel (path is non-empty) ────────────────────────────────────────
+  const renderDeep = () => {
+    if (!currentNode) return null;
+
+    const leafSlugs = currentChildren.flatMap(collectLeafSlugs);
+    const allSelected = leafSlugs.length > 0 && leafSlugs.every((s) => selectedSlugs.includes(s));
+    const noneSelected = leafSlugs.every((s) => !selectedSlugs.includes(s));
 
     const toggleAll = () => {
       if (allSelected) {
-        onChange(selectedSlugs.filter((s) => !childSlugs.includes(s)));
+        onChange(selectedSlugs.filter((s) => !leafSlugs.includes(s)));
       } else {
         const next = new Set(selectedSlugs);
-        childSlugs.forEach((s) => next.add(s));
+        leafSlugs.forEach((s) => next.add(s));
         onChange([...next]);
       }
     };
 
+    // Breadcrumb label: last two levels for context
+    const breadcrumb = path.map((n) => n.name).join(' › ');
+
     return (
       <div className='space-y-0.5'>
-        {/* Back button */}
+        {/* Back */}
         <button
           type='button'
           onClick={drillOut}
           className='flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
         >
           <ChevronLeft className='h-3.5 w-3.5 shrink-0' />
-          <span>All categories</span>
+          <span>{path.length > 1 ? path[path.length - 2].name : 'All categories'}</span>
         </button>
 
-        {/* Group heading */}
+        {/* Group heading / breadcrumb */}
         <div className='px-2 pb-1 pt-2'>
           <p className='text-[11px] font-semibold uppercase tracking-wider text-muted-foreground'>
-            {parent.name}
+            {breadcrumb}
           </p>
         </div>
 
@@ -200,27 +204,36 @@ export function HierarchicalCategoryMenu({
                 : 'hover:bg-muted',
           )}
         >
-          <span>All in {parent.name}</span>
+          <span>All in {currentNode.name}</span>
           {allSelected && <Check className='h-3 w-3 shrink-0' />}
         </button>
 
         <div className='my-1 border-t border-border/60' />
 
-        {/* Children */}
-        {parent.children.map((child) => (
-          <LeafItem
-            key={child.slug}
-            label={child.name}
-            count={countsBySlag[child.slug]}
-            selected={selectedSlugs.includes(child.slug)}
-            onClick={() => toggle(child.slug)}
-          />
-        ))}
+        {/* Children — group if they have children, leaf otherwise */}
+        {currentChildren.map((child) =>
+          child.children.length > 0 ? (
+            <GroupItem
+              key={child.slug}
+              label={child.name}
+              count={countForNode(child, countsBySlag) || undefined}
+              selectedCount={collectLeafSlugs(child).filter((s) => selectedSlugs.includes(s)).length}
+              onClick={() => drillInto(child)}
+            />
+          ) : (
+            <LeafItem
+              key={child.slug}
+              label={child.name}
+              count={countsBySlag[child.slug]}
+              selected={selectedSlugs.includes(child.slug)}
+              onClick={() => toggle(child.slug)}
+            />
+          ),
+        )}
       </div>
     );
   };
 
-  // ── panel transition ──────────────────────────────────────────────────────
   const panelClass = cn(
     'w-full transition-transform duration-200 ease-in-out',
     sliding === 'in' && 'animate-slide-in-left',
@@ -230,7 +243,7 @@ export function HierarchicalCategoryMenu({
   return (
     <div ref={panelRef} className={cn('overflow-hidden', className)}>
       <div className={panelClass}>
-        {activeParent ? renderChildren(activeParent) : renderRoot()}
+        {path.length === 0 ? renderRoot() : renderDeep()}
       </div>
     </div>
   );

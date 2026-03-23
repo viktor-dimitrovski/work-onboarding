@@ -137,42 +137,44 @@ function StickyNav({ sections }: { sections: NavSection[] }) {
       )}
       style={{ paddingTop: '56px' }} // offset below the app topbar
     >
-      <div className='flex items-center gap-1 rounded-b-xl border border-t-0 bg-white/95 px-3 py-2 shadow-md backdrop-blur-sm'>
-        {sections.map(({ id, label, icon: Icon, badge, badgeVariant }) => {
-          const isActive = activeId === id;
-          return (
-            <button
-              key={id}
-              type='button'
-              onClick={() => scrollTo(id)}
-              className={cn(
-                'relative flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
-                isActive
-                  ? 'bg-primary text-primary-foreground shadow-sm'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              )}
-            >
-              <Icon className='h-3.5 w-3.5 shrink-0' />
-              <span>{label}</span>
-              {badge != null && Number(badge) > 0 && (
-                <span
-                  className={cn(
-                    'ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold',
-                    badgeVariant === 'alert'
-                      ? 'bg-red-500 text-white'
-                      : badgeVariant === 'warning'
-                        ? 'bg-amber-400 text-amber-900'
-                        : isActive
-                          ? 'bg-primary-foreground/20 text-primary-foreground'
-                          : 'bg-muted-foreground/15 text-muted-foreground',
-                  )}
-                >
-                  {badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
+      <div className='w-full overflow-x-auto border border-t-0 bg-white/95 shadow-md backdrop-blur-sm sm:w-auto sm:rounded-b-xl'>
+        <div className='flex min-w-max items-center gap-0.5 px-2 py-1.5 sm:gap-1 sm:px-3 sm:py-2'>
+          {sections.map(({ id, label, icon: Icon, badge, badgeVariant }) => {
+            const isActive = activeId === id;
+            return (
+              <button
+                key={id}
+                type='button'
+                onClick={() => scrollTo(id)}
+                className={cn(
+                  'relative flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium transition-all sm:gap-1.5 sm:px-3',
+                  isActive
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                <Icon className='h-3.5 w-3.5 shrink-0' />
+                <span className='hidden xs:inline sm:inline'>{label}</span>
+                {badge != null && Number(badge) > 0 && (
+                  <span
+                    className={cn(
+                      'ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold',
+                      badgeVariant === 'alert'
+                        ? 'bg-red-500 text-white'
+                        : badgeVariant === 'warning'
+                          ? 'bg-amber-400 text-amber-900'
+                          : isActive
+                            ? 'bg-primary-foreground/20 text-primary-foreground'
+                            : 'bg-muted-foreground/15 text-muted-foreground',
+                    )}
+                  >
+                    {badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -183,11 +185,11 @@ function StickyNav({ sections }: { sections: NavSection[] }) {
 function MetricCard({ title, value, sub }: { title: string; value: string; sub?: string }) {
   return (
     <Card className='bg-white'>
-      <CardHeader className='pb-2 pt-3'>
-        <CardDescription className='text-xs'>{title}</CardDescription>
-        <CardTitle className='text-xl font-semibold'>{value}</CardTitle>
+      <CardHeader className='px-3 pb-1.5 pt-2.5 sm:px-4 sm:pb-2 sm:pt-3'>
+        <CardDescription className='text-[11px] sm:text-xs'>{title}</CardDescription>
+        <CardTitle className='text-lg font-semibold sm:text-xl'>{value}</CardTitle>
       </CardHeader>
-      {sub && <CardContent className='pb-3 pt-0 text-xs text-muted-foreground'>{sub}</CardContent>}
+      {sub && <CardContent className='px-3 pb-2.5 pt-0 text-[11px] text-muted-foreground sm:px-4 sm:pb-3 sm:text-xs'>{sub}</CardContent>}
     </Card>
   );
 }
@@ -234,7 +236,7 @@ function SectionShell({
   return (
     <section id={id} className='overflow-hidden rounded-xl border bg-white shadow-sm'>
       <div className={cn('h-1', accent)} />
-      <div className='space-y-4 p-5'>{children}</div>
+      <div className='space-y-3 p-3 sm:space-y-4 sm:p-5'>{children}</div>
     </section>
   );
 }
@@ -258,7 +260,7 @@ function AssignmentsSection({
     <SectionShell id='section-assignments' accent='bg-blue-500'>
       <SectionHeader icon={ClipboardList} title='Tracks' href='/assignments' linkLabel='Go to assignments' accent='bg-blue-500' />
 
-      <div className='grid gap-4 md:grid-cols-4'>
+      <div className='grid grid-cols-2 gap-2 sm:gap-4 md:grid-cols-4'>
         {isAdmin && adminData ? (
           <>
             <MetricCard title='Active onboardings' value={String(adminData.active_onboardings)} />
@@ -348,7 +350,7 @@ function AssessmentsSection({
     <SectionShell id='section-assessments' accent='bg-indigo-500'>
       <SectionHeader icon={FileQuestion} title='Assessments' href='/assessments/my-tests' linkLabel='My Tests' accent='bg-indigo-500' />
 
-      <div className='grid gap-4 md:grid-cols-3'>
+      <div className='grid grid-cols-2 gap-2 sm:gap-4 sm:grid-cols-3'>
         <MetricCard title='Pending tests' value={String(pending.length)} />
         <MetricCard title='Completed' value={String(completed.length)} />
         <MetricCard title='Total assigned' value={String(tests.length)} />
@@ -427,7 +429,7 @@ function ComplianceSection({ data }: { data: ComplianceDashboard }) {
     <SectionShell id='section-compliance' accent='bg-emerald-500'>
       <SectionHeader icon={ShieldCheck} title='Compliance' href='/compliance-hub/profile' linkLabel='Open compliance' accent='bg-emerald-500' />
 
-      <div className='grid gap-4 md:grid-cols-4'>
+      <div className='grid grid-cols-2 gap-2 sm:gap-4 md:grid-cols-4'>
         <MetricCard title='Implementation' value={impl != null ? `${impl.toFixed(1)}%` : '—'} />
         <MetricCard title='Coverage' value={data.coverage_percent != null ? `${data.coverage_percent.toFixed(1)}%` : '—'} />
         <MetricCard title='Open work items' value={String(data.open_work_items)} />
@@ -435,7 +437,7 @@ function ComplianceSection({ data }: { data: ComplianceDashboard }) {
       </div>
 
       {(severities.length > 0 || data.top_gaps.length > 0) && (
-        <div className='grid gap-4 md:grid-cols-2'>
+        <div className='grid gap-3 sm:gap-4 md:grid-cols-2'>
           {severities.length > 0 && (
             <Card>
               <CardHeader>
@@ -482,7 +484,7 @@ function IntegrationRegistrySection({ data }: { data: IrOverview }) {
     <SectionShell id='section-ir' accent='bg-violet-500'>
       <SectionHeader icon={Network} title='Integration Registry' href='/integration-registry/overview' linkLabel='Open registry' accent='bg-violet-500' />
 
-      <div className='grid gap-4 md:grid-cols-4'>
+      <div className='grid grid-cols-2 gap-2 sm:gap-4 md:grid-cols-4'>
         <MetricCard title='Total connections' value={String(data.total)} />
         <MetricCard title='Active' value={String(data.active_count)} />
         <MetricCard title='Draft' value={String(data.draft_count)} />
@@ -560,7 +562,7 @@ function BillingSection({ data }: { data: BillingOverview }) {
     <SectionShell id='section-billing' accent='bg-slate-500'>
       <SectionHeader icon={CreditCard} title='Billing' href='/billing' linkLabel='Manage billing' accent='bg-slate-500' />
 
-      <div className='grid gap-4 md:grid-cols-3'>
+      <div className='grid grid-cols-2 gap-2 sm:gap-4 sm:grid-cols-3'>
         <MetricCard
           title='Current plan'
           value={data.plan?.name ?? '—'}
@@ -830,7 +832,7 @@ export default function DashboardPage() {
     <>
       <StickyNav sections={navSections} />
 
-      <div className='grid gap-6 lg:grid-cols-2'>
+      <div className='grid gap-3 sm:gap-6 lg:grid-cols-2'>
         {sectionNodes.map((node, i) => (
           <div key={i} className={isOdd && i === sectionNodes.length - 1 ? 'lg:col-span-2' : ''}>
             {node}

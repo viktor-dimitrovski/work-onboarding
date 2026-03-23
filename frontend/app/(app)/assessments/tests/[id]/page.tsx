@@ -206,6 +206,7 @@ export default function AssessmentTestBuilderPage() {
   const [bankQuery, setBankQuery] = useState('');
   const [bankDifficulties, setBankDifficulties] = useState<string[]>([]);
   const [bankCategories, setBankCategories] = useState<string[]>([]);
+  const [bankSort, setBankSort] = useState<string>('created_desc');
   const [bankChecked, setBankChecked] = useState<Set<string>>(new Set());
   const [categories, setCategories] = useState<AssessmentCategory[]>([]);
   const [categoryTree, setCategoryTree] = useState<AssessmentCategoryTreeNode[]>([]);
@@ -308,13 +309,14 @@ export default function AssessmentTestBuilderPage() {
       if (bankQuery.trim()) params.set('q', bankQuery.trim());
       if (bankDifficulties.length) params.set('difficulty', bankDifficulties.join(','));
       if (bankCategories.length) params.set('category', bankCategories.join(','));
+      if (bankSort && bankSort !== 'created_desc') params.set('sort_by', bankSort);
       const resp = await api.get<QuestionListResponse>(`/assessments/questions?${params}`, accessToken);
       setBankQuestions(resp.items);
       setBankTotal(resp.meta.total);
     } finally {
       setBankLoading(false);
     }
-  }, [accessToken, bankPage, bankPageSize, bankQuery, bankDifficulties, bankCategories]);
+  }, [accessToken, bankPage, bankPageSize, bankQuery, bankDifficulties, bankCategories, bankSort]);
 
   const loadCategories = useCallback(async () => {
     if (!accessToken) return;
@@ -362,7 +364,7 @@ export default function AssessmentTestBuilderPage() {
     return () => clearTimeout(t);
   }, [loadBank]);
 
-  useEffect(() => { setBankPage(1); }, [bankQuery, bankDifficulties, bankCategories, bankPageSize]);
+  useEffect(() => { setBankPage(1); }, [bankQuery, bankDifficulties, bankCategories, bankPageSize, bankSort]);
 
   // ---------------------------------------------------------------------------
   // Derived
@@ -686,7 +688,7 @@ export default function AssessmentTestBuilderPage() {
               onChange={setBankCategories}
               className='text-xs'
             />
-          </div>
+                </div>
 
           {/* Validation */}
           {hasErrors && (
@@ -698,8 +700,8 @@ export default function AssessmentTestBuilderPage() {
                     <p key={e} className='text-[11px] text-amber-800'>{e}</p>
                   ))}
                 </div>
-              </div>
-            </div>
+                </div>
+                </div>
           )}
 
           {/* Test settings — pinned to bottom, compact */}
@@ -709,15 +711,15 @@ export default function AssessmentTestBuilderPage() {
               <div>
                 <label className='block text-[10px] text-muted-foreground'>Pass score (%)</label>
                 <Input type='number' min={0} max={100} value={passingScore} onChange={(e) => setPassingScore(Number(e.target.value || 0))} className='h-6 px-1.5 text-xs' />
-              </div>
+                </div>
               <div>
                 <label className='block text-[10px] text-muted-foreground'>Time limit (min)</label>
                 <Input type='number' min={1} value={timeLimit} onChange={(e) => setTimeLimit(e.target.value ? Number(e.target.value) : '')} className='h-6 px-1.5 text-xs' placeholder='∞' />
-              </div>
+                </div>
               <div>
                 <label className='block text-[10px] text-muted-foreground'>Max attempts</label>
                 <Input type='number' min={1} value={attemptsAllowed} onChange={(e) => setAttemptsAllowed(e.target.value ? Number(e.target.value) : '')} className='h-6 px-1.5 text-xs' placeholder='∞' />
-              </div>
+                </div>
               <div className='flex items-end pb-0.5'>
                 <label className='flex cursor-pointer items-center gap-1.5 text-[11px]'>
                   <input type='checkbox' checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} className='h-3 w-3' />
@@ -744,13 +746,27 @@ export default function AssessmentTestBuilderPage() {
             <div className='relative flex-1'>
               <Search className='absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground' />
               <Input value={bankQuery} onChange={(e) => setBankQuery(e.target.value)} placeholder='Search published questions...' className='h-8 pl-8 text-xs' />
-            </div>
+                          </div>
             <FilterMenu label='Difficulty' options={difficultyOptions} selected={bankDifficulties} onChange={setBankDifficulties} />
             <FilterMenu label='Category' options={categoryOptions} selected={bankCategories} onChange={setBankCategories} />
+            <div className='flex items-center gap-1'>
+              <span className='text-xs text-muted-foreground whitespace-nowrap'>Sort:</span>
+              <select
+                className='h-8 rounded-md border border-input bg-background px-1.5 text-xs'
+                value={bankSort}
+                onChange={(e) => setBankSort(e.target.value)}
+                title='Sort order'
+              >
+                <option value='created_desc'>Newest first</option>
+                <option value='updated_desc'>Recently updated</option>
+                <option value='prompt_asc'>Name A → Z</option>
+                <option value='prompt_desc'>Name Z → A</option>
+              </select>
+            </div>
             {(bankQuery || bankDifficulties.length > 0 || bankCategories.length > 0) && (
               <Button variant='ghost' size='sm' className='h-8 text-xs' onClick={() => { setBankQuery(''); setBankDifficulties([]); setBankCategories([]); }}>
                 <X className='mr-1 h-3 w-3' />Clear
-              </Button>
+                            </Button>
             )}
             <span className='ml-auto text-xs text-muted-foreground'>{bankTotal} question{bankTotal !== 1 ? 's' : ''}</span>
           </div>
@@ -765,7 +781,7 @@ export default function AssessmentTestBuilderPage() {
               <Button size='sm' className='h-7 text-xs' onClick={addChecked}>
                 <Plus className='mr-1 h-3 w-3' />
                 Add selected ({checkedCount})
-              </Button>
+                            </Button>
             )}
           </div>
 
@@ -927,8 +943,8 @@ export default function AssessmentTestBuilderPage() {
                     </div>
                   </div>
                 ))}
-              </div>
-            )}
+                  </div>
+                )}
           </div>
 
           {/* Footer: summary */}
@@ -950,8 +966,8 @@ export default function AssessmentTestBuilderPage() {
                 <span className='text-muted-foreground'>Time</span>
                 <p className='text-sm font-bold'>{timeLimit || 'No limit'}</p>
               </div>
-            </div>
-          </div>
+                            </div>
+                          </div>
         </aside>
       </div>
 
@@ -1063,11 +1079,11 @@ export default function AssessmentTestBuilderPage() {
                       {v.published_at && ` · Published ${formatRelativeDate(v.published_at)}`}
                       {` · Deliveries ${v.deliveries_count}`}
                     </div>
-                  </div>
+                        </div>
                 );
               })
             )}
-          </div>
+                              </div>
         </SheetContent>
       </Sheet>
 
@@ -1081,20 +1097,20 @@ export default function AssessmentTestBuilderPage() {
             <div className='space-y-2'>
               <Label>Title</Label>
               <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-            </div>
+                            </div>
             <div className='space-y-2'>
               <Label>Description</Label>
               <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
-            </div>
+                          </div>
             <div className='space-y-2'>
               <Label>Category</Label>
               <Input value={category} onChange={(e) => setCategory(e.target.value)} />
-            </div>
-            <div className='space-y-2'>
+                    </div>
+                    <div className='space-y-2'>
               <Label>Role target</Label>
               <Input value={roleTarget} onChange={(e) => setRoleTarget(e.target.value)} />
-            </div>
-          </div>
+                        </div>
+                    </div>
           <SheetFooter className='mt-6'>
             <Button variant='outline' onClick={() => setMetaSheetOpen(false)}>Close</Button>
           </SheetFooter>

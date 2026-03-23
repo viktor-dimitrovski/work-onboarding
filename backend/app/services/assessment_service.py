@@ -117,6 +117,7 @@ def list_questions(
     tags: list[str] | None,
     difficulties: list[str] | None,
     categories: list[str] | None,
+    sort_by: str | None = None,
 ) -> tuple[list[AssessmentQuestion], int]:
     filter_kwargs = dict(
         tenant_id=tenant_id,
@@ -151,7 +152,14 @@ def list_questions(
     # ITEMS — selectinload for options fires a second query after the paged
     # main query; LIMIT/OFFSET here apply to distinct question rows only.
     items_q = build_question_query(**filter_kwargs, include_joins=True)
-    items_q = items_q.order_by(AssessmentQuestion.created_at.desc())
+    if sort_by == 'prompt_asc':
+        items_q = items_q.order_by(AssessmentQuestion.prompt.asc())
+    elif sort_by == 'prompt_desc':
+        items_q = items_q.order_by(AssessmentQuestion.prompt.desc())
+    elif sort_by == 'updated_desc':
+        items_q = items_q.order_by(AssessmentQuestion.updated_at.desc())
+    else:
+        items_q = items_q.order_by(AssessmentQuestion.created_at.desc())
 
     try:
         from sqlalchemy.dialects import postgresql as pg_dialect
@@ -321,6 +329,13 @@ def bulk_update_questions(
         db.flush()
         return len(rows)
 
+    if action == 'delete_permanently':
+        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
+        for q in rows:
+            db.delete(q)
+        db.flush()
+        return len(rows)
+
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid action')
 
 
@@ -364,6 +379,53 @@ def category_question_counts(db: Session) -> dict[str, int]:
         .group_by(AssessmentQuestion.category_id)
     ).all()
     return {str(r[0]): r[1] for r in rows}
+
+
+def _slugify(text: str) -> str:
+    """Convert a human-readable name into a URL-safe slug."""
+    import re as _re
+    text = text.strip().lower()
+    text = _re.sub(r'[^\w\s-]', '', text)
+    text = _re.sub(r'[\s_]+', '-', text)
+    text = _re.sub(r'-{2,}', '-', text)
+    return text.strip('-')[:80] or 'unnamed'
+
+
+def find_or_create_category_path(db: Session, path: str) -> UUID:
+    """Resolve a human-readable path like 'School/History/8th Grade' into a category UUID.
+
+    Each level is separated by '/'.  Each level is matched by slug AND parent_id so
+    that identically-named categories at different depths are treated as separate nodes.
+    Missing levels are created automatically.  Returns the leaf category's UUID.
+    """
+    parts = [p.strip() for p in path.split('/') if p.strip()]
+    if not parts:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Empty category path')
+
+    parent_id: UUID | None = None
+    leaf_id: UUID | None = None
+    for part in parts:
+        slug = _slugify(part)
+        # Match slug AND parent_id so "8th Grade" under "History" is distinct from
+        # "8th Grade" directly under "School".
+        existing = db.scalar(
+            select(AssessmentCategory).where(
+                AssessmentCategory.tenant_id == _tenant_id_expr(),
+                AssessmentCategory.slug == slug,
+                AssessmentCategory.parent_id == parent_id,
+            )
+        )
+        if existing:
+            leaf_id = existing.id
+            parent_id = existing.id
+        else:
+            cat = AssessmentCategory(name=part, slug=slug, parent_id=parent_id)
+            db.add(cat)
+            db.flush()
+            leaf_id = cat.id
+            parent_id = cat.id
+
+    return leaf_id  # type: ignore[return-value]
 
 
 def create_category(db: Session, name: str, slug: str, parent_id: UUID | None) -> AssessmentCategory:
@@ -1310,11 +1372,15 @@ def get_attempt_review(
     attempt_id: UUID,
     requesting_user_id: UUID,
     is_admin: bool,
+    tenant_id: UUID,
 ) -> dict:
     """Return per-question review data for a scored attempt (reveals correct answers)."""
     attempt = db.scalar(
         select(AssessmentAttempt)
-        .where(AssessmentAttempt.id == attempt_id)
+        .where(
+            AssessmentAttempt.id == attempt_id,
+            AssessmentAttempt.tenant_id == tenant_id,  # tenant isolation
+        )
         .options(joinedload(AssessmentAttempt.answers))
     )
     if not attempt:
@@ -1388,8 +1454,8 @@ def get_attempt_review(
     }
 
 
-def list_my_results(db: Session, *, user_id: UUID) -> list[dict]:
-    """Return all completed attempts for a given user, enriched with test title."""
+def list_my_results(db: Session, *, user_id: UUID, tenant_id: UUID) -> list[dict]:
+    """Return completed attempts for a given user scoped to a single tenant."""
     stmt = (
         select(
             AssessmentAttempt,
@@ -1402,6 +1468,7 @@ def list_my_results(db: Session, *, user_id: UUID) -> list[dict]:
         .join(AssessmentTest, AssessmentTestVersion.test_id == AssessmentTest.id)
         .where(
             AssessmentAttempt.user_id == user_id,
+            AssessmentAttempt.tenant_id == tenant_id,  # tenant isolation
             AssessmentAttempt.status.in_(['scored', 'submitted', 'expired']),
         )
         .order_by(AssessmentAttempt.submitted_at.desc().nulls_last())

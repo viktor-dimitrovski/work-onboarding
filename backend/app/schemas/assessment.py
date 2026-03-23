@@ -199,7 +199,7 @@ class AssessmentQuestionsBulkUpdate(BaseModel):
     difficulty: str | None = None
     category: str | None = None
 
-    action: str  # set_status | set_category | set_difficulty | add_tags | remove_tags | replace_tags
+    action: str  # set_status | set_category | set_difficulty | add_tags | remove_tags | replace_tags | delete_permanently
     status_value: str | None = None
     category_id: UUID | None = None
     difficulty_value: str | None = None
@@ -227,6 +227,14 @@ class AssessmentTextImportIn(BaseModel):
     question_count: int = Field(20, ge=1, le=100)
     tags: str = Field('', description='Comma-separated tag list')
     difficulty: str | None = None
+    category_path: str | None = Field(
+        None,
+        max_length=300,
+        description='Optional category path, e.g. "School / History 8th Grade". Levels split by " / ". Created if missing.',
+    )
+    extra_instructions: str | None = Field(None, max_length=4000)
+    material_context: str | None = Field(None, max_length=500)
+    auto_question_count: bool = False
 
 
 class AssessmentTextImportJobStart(BaseModel):
@@ -514,3 +522,36 @@ class AssessmentResultSummary(BaseModel):
 class AssessmentResultListResponse(BaseModel):
     items: list[AssessmentAttemptOut]
     summary: AssessmentResultSummary
+
+
+# ---------------------------------------------------------------------------
+# AI Import Templates
+# ---------------------------------------------------------------------------
+
+class AiImportTemplateOut(BaseModel):
+    model_config = {'from_attributes': True}
+
+    id: UUID
+    name: str
+    context_placeholder: str | None = None
+    extra_instructions: str
+    auto_question_count: bool
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AiImportTemplateCreate(BaseModel):
+    name: str = Field(..., max_length=200)
+    context_placeholder: str | None = Field(None, max_length=500)
+    extra_instructions: str = Field(..., min_length=10, max_length=8000)
+    auto_question_count: bool = False
+    sort_order: int = 0
+
+
+class AiImportTemplateUpdate(BaseModel):
+    name: str | None = Field(None, max_length=200)
+    context_placeholder: str | None = Field(None, max_length=500)
+    extra_instructions: str | None = Field(None, min_length=10, max_length=8000)
+    auto_question_count: bool | None = None
+    sort_order: int | None = None

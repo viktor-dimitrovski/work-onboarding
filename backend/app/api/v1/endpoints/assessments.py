@@ -60,9 +60,18 @@ from app.schemas.assessment import (
     AssessmentTestVersionHistoryResponse,
     AssessmentTestVersionOut,
     AssessmentTestVersionUpdate,
+    AiImportTemplateOut,
+    AiImportTemplateCreate,
+    AiImportTemplateUpdate,
 )
 from app.schemas.common import PaginationMeta
-from app.models.assessment import AssessmentAttempt, AssessmentClassificationJob, AssessmentDelivery, AssessmentTestVersion
+from app.models.assessment import (
+    AiImportTemplate,
+    AssessmentAttempt,
+    AssessmentClassificationJob,
+    AssessmentDelivery,
+    AssessmentTestVersion,
+)
 from app.models.assessment import AssessmentClassificationJobItem
 from app.services import assessment_classification_service, assessment_service, audit_service, usage_service
 from app.services.openai_responses_service import call_openai_responses_json
@@ -257,7 +266,11 @@ def import_questions_from_pdf(
     question_count: int = Form(20),
     tags: str = Form(''),
     difficulty: str | None = Form(None),
+    category_path: str | None = Form(None),
     max_pages: int | None = Form(None),
+    extra_instructions: str | None = Form(None),
+    material_context: str | None = Form(None),
+    auto_question_count: bool = Form(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access('assessments', 'assessments:write')),
@@ -293,22 +306,33 @@ def import_questions_from_pdf(
     # de-dupe merged tags
     merged_tags = _normalize_tags(",".join(merged_tags))
 
+    # Build enriched system prompt
+    pdf_system_prompt = IMPORT_SYSTEM_PROMPT
+    if material_context:
+        pdf_system_prompt += f'\n\nMaterial context: {material_context}'
+    if extra_instructions:
+        pdf_system_prompt += f'\n\nAdditional instructions:\n{extra_instructions}'
+
     warnings: list[str] = []
     questions: list[dict] = []
     remaining = question_count
 
     for chunk in chunks:
-        if remaining <= 0:
+        if not auto_question_count and remaining <= 0:
             break
-        per_chunk = min(remaining, 20)
+        per_chunk = min(remaining, 20) if not auto_question_count else 20
+        if auto_question_count:
+            count_instruction = f"Generate the most appropriate number of questions (max {per_chunk})"
+        else:
+            count_instruction = f"Generate exactly {per_chunk} questions"
         prompt = (
-            f"Generate exactly {per_chunk} questions as JSON.\n"
+            f"{count_instruction} as JSON.\n"
             f"Difficulty: {difficulty or 'mixed'}\n"
             f"Tags to include on every question: {merged_tags}\n\n"
             f"Content:\n{chunk}"
         )
         payload = call_openai_responses_json(
-            instructions=IMPORT_SYSTEM_PROMPT,
+            instructions=pdf_system_prompt,
             input_text=prompt,
             schema_name="assessment_questions_import",
             schema=IMPORT_JSON_SCHEMA,
@@ -332,11 +356,13 @@ def import_questions_from_pdf(
                 continue
             questions.append(q)
 
-        remaining = question_count - len(questions)
+        if not auto_question_count:
+            remaining = question_count - len(questions)
 
     # de-dupe by prompt
     seen_prompts = set()
     deduped: list[dict] = []
+    pdf_dedup_limit = len(questions) if auto_question_count else question_count
     for q in questions:
         prompt = str(q.get("prompt") or "").strip()
         key = re.sub(r"\s+", " ", prompt).lower()
@@ -344,14 +370,21 @@ def import_questions_from_pdf(
             continue
         seen_prompts.add(key)
         deduped.append(q)
-        if len(deduped) >= question_count:
+        if len(deduped) >= pdf_dedup_limit:
             break
 
     if not deduped:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No valid questions generated.")
 
+    # Resolve optional category path → UUID (creating hierarchy if needed).
+    pdf_category_id: UUID | None = None
+    if category_path and category_path.strip():
+        pdf_category_id = assessment_service.find_or_create_category_path(db, category_path.strip())
+
     created_ids = []
     for q in deduped:
+        if pdf_category_id is not None:
+            q['category_id'] = pdf_category_id
         created = assessment_service.create_question(db, payload=q, actor_user_id=current_user.id)
         created_ids.append(created.id)
 
@@ -412,9 +445,20 @@ def _run_text_import_job(
     tenant_id: str,
     user_id: UUID,
     tenant_db_id: UUID,
+    category_id: UUID | None = None,
+    extra_instructions: str | None = None,
+    material_context: str | None = None,
+    auto_question_count: bool = False,
 ) -> None:
     """Background thread: calls OpenAI per chunk, saves questions, updates Redis job state."""
     from app.db.session import SessionLocal, set_tenant_id  # local import to avoid circular refs
+
+    # Build enriched system prompt
+    system_prompt = IMPORT_SYSTEM_PROMPT
+    if material_context:
+        system_prompt += f'\n\nMaterial context: {material_context}'
+    if extra_instructions:
+        system_prompt += f'\n\nAdditional instructions:\n{extra_instructions}'
 
     questions: list[dict] = []
     remaining = question_count
@@ -426,22 +470,26 @@ def _run_text_import_job(
 
     try:
         for i, chunk in enumerate(text_chunks):
-            if remaining <= 0:
+            if not auto_question_count and remaining <= 0:
                 break
             if _is_cancelled():
                 _update_job(job_id, status='cancelled', phase='Cancelled by user.')
                 return
             _update_job(job_id, phase=f'Generating questions… (chunk {i + 1} of {len(text_chunks)})')
-            per_chunk = min(remaining, 25)
+            per_chunk = min(remaining, 25) if not auto_question_count else 25
+            if auto_question_count:
+                count_instruction = f'Generate the most appropriate number of questions (max {per_chunk})'
+            else:
+                count_instruction = f'Generate exactly {per_chunk} questions'
             prompt = (
-                f'Generate exactly {per_chunk} questions as JSON.\n'
+                f'{count_instruction} as JSON.\n'
                 f'Difficulty: {difficulty or "mixed"}\n'
                 f'Tags to include on every question: {merged_tags}\n\n'
                 f'Content:\n{chunk}'
             )
             try:
                 payload = call_openai_responses_json(
-                    instructions=IMPORT_SYSTEM_PROMPT,
+                    instructions=system_prompt,
                     input_text=prompt,
                     schema_name='assessment_questions_import',
                     schema=IMPORT_JSON_SCHEMA,
@@ -471,7 +519,8 @@ def _run_text_import_job(
                     continue
                 questions.append(q)
 
-            remaining = question_count - len(questions)
+            if not auto_question_count:
+                remaining = question_count - len(questions)
             _update_job(job_id, done_chunks=i + 1, questions_created=len(questions), warnings=warnings)
             if _is_cancelled():
                 _update_job(job_id, status='cancelled', phase='Cancelled by user.')
@@ -480,13 +529,14 @@ def _run_text_import_job(
         # de-dupe by prompt
         seen_prompts: set[str] = set()
         deduped: list[dict] = []
+        dedup_limit = len(questions) if auto_question_count else question_count
         for q in questions:
             p = re.sub(r'\s+', ' ', str(q.get('prompt') or '').strip()).lower()
             if not p or p in seen_prompts:
                 continue
             seen_prompts.add(p)
             deduped.append(q)
-            if len(deduped) >= question_count:
+            if len(deduped) >= dedup_limit:
                 break
 
         if not deduped:
@@ -500,6 +550,8 @@ def _run_text_import_job(
         try:
             set_tenant_id(db, tenant_id)
             for q in deduped:
+                if category_id is not None:
+                    q['category_id'] = category_id
                 created = assessment_service.create_question(db, payload=q, actor_user_id=user_id)
                 created_ids.append(str(created.id))
 
@@ -562,6 +614,18 @@ def import_questions_from_text(
     if not text_chunks:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='No usable text found.')
 
+    # Resolve optional category path → UUID (creating hierarchy if needed).
+    category_id: UUID | None = None
+    if body.category_path and body.category_path.strip():
+        from app.db.session import SessionLocal as _SL, set_tenant_id as _sti  # noqa: PLC0415
+        _cat_db = _SL()
+        try:
+            _sti(_cat_db, str(ctx.tenant.id))
+            category_id = assessment_service.find_or_create_category_path(_cat_db, body.category_path.strip())
+            _cat_db.commit()
+        finally:
+            _cat_db.close()
+
     job_id = str(uuid4())
     _write_job(job_id, {
         'job_id': job_id,
@@ -580,6 +644,12 @@ def import_questions_from_text(
     t = threading.Thread(
         target=_run_text_import_job,
         args=(job_id, text_chunks, question_count, merged_tags, difficulty, str(ctx.tenant.id), current_user.id, ctx.tenant.id),
+        kwargs={
+            'category_id': category_id,
+            'extra_instructions': body.extra_instructions,
+            'material_context': body.material_context,
+            'auto_question_count': body.auto_question_count,
+        },
         daemon=True,
     )
     t.start()
@@ -639,6 +709,7 @@ def list_questions(
     tag: str | None = Query(default=None),
     difficulty: str | None = Query(default=None),
     category: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
     ctx: TenantContext = Depends(require_access('assessments', 'assessments:read')),
@@ -657,6 +728,7 @@ def list_questions(
         tags=tags,
         difficulties=difficulties,
         categories=categories,
+        sort_by=sort_by,
     )
     return AssessmentQuestionListResponse(
         items=[AssessmentQuestionOut.model_validate(item) for item in items],
@@ -1543,6 +1615,7 @@ def publish_test_version(
 def list_available_assessments(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('assessments', 'assessments:take')),
 ):
     now = datetime.now(timezone.utc)
@@ -1554,7 +1627,12 @@ def list_available_assessments(
     )
     base = (
         select(AssessmentDelivery)
-        .where(visible, window_open, window_close)
+        .where(
+            AssessmentDelivery.tenant_id == ctx.tenant.id,  # tenant isolation
+            visible,
+            window_open,
+            window_close,
+        )
         .options(joinedload(AssessmentDelivery.test_version), joinedload(AssessmentDelivery.attempts))
         .order_by(AssessmentDelivery.created_at.desc())
     )
@@ -1821,6 +1899,7 @@ def get_attempt_review(
         db,
         attempt_id=attempt_id,
         requesting_user_id=current_user.id,
+        tenant_id=ctx.tenant.id,
         is_admin=is_admin,
     )
     return AttemptReviewOut(**review)
@@ -1833,8 +1912,8 @@ def list_my_results(
     ctx: TenantContext = Depends(require_tenant_membership),
     __: object = Depends(require_access('assessments', 'assessments:take')),
 ) -> MyResultsResponse:
-    """Personal test history for the currently authenticated user."""
-    items_raw = assessment_service.list_my_results(db, user_id=current_user.id)
+    """Personal test history for the currently authenticated user — scoped to this tenant."""
+    items_raw = assessment_service.list_my_results(db, user_id=current_user.id, tenant_id=ctx.tenant.id)
     items = [MyResultAttemptOut(**item) for item in items_raw]
     scores = [i.score_percent for i in items if i.score_percent is not None]
     avg = (sum(scores) / len(scores)) if scores else None
@@ -1881,3 +1960,104 @@ def list_results(
         items=[AssessmentAttemptOut.model_validate(item) for item in attempts],
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# AI Import Templates  — per-tenant CRUD
+# ---------------------------------------------------------------------------
+
+@router.get('/ai-import-templates', response_model=list[AiImportTemplateOut])
+def list_ai_import_templates(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> list[AiImportTemplateOut]:
+    from sqlalchemy import select as _select  # noqa: PLC0415
+    rows = db.scalars(
+        _select(AiImportTemplate)
+        .where(AiImportTemplate.tenant_id == ctx.tenant.id)
+        .order_by(AiImportTemplate.sort_order, AiImportTemplate.name)
+    ).all()
+    return [AiImportTemplateOut.model_validate(r) for r in rows]
+
+
+@router.post('/ai-import-templates', response_model=AiImportTemplateOut, status_code=status.HTTP_201_CREATED)
+def create_ai_import_template(
+    body: AiImportTemplateCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AiImportTemplateOut:
+    from datetime import datetime, timezone  # noqa: PLC0415
+    now = datetime.now(timezone.utc)
+    row = AiImportTemplate(
+        tenant_id=ctx.tenant.id,
+        name=body.name,
+        context_placeholder=body.context_placeholder,
+        extra_instructions=body.extra_instructions,
+        auto_question_count=body.auto_question_count,
+        sort_order=body.sort_order,
+        created_by=current_user.id,
+        updated_by=current_user.id,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return AiImportTemplateOut.model_validate(row)
+
+
+@router.put('/ai-import-templates/{template_id}', response_model=AiImportTemplateOut)
+def update_ai_import_template(
+    template_id: UUID,
+    body: AiImportTemplateUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> AiImportTemplateOut:
+    from datetime import datetime, timezone  # noqa: PLC0415
+    from sqlalchemy import select as _select  # noqa: PLC0415
+    row = db.scalars(
+        _select(AiImportTemplate)
+        .where(AiImportTemplate.id == template_id, AiImportTemplate.tenant_id == ctx.tenant.id)
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Template not found')
+    if body.name is not None:
+        row.name = body.name
+    if body.context_placeholder is not None:
+        row.context_placeholder = body.context_placeholder
+    if body.extra_instructions is not None:
+        row.extra_instructions = body.extra_instructions
+    if body.auto_question_count is not None:
+        row.auto_question_count = body.auto_question_count
+    if body.sort_order is not None:
+        row.sort_order = body.sort_order
+    row.updated_by = current_user.id
+    row.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(row)
+    return AiImportTemplateOut.model_validate(row)
+
+
+@router.delete('/ai-import-templates/{template_id}', status_code=status.HTTP_204_NO_CONTENT)
+def delete_ai_import_template(
+    template_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> None:
+    from sqlalchemy import select as _select  # noqa: PLC0415
+    row = db.scalars(
+        _select(AiImportTemplate)
+        .where(AiImportTemplate.id == template_id, AiImportTemplate.tenant_id == ctx.tenant.id)
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Template not found')
+    db.delete(row)
+    db.commit()

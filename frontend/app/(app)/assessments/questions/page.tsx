@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { EmptyState } from '@/components/common/empty-state';
+import { AiInstructionsPanel } from '@/components/assessments/ai-instructions-panel';
 import { QuestionEditorSheet } from '@/components/assessments/question-editor-sheet';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -23,9 +24,10 @@ import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/com
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { HierarchicalCategoryMenu } from '@/components/assessments/hierarchical-category-menu';
+import type { ImportTemplate } from '@/lib/import-templates';
 import type { AssessmentCategory, AssessmentCategoryTreeNode, AssessmentClassificationJob, AssessmentQuestion } from '@/lib/types';
 import { cn } from '@/lib/utils';
-import { LayoutGrid, List, MoreVertical, RefreshCw, Search, Sparkles, X } from 'lucide-react';
+import { Check, FolderOpen, LayoutGrid, List, MoreVertical, RefreshCw, Search, Sparkles, X } from 'lucide-react';
 
 interface QuestionListResponse {
   items: AssessmentQuestion[];
@@ -131,12 +133,14 @@ function QuestionActionsMenu({
   onDuplicate,
   onPublish,
   onArchive,
+  onSetCategory,
 }: {
   onEdit: () => void;
   onPreview: () => void;
   onDuplicate: () => void;
   onPublish: () => void;
   onArchive: () => void;
+  onSetCategory: () => void;
 }) {
   return (
     <DropdownMenu>
@@ -150,6 +154,10 @@ function QuestionActionsMenu({
         <DropdownMenuItem onSelect={onPreview}>Preview</DropdownMenuItem>
         <DropdownMenuItem onSelect={onDuplicate}>Duplicate</DropdownMenuItem>
         <DropdownMenuItem onSelect={onPublish}>Publish</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onSetCategory}>
+          <FolderOpen className='mr-2 h-3.5 w-3.5' />
+          Set category
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onArchive} className='text-destructive focus:text-destructive'>
           Archive
@@ -267,6 +275,7 @@ export default function AssessmentQuestionsPage() {
   const [importCount, setImportCount] = useState(20);
   const [importTags, setImportTags] = useState('');
   const [importDifficulty, setImportDifficulty] = useState('');
+  const [importCategory, setImportCategory] = useState('');
   const [importMaxPages, setImportMaxPages] = useState<number | ''>('');
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -276,6 +285,7 @@ export default function AssessmentQuestionsPage() {
   const [textImportCount, setTextImportCount] = useState(20);
   const [textImportTags, setTextImportTags] = useState('');
   const [textImportDifficulty, setTextImportDifficulty] = useState('');
+  const [textImportCategory, setTextImportCategory] = useState('');
   const [textImporting, setTextImporting] = useState(false);
   const [textImportError, setTextImportError] = useState<string | null>(null);
   const [textImportResult, setTextImportResult] = useState<PdfImportResponse | null>(null);
@@ -284,6 +294,13 @@ export default function AssessmentQuestionsPage() {
   const [textImportJobId, setTextImportJobId] = useState<string | null>(null);
   const [textImportCancelling, setTextImportCancelling] = useState(false);
   const textImportPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Shared AI Instructions state — used by both import forms
+  const [aiUserTemplates, setAiUserTemplates] = useState<ImportTemplate[]>([]);
+  const [importAiTemplate, setImportAiTemplate] = useState('');
+  const [importMaterialContext, setImportMaterialContext] = useState('');
+  const [importExtraInstructions, setImportExtraInstructions] = useState('');
+  const [importAutoCount, setImportAutoCount] = useState(false);
 
   const IMPORT_JOB_KEY = 'textImportJobId';
   const [dedupePreview, setDedupePreview] = useState<{ duplicate_groups: number; archived_count: number } | null>(null);
@@ -300,6 +317,11 @@ export default function AssessmentQuestionsPage() {
   const [previewQuestion, setPreviewQuestion] = useState<AssessmentQuestion | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<{ ids: string[]; label: string } | null>(null);
   const [archiving, setArchiving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ ids: string[]; label: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [classifyingQuestion, setClassifyingQuestion] = useState<AssessmentQuestion | null>(null);
+  const [categoryPickerSearch, setCategoryPickerSearch] = useState('');
+  const [classifyingSaving, setClassifyingSaving] = useState(false);
 
   const loadCategories = async () => {
     if (!accessToken) return;
@@ -341,6 +363,32 @@ export default function AssessmentQuestionsPage() {
       setClassifyError(err instanceof Error ? err.message : 'Failed to start classification');
     }
   };
+
+  const loadAiUserTemplates = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      const data = await api.get<Array<{
+        id: string; name: string; context_placeholder: string | null;
+        extra_instructions: string; auto_question_count: boolean; sort_order: number;
+      }>>('/assessments/ai-import-templates', accessToken);
+      setAiUserTemplates(data.map((t) => ({
+        id: t.id,
+        name: t.name,
+        context_placeholder: t.context_placeholder ?? '',
+        extra_instructions: t.extra_instructions,
+        auto_question_count: t.auto_question_count,
+      })));
+    } catch {
+      // silently fail — templates are optional
+    }
+  }, [accessToken]);
+
+  const resetAiInstructions = useCallback(() => {
+    setImportAiTemplate('');
+    setImportMaterialContext('');
+    setImportExtraInstructions('');
+    setImportAutoCount(false);
+  }, []);
 
   const load = async () => {
     if (!accessToken) return;
@@ -621,34 +669,64 @@ export default function AssessmentQuestionsPage() {
     return next;
   }, [questions, sort]);
 
+  // Build a map of category id → full path string (e.g. "School / History / 8th Grade")
+  const categoryPathMap = useMemo<Map<string, string>>(() => {
+    const map = new Map<string, string>();
+    const buildPath = (id: string): string => {
+      const cat = categories.find((c) => c.id === id);
+      if (!cat) return '';
+      const prefix = cat.parent_id ? buildPath(cat.parent_id) : '';
+      return prefix ? `${prefix} / ${cat.name}` : cat.name;
+    };
+    categories.forEach((c) => map.set(c.id, buildPath(c.id)));
+    return map;
+  }, [categories]);
+
   const visibleQuestionIds = useMemo(() => sortedQuestions.map((question) => question.id), [sortedQuestions]);
   const allVisibleSelected =
     visibleQuestionIds.length > 0 && visibleQuestionIds.every((id) => selectedQuestionIds.includes(id));
 
+  // When true, bulk actions target ALL matching questions (all pages) using all_matching scope
+  const [selectAllMode, setSelectAllMode] = useState(false);
+
+  // Current filter params forwarded to all_matching bulk actions
+  const currentFilterParams = useMemo(() => ({
+    status: selectedStatuses.length ? selectedStatuses.join(',') : undefined,
+    q: query.trim() || undefined,
+    tag: selectedTags.length ? selectedTags.join(',') : undefined,
+    difficulty: selectedDifficulties.length ? selectedDifficulties.join(',') : undefined,
+    category: selectedCategories.length ? selectedCategories.join(',') : undefined,
+  }), [selectedStatuses, query, selectedTags, selectedDifficulties, selectedCategories]);
+
   const toggleSelect = (questionId: string) => {
+    setSelectAllMode(false);
     setSelectedQuestionIds((prev) =>
       prev.includes(questionId) ? prev.filter((id) => id !== questionId) : [...prev, questionId],
     );
   };
 
   const toggleSelectAll = (checked: boolean) => {
+    setSelectAllMode(false);
     setSelectedQuestionIds(checked ? visibleQuestionIds : []);
   };
 
+  const buildBulkPayload = (action: string, extra?: Record<string, unknown>) => {
+    if (selectAllMode) {
+      return { scope: 'all_matching', action, ...currentFilterParams, ...extra };
+    }
+    return { scope: 'selected', question_ids: selectedQuestionIds, action, ...extra };
+  };
+
   const archiveQuestions = async (ids: string[]) => {
-    if (!accessToken || ids.length === 0) return;
+    if (!accessToken || (ids.length === 0 && !selectAllMode)) return;
     setArchiving(true);
     try {
       await api.post(
         '/assessments/questions/bulk-update',
-        {
-          scope: 'selected',
-          question_ids: ids,
-          action: 'set_status',
-          status_value: 'archived',
-        },
+        buildBulkPayload('set_status', { status_value: 'archived' }),
         accessToken,
       );
+      setSelectAllMode(false);
       setSelectedQuestionIds((prev) => prev.filter((id) => !ids.includes(id)));
       await load();
     } finally {
@@ -656,24 +734,50 @@ export default function AssessmentQuestionsPage() {
     }
   };
 
+  const deleteQuestions = async (ids: string[]) => {
+    if (!accessToken || (ids.length === 0 && !selectAllMode)) return;
+    setDeleting(true);
+    try {
+      await api.post(
+        '/assessments/questions/bulk-update',
+        buildBulkPayload('delete_permanently'),
+        accessToken,
+      );
+      setSelectAllMode(false);
+      setSelectedQuestionIds((prev) => prev.filter((id) => !ids.includes(id)));
+      await load();
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const classifyQuestion = async (questionId: string, categoryId: string | null) => {
+    if (!accessToken) return;
+    setClassifyingSaving(true);
+    try {
+      await api.put(`/assessments/questions/${questionId}`, { category_id: categoryId }, accessToken);
+      setClassifyingQuestion(null);
+      setCategoryPickerSearch('');
+      await load();
+    } finally {
+      setClassifyingSaving(false);
+    }
+  };
+
   const [publishing, setPublishing] = useState(false);
   const [publishedCount, setPublishedCount] = useState<number | null>(null);
 
   const publishQuestions = async (ids: string[]) => {
-    if (!accessToken || ids.length === 0) return;
+    if (!accessToken || (ids.length === 0 && !selectAllMode)) return;
     setPublishing(true);
     setPublishedCount(null);
     try {
       await api.post(
         '/assessments/questions/bulk-update',
-        {
-          scope: 'selected',
-          question_ids: ids,
-          action: 'set_status',
-          status_value: 'published',
-        },
+        buildBulkPayload('set_status', { status_value: 'published' }),
         accessToken,
       );
+      setSelectAllMode(false);
       setSelectedQuestionIds((prev) => prev.filter((id) => !ids.includes(id)));
       setPublishedCount(ids.length);
       await load();
@@ -726,10 +830,10 @@ export default function AssessmentQuestionsPage() {
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <h1 className='text-xl font-semibold tracking-tight'>Question Bank</h1>
         <div className='flex flex-wrap items-center gap-1.5'>
-          <Button variant='outline' size='sm' onClick={() => setImportOpen(true)}>
+          <Button variant='outline' size='sm' onClick={() => { setImportOpen(true); loadAiUserTemplates(); }}>
             Import PDF
           </Button>
-          <Button variant='outline' size='sm' onClick={() => setTextImportOpen(true)}>
+          <Button variant='outline' size='sm' onClick={() => { setTextImportOpen(true); loadAiUserTemplates(); }}>
             Import Text
           </Button>
           <Button
@@ -891,8 +995,8 @@ export default function AssessmentQuestionsPage() {
               >
                 <option value='updated_desc'>Newest</option>
                 <option value='updated_asc'>Oldest</option>
-                <option value='title_asc'>A–Z</option>
-                <option value='title_desc'>Z–A</option>
+                <option value='title_asc'>Name A–Z</option>
+                <option value='title_desc'>Name Z–A</option>
               </select>
               <Button variant='outline' size='icon' className='h-8 w-8 shrink-0' onClick={() => void load()} aria-label='Refresh'>
                 <RefreshCw className='h-3.5 w-3.5' />
@@ -905,24 +1009,67 @@ export default function AssessmentQuestionsPage() {
                     Clear
                   </Button>
                 )}
-                <label className='flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground'>
-                  <input
-                    type='checkbox'
-                    className='h-3.5 w-3.5 rounded border-input'
-                    checked={allVisibleSelected}
-                    onChange={(event) => toggleSelectAll(event.target.checked)}
-                    aria-label='Select all questions on page'
-                  />
-                  All
-                </label>
+                {/* Select preset: checkbox toggles current page; chevron opens options */}
+                <div className='flex items-center'>
+                  <label className='flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground cursor-pointer pr-0.5'>
+                    <input
+                      type='checkbox'
+                      className='h-3.5 w-3.5 rounded border-input'
+                      checked={selectAllMode || allVisibleSelected}
+                      onChange={(event) => toggleSelectAll(event.target.checked)}
+                      aria-label='Select all questions on page'
+                    />
+                    Select
+                  </label>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className='flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
+                        aria-label='Selection options'
+                      >
+                        <svg className='h-3 w-3' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5'><polyline points='6 9 12 15 18 9'/></svg>
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align='end' className='w-48 text-xs'>
+                      <DropdownMenuItem
+                        className='text-xs'
+                        onSelect={() => {
+                          setSelectAllMode(false);
+                          setSelectedQuestionIds(visibleQuestionIds);
+                        }}
+                      >
+                        This page ({visibleQuestionIds.length})
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className='text-xs'
+                        onSelect={() => {
+                          setSelectAllMode(true);
+                          setSelectedQuestionIds(visibleQuestionIds);
+                        }}
+                      >
+                        All matching ({total})
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className='text-xs text-muted-foreground'
+                        onSelect={() => {
+                          setSelectAllMode(false);
+                          setSelectedQuestionIds([]);
+                        }}
+                      >
+                        Deselect all
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
                 <span className='whitespace-nowrap text-xs font-medium text-muted-foreground'>{resultsLabel}</span>
                 <span
                   className={cn(
                     'whitespace-nowrap text-xs text-muted-foreground tabular-nums',
-                    selectedCount === 0 && 'invisible',
+                    selectedCount === 0 && !selectAllMode && 'invisible',
                   )}
                 >
-                  {selectedCount} selected
+                  {selectAllMode ? `${total} selected (all matching)` : `${selectedCount} selected`}
                 </span>
               </div>
 
@@ -931,11 +1078,11 @@ export default function AssessmentQuestionsPage() {
                   variant='outline'
                   className={cn(
                     'h-8 text-xs',
-                    selectedCount === 0 && !publishing && 'invisible pointer-events-none',
+                    selectedCount === 0 && !selectAllMode && !publishing && 'invisible pointer-events-none',
                     publishedCount !== null && 'border-green-500 text-green-600',
                   )}
-                  tabIndex={selectedCount === 0 && !publishing ? -1 : 0}
-                  aria-hidden={selectedCount === 0 && !publishing}
+                  tabIndex={selectedCount === 0 && !selectAllMode && !publishing ? -1 : 0}
+                  aria-hidden={selectedCount === 0 && !selectAllMode && !publishing}
                   disabled={publishing}
                   onClick={() => void publishQuestions(selectedQuestionIds)}
                 >
@@ -962,17 +1109,33 @@ export default function AssessmentQuestionsPage() {
                 <Button
                   size='sm'
                   variant='outline'
-                  className={cn('h-8 text-xs', selectedCount === 0 && 'invisible pointer-events-none')}
-                  tabIndex={selectedCount === 0 ? -1 : 0}
-                  aria-hidden={selectedCount === 0}
+                  className={cn('h-8 text-xs', selectedCount === 0 && !selectAllMode && 'invisible pointer-events-none')}
+                  tabIndex={selectedCount === 0 && !selectAllMode ? -1 : 0}
+                  aria-hidden={selectedCount === 0 && !selectAllMode}
                   onClick={() =>
                     setArchiveTarget({
                       ids: selectedQuestionIds,
-                      label: `${selectedCount} question${selectedCount === 1 ? '' : 's'}`,
+                      label: selectAllMode ? `${total} matching question${total === 1 ? '' : 's'}` : `${selectedCount} question${selectedCount === 1 ? '' : 's'}`,
                     })
                   }
                 >
                   Archive
+                </Button>
+
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className={cn('h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/40', selectedCount === 0 && !selectAllMode && 'invisible pointer-events-none')}
+                  tabIndex={selectedCount === 0 && !selectAllMode ? -1 : 0}
+                  aria-hidden={selectedCount === 0 && !selectAllMode}
+                  onClick={() =>
+                    setDeleteTarget({
+                      ids: selectedQuestionIds,
+                      label: selectAllMode ? `${total} matching question${total === 1 ? '' : 's'}` : `${selectedCount} question${selectedCount === 1 ? '' : 's'}`,
+                    })
+                  }
+                >
+                  Delete
                 </Button>
 
                 {isRefreshing && <span className='text-xs text-muted-foreground'>Updating…</span>}
@@ -1139,6 +1302,7 @@ export default function AssessmentQuestionsPage() {
                         onDuplicate={() => void duplicateQuestion(question)}
                         onPublish={() => void publishQuestions([question.id])}
                         onArchive={() => setArchiveTarget({ ids: [question.id], label: 'this question' })}
+                        onSetCategory={() => { setClassifyingQuestion(question); setCategoryPickerSearch(''); }}
                       />
                     </div>
                     <QuestionMetaBadges question={question} />
@@ -1164,7 +1328,7 @@ export default function AssessmentQuestionsPage() {
                     aria-label='Select question'
                   />
                   <p className='min-w-0 flex-1 truncate text-sm font-medium' title={question.prompt}>
-                    {question.prompt}
+                    {question.prompt.length > 90 ? `${question.prompt.slice(0, 90)}…` : question.prompt}
                   </p>
                   <div className='flex shrink-0 items-center gap-1'>
                     <Badge variant='secondary' className='text-[10px] font-medium'>
@@ -1192,6 +1356,7 @@ export default function AssessmentQuestionsPage() {
                     onDuplicate={() => void duplicateQuestion(question)}
                     onPublish={() => void publishQuestions([question.id])}
                     onArchive={() => setArchiveTarget({ ids: [question.id], label: 'this question' })}
+                    onSetCategory={() => { setClassifyingQuestion(question); setCategoryPickerSearch(''); }}
                   />
                 </div>
               ))}
@@ -1496,58 +1661,62 @@ export default function AssessmentQuestionsPage() {
               setTextImportCount(20);
               setTextImportTags('');
               setTextImportDifficulty('');
+              setTextImportCategory('');
               setTextImportProgress(0);
               setTextImportPhase('');
               setTextImportJobId(null);
               setTextImportCancelling(false);
+              resetAiInstructions();
             }
           }
         }}
       >
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle className='text-lg font-semibold'>Import questions from text</SheetTitle>
-            <p className='text-sm text-muted-foreground'>
-              Paste plain text or Markdown. Questions are generated by AI and imported as{' '}
-              <span className='font-medium'>draft</span>.
+        <SheetContent className='flex flex-col h-full p-0'>
+          <SheetHeader className='flex-none px-4 pt-4 pb-3 border-b'>
+            <SheetTitle className='text-base font-semibold'>Import questions from text</SheetTitle>
+            <p className='text-xs text-muted-foreground'>
+              Paste plain text or Markdown — AI generates questions imported as <span className='font-medium'>draft</span>.
             </p>
           </SheetHeader>
 
-          <div className='mt-5 space-y-4'>
-            <div className='space-y-2'>
-              <Label htmlFor='import-text-content'>Text or Markdown</Label>
+          <div className='flex-1 overflow-y-auto px-4 py-3 space-y-3'>
+            {/* Text area */}
+            <div className='space-y-1'>
+              <Label htmlFor='import-text-content' className='text-xs'>Text or Markdown</Label>
               <textarea
                 id='import-text-content'
-                className='min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 resize-y'
-                placeholder={'Paste your content here — documentation, notes, Markdown, course material…\n\nMinimum 50 characters required.'}
+                className='min-h-[140px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y'
+                placeholder={'Paste content here — notes, Markdown, course material…\nMinimum 50 characters.'}
                 value={textImportText}
                 onChange={(e) => setTextImportText(e.target.value)}
               />
-              <p className='text-xs text-muted-foreground'>
-                {textImportText.length > 0
-                  ? `${textImportText.length.toLocaleString()} characters`
-                  : 'Supports plain text and Markdown.'}
-              </p>
+              {textImportText.length > 0 && (
+                <p className='text-[11px] text-muted-foreground'>{textImportText.length.toLocaleString()} characters</p>
+              )}
             </div>
 
-            <div className='grid gap-3 sm:grid-cols-2'>
-              <div className='space-y-2'>
-                <Label htmlFor='text-import-count'>Questions to generate</Label>
+            {/* Settings row: count + difficulty */}
+            <div className='grid grid-cols-2 gap-2'>
+              <div className='space-y-1'>
+                <Label htmlFor='text-import-count' className={`text-xs ${importAutoCount ? 'text-muted-foreground/50' : ''}`}>
+                  Questions{importAutoCount && <span className='ml-1 text-[10px] font-normal'>(AI decides)</span>}
+                </Label>
                 <input
                   id='text-import-count'
                   type='number'
                   min={1}
                   max={100}
-                  className='h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+                  disabled={importAutoCount}
+                  className='h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40'
                   value={textImportCount}
                   onChange={(e) => setTextImportCount(Number(e.target.value || 20))}
                 />
               </div>
-              <div className='space-y-2'>
-                <Label htmlFor='text-import-difficulty'>Difficulty</Label>
+              <div className='space-y-1'>
+                <Label htmlFor='text-import-difficulty' className='text-xs'>Difficulty</Label>
                 <select
                   id='text-import-difficulty'
-                  className='h-10 w-full rounded-md border border-input bg-white px-3 text-sm'
+                  className='h-8 w-full rounded-md border border-input bg-background px-2 text-sm'
                   value={textImportDifficulty}
                   onChange={(e) => setTextImportDifficulty(e.target.value)}
                 >
@@ -1557,31 +1726,71 @@ export default function AssessmentQuestionsPage() {
                   <option value='hard'>Hard</option>
                 </select>
               </div>
-              <div className='space-y-2 sm:col-span-2'>
-                <Label htmlFor='text-import-tags'>Tags (comma separated)</Label>
+            </div>
+
+            {/* Tags + Category */}
+            <div className='grid grid-cols-2 gap-2'>
+              <div className='space-y-1'>
+                <Label htmlFor='text-import-tags' className='text-xs'>Tags</Label>
                 <input
                   id='text-import-tags'
                   type='text'
-                  className='h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
-                  placeholder='security, sdlc, iam'
+                  className='h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                  placeholder='security, sdlc'
                   value={textImportTags}
                   onChange={(e) => setTextImportTags(e.target.value)}
                 />
               </div>
+              <div className='space-y-1'>
+                <Label htmlFor='text-import-category' className='text-xs'>Category</Label>
+                <input
+                  id='text-import-category'
+                  type='text'
+                  list='text-import-category-list'
+                  className='h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                  placeholder='e.g. School/History/8th Grade'
+                  value={textImportCategory}
+                  onChange={(e) => setTextImportCategory(e.target.value)}
+                />
+                <p className='text-[10px] text-muted-foreground'>Use / to create sub-levels, e.g. School/History/8th Grade</p>
+                <datalist id='text-import-category-list'>
+                  {(() => {
+                    const buildPath = (id: string): string => {
+                      const cat = categories.find((c) => c.id === id);
+                      if (!cat) return '';
+                      return cat.parent_id ? `${buildPath(cat.parent_id)}/${cat.name}` : cat.name;
+                    };
+                    return categories.map((c) => (
+                      <option key={c.id} value={buildPath(c.id)} />
+                    ));
+                  })()}
+                </datalist>
+              </div>
             </div>
+
+            {/* AI Instructions */}
+            <AiInstructionsPanel
+              template={importAiTemplate}
+              onTemplateChange={setImportAiTemplate}
+              materialContext={importMaterialContext}
+              onMaterialContextChange={setImportMaterialContext}
+              extraInstructions={importExtraInstructions}
+              onExtraInstructionsChange={setImportExtraInstructions}
+              autoCount={importAutoCount}
+              onAutoCountChange={setImportAutoCount}
+              userTemplates={aiUserTemplates}
+            />
 
             {/* Progress */}
             {textImporting && (
-              <div className='space-y-2 rounded-lg border bg-muted/20 p-4'>
+              <div className='space-y-1.5 rounded-lg border bg-muted/20 p-3'>
                 <div className='flex items-center justify-between text-xs'>
                   <span className='text-muted-foreground'>{textImportPhase}</span>
                   <span className='tabular-nums font-medium'>{Math.round(textImportProgress)}%</span>
                 </div>
-                <Progress value={textImportProgress} className='h-2' />
+                <Progress value={textImportProgress} className='h-1.5' />
                 <div className='flex items-center justify-between'>
-                  <p className='text-[11px] text-muted-foreground'>
-                    Generating {textImportCount} question{textImportCount !== 1 ? 's' : ''} — this may take up to a minute for large batches.
-                  </p>
+                  <p className='text-[11px] text-muted-foreground'>May take up to a minute.</p>
                   <Button
                     type='button'
                     variant='ghost'
@@ -1603,7 +1812,7 @@ export default function AssessmentQuestionsPage() {
                       }
                     }}
                   >
-                    {textImportCancelling ? 'Stopping…' : 'Stop import'}
+                    {textImportCancelling ? 'Stopping…' : 'Stop'}
                   </Button>
                 </div>
               </div>
@@ -1616,7 +1825,7 @@ export default function AssessmentQuestionsPage() {
                   ✓ Imported {textImportResult.imported_count} question{textImportResult.imported_count !== 1 ? 's' : ''}
                 </p>
                 {textImportResult.warnings && textImportResult.warnings.length > 0 && (
-                  <div className='mt-2 space-y-1 text-xs text-emerald-700'>
+                  <div className='mt-1.5 space-y-0.5 text-xs text-emerald-700'>
                     {textImportResult.warnings.slice(0, 6).map((w, idx) => (
                       <p key={idx}>· {w}</p>
                     ))}
@@ -1626,16 +1835,18 @@ export default function AssessmentQuestionsPage() {
             )}
           </div>
 
-          <SheetFooter className='mt-6'>
+          <SheetFooter className='flex-none border-t px-4 py-3 bg-muted/30'>
             <Button
               type='button'
               variant='outline'
+              size='sm'
               onClick={() => setTextImportOpen(false)}
             >
               {textImporting ? 'Close (runs in background)' : 'Close'}
             </Button>
             <Button
               type='button'
+              size='sm'
               disabled={!accessToken || textImporting || textImportText.trim().length < 50}
               onClick={async () => {
                 if (!accessToken) return;
@@ -1661,6 +1872,10 @@ export default function AssessmentQuestionsPage() {
                       question_count: textImportCount,
                       tags: textImportTags,
                       difficulty: textImportDifficulty || null,
+                      category_path: textImportCategory.trim() || null,
+                      extra_instructions: importExtraInstructions.trim() || null,
+                      material_context: importMaterialContext.trim() || null,
+                      auto_question_count: importAutoCount,
                     }),
                   });
 
@@ -1707,6 +1922,20 @@ export default function AssessmentQuestionsPage() {
       />
 
       <ConfirmDialog
+        title='Permanently delete questions?'
+        description={`This will permanently delete ${deleteTarget?.label ?? 'the selected questions'}. This action cannot be undone.`}
+        confirmText={deleting ? 'Deleting…' : 'Delete permanently'}
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          const ids = deleteTarget.ids;
+          setDeleteTarget(null);
+          void deleteQuestions(ids);
+        }}
+      />
+
+      <ConfirmDialog
         title='Remove duplicate questions?'
         description={
           dedupePreview
@@ -1746,46 +1975,55 @@ export default function AssessmentQuestionsPage() {
             setImportCount(20);
             setImportTags('');
             setImportDifficulty('');
+            setImportCategory('');
             setImportMaxPages('');
+            resetAiInstructions();
           }
         }}
       >
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle className='text-lg font-semibold'>Import questions from PDF</SheetTitle>
-            <p className='text-sm text-muted-foreground'>
-              Upload a text-based PDF (scanned PDFs need OCR). Questions are imported as <span className='font-medium'>draft</span>.
+        <SheetContent className='flex flex-col h-full p-0'>
+          <SheetHeader className='flex-none px-4 pt-4 pb-3 border-b'>
+            <SheetTitle className='text-base font-semibold'>Import questions from PDF</SheetTitle>
+            <p className='text-xs text-muted-foreground'>
+              Upload a text-based PDF — AI generates questions imported as <span className='font-medium'>draft</span>.
             </p>
           </SheetHeader>
 
-          <div className='mt-5 space-y-4'>
-            <div className='space-y-2'>
-              <Label htmlFor='pdf'>PDF file</Label>
+          <div className='flex-1 overflow-y-auto px-4 py-3 space-y-3'>
+            {/* File picker */}
+            <div className='space-y-1'>
+              <Label htmlFor='pdf' className='text-xs'>PDF file</Label>
               <Input
                 id='pdf'
                 type='file'
                 accept='application/pdf'
+                className='h-8 text-sm file:mr-2 file:h-full file:border-0 file:bg-transparent file:text-xs file:font-medium'
                 onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
               />
             </div>
 
-            <div className='grid gap-3 sm:grid-cols-2'>
-              <div className='space-y-2'>
-                <Label htmlFor='count'>Questions to generate</Label>
+            {/* Questions + Difficulty + Tags + Max pages in compact grid */}
+            <div className='grid grid-cols-2 gap-2'>
+              <div className='space-y-1'>
+                <Label htmlFor='count' className={`text-xs ${importAutoCount ? 'text-muted-foreground/50' : ''}`}>
+                  Questions{importAutoCount && <span className='ml-1 text-[10px] font-normal'>(AI decides)</span>}
+                </Label>
                 <Input
                   id='count'
                   type='number'
                   min={1}
                   max={100}
+                  disabled={importAutoCount}
+                  className='h-8 text-sm disabled:cursor-not-allowed disabled:opacity-40'
                   value={importCount}
                   onChange={(event) => setImportCount(Number(event.target.value || 20))}
                 />
               </div>
-              <div className='space-y-2'>
-                <Label htmlFor='difficulty'>Difficulty</Label>
+              <div className='space-y-1'>
+                <Label htmlFor='difficulty' className='text-xs'>Difficulty</Label>
                 <select
                   id='difficulty'
-                  className='h-10 rounded-md border border-input bg-white px-3 text-sm'
+                  className='h-8 w-full rounded-md border border-input bg-background px-2 text-sm'
                   value={importDifficulty}
                   onChange={(event) => setImportDifficulty(event.target.value)}
                 >
@@ -1795,40 +2033,82 @@ export default function AssessmentQuestionsPage() {
                   <option value='hard'>Hard</option>
                 </select>
               </div>
-              <div className='space-y-2 sm:col-span-2'>
-                <Label htmlFor='tags'>Tags (comma separated)</Label>
+              <div className='space-y-1'>
+                <Label htmlFor='tags' className='text-xs'>Tags</Label>
                 <Input
                   id='tags'
+                  className='h-8 text-sm'
                   value={importTags}
                   onChange={(event) => setImportTags(event.target.value)}
-                  placeholder='security, sdlc, iam'
+                  placeholder='security, sdlc'
                 />
               </div>
-              <div className='space-y-2'>
-                <Label htmlFor='max_pages'>Max pages (optional)</Label>
+              <div className='space-y-1'>
+                <Label htmlFor='max_pages' className='text-xs'>Max pages</Label>
                 <Input
                   id='max_pages'
                   type='number'
                   min={1}
                   max={500}
+                  className='h-8 text-sm'
                   value={importMaxPages}
                   onChange={(event) => {
                     const v = event.target.value;
                     setImportMaxPages(v ? Number(v) : '');
                   }}
-                  placeholder='e.g. 40'
+                  placeholder='all'
                 />
               </div>
             </div>
 
+            {/* Category (full width) */}
+            <div className='space-y-1'>
+              <Label htmlFor='pdf-import-category' className='text-xs'>Category</Label>
+              <input
+                id='pdf-import-category'
+                type='text'
+                list='pdf-import-category-list'
+                className='h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                placeholder='e.g. School/History/8th Grade'
+                value={importCategory}
+                onChange={(e) => setImportCategory(e.target.value)}
+              />
+              <p className='text-[10px] text-muted-foreground'>Use / to create sub-levels, e.g. School/History/8th Grade</p>
+              <datalist id='pdf-import-category-list'>
+                {(() => {
+                  const buildPath = (id: string): string => {
+                    const cat = categories.find((c) => c.id === id);
+                    if (!cat) return '';
+                    return cat.parent_id ? `${buildPath(cat.parent_id)}/${cat.name}` : cat.name;
+                  };
+                  return categories.map((c) => (
+                    <option key={c.id} value={buildPath(c.id)} />
+                  ));
+                })()}
+              </datalist>
+            </div>
+
+            {/* AI Instructions */}
+            <AiInstructionsPanel
+              template={importAiTemplate}
+              onTemplateChange={setImportAiTemplate}
+              materialContext={importMaterialContext}
+              onMaterialContextChange={setImportMaterialContext}
+              extraInstructions={importExtraInstructions}
+              onExtraInstructionsChange={setImportExtraInstructions}
+              autoCount={importAutoCount}
+              onAutoCountChange={setImportAutoCount}
+              userTemplates={aiUserTemplates}
+            />
+
             {importError && <p className='text-sm text-destructive'>{importError}</p>}
             {importResult && (
-              <div className='rounded-md border bg-muted/20 p-3 text-sm'>
-                <p className='font-medium'>Imported {importResult.imported_count} questions</p>
+              <div className='rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm'>
+                <p className='font-semibold text-emerald-800'>✓ Imported {importResult.imported_count} questions</p>
                 {importResult.warnings && importResult.warnings.length > 0 && (
-                  <div className='mt-2 space-y-1 text-xs text-muted-foreground'>
+                  <div className='mt-1.5 space-y-0.5 text-xs text-emerald-700'>
                     {importResult.warnings.slice(0, 6).map((w, idx) => (
-                      <p key={idx}>- {w}</p>
+                      <p key={idx}>· {w}</p>
                     ))}
                   </div>
                 )}
@@ -1836,10 +2116,11 @@ export default function AssessmentQuestionsPage() {
             )}
           </div>
 
-          <SheetFooter className='mt-6'>
+          <SheetFooter className='flex-none border-t px-4 py-3 bg-muted/30'>
             <Button
               type='button'
               variant='outline'
+              size='sm'
               onClick={() => setImportOpen(false)}
               disabled={importing}
             >
@@ -1847,6 +2128,7 @@ export default function AssessmentQuestionsPage() {
             </Button>
             <Button
               type='button'
+              size='sm'
               disabled={!accessToken || importing || !importFile}
               onClick={async () => {
                 if (!accessToken || !importFile) return;
@@ -1860,9 +2142,19 @@ export default function AssessmentQuestionsPage() {
                   formData.append('question_count', String(importCount));
                   formData.append('tags', importTags);
                   formData.append('difficulty', importDifficulty);
+                  if (importCategory.trim()) {
+                    formData.append('category_path', importCategory.trim());
+                  }
                   if (importMaxPages !== '') {
                     formData.append('max_pages', String(importMaxPages));
                   }
+                  if (importExtraInstructions.trim()) {
+                    formData.append('extra_instructions', importExtraInstructions.trim());
+                  }
+                  if (importMaterialContext.trim()) {
+                    formData.append('material_context', importMaterialContext.trim());
+                  }
+                  formData.append('auto_question_count', String(importAutoCount));
 
                   const resp = await fetch(`${apiBase}/assessments/questions/import-pdf`, {
                     method: 'POST',
@@ -1888,6 +2180,84 @@ export default function AssessmentQuestionsPage() {
               {importing ? 'Importing…' : 'Import'}
             </Button>
           </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
+      {/* Category picker for manual classification */}
+      <Sheet
+        open={!!classifyingQuestion}
+        onOpenChange={(open) => { if (!open) { setClassifyingQuestion(null); setCategoryPickerSearch(''); } }}
+      >
+        <SheetContent className='flex flex-col h-full p-0'>
+          <SheetHeader className='flex-none px-4 pt-4 pb-3 border-b'>
+            <SheetTitle className='text-base font-semibold'>Set category</SheetTitle>
+            <p className='text-xs text-muted-foreground truncate'>
+              {classifyingQuestion?.prompt.slice(0, 80)}{(classifyingQuestion?.prompt.length ?? 0) > 80 ? '…' : ''}
+            </p>
+          </SheetHeader>
+          <div className='flex-none px-3 pt-3'>
+            <div className='relative'>
+              <Search className='absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground' />
+              <input
+                type='text'
+                className='h-8 w-full rounded-md border border-input bg-background pl-8 pr-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                placeholder='Search categories…'
+                value={categoryPickerSearch}
+                onChange={(e) => setCategoryPickerSearch(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className='flex-1 overflow-y-auto px-3 py-2 space-y-0.5'>
+            {/* Unclassified option */}
+            {(!categoryPickerSearch || 'unclassified'.includes(categoryPickerSearch.toLowerCase())) && (
+              <button
+                type='button'
+                disabled={classifyingSaving}
+                className={cn(
+                  'flex w-full items-center rounded-md px-2 py-2 text-sm text-left transition-colors hover:bg-muted',
+                  classifyingQuestion?.category_id == null && 'bg-primary/10 font-medium text-primary',
+                )}
+                onClick={() => classifyingQuestion && void classifyQuestion(classifyingQuestion.id, null)}
+              >
+                <span className='text-muted-foreground italic'>Unclassified</span>
+              </button>
+            )}
+            {categories
+              .filter((cat) => {
+                if (!categoryPickerSearch) return true;
+                const path = categoryPathMap.get(cat.id) ?? cat.name;
+                return path.toLowerCase().includes(categoryPickerSearch.toLowerCase());
+              })
+              .sort((a, b) => {
+                const pa = categoryPathMap.get(a.id) ?? a.name;
+                const pb = categoryPathMap.get(b.id) ?? b.name;
+                return pa.localeCompare(pb);
+              })
+              .map((cat) => {
+                const fullPath = categoryPathMap.get(cat.id) ?? cat.name;
+                const isSelected = classifyingQuestion?.category_id === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type='button'
+                    disabled={classifyingSaving}
+                    className={cn(
+                      'flex w-full items-center justify-between rounded-md px-2 py-2 text-sm text-left transition-colors hover:bg-muted',
+                      isSelected && 'bg-primary/10 font-medium text-primary',
+                    )}
+                    onClick={() => classifyingQuestion && void classifyQuestion(classifyingQuestion.id, cat.id)}
+                  >
+                    <span className='truncate'>{fullPath}</span>
+                    {isSelected && <Check className='ml-2 h-3.5 w-3.5 shrink-0 text-primary' />}
+                  </button>
+                );
+              })}
+          </div>
+          <div className='flex-none border-t px-4 py-3'>
+            <Button variant='ghost' size='sm' className='h-8 text-xs' onClick={() => setClassifyingQuestion(null)}>
+              Cancel
+            </Button>
+          </div>
         </SheetContent>
       </Sheet>
     </div>

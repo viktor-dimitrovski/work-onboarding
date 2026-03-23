@@ -648,7 +648,7 @@ export default function AssessmentDeliveriesPage() {
                                 }
                               </span>
                               <AttemptStatusBadge status={aStatus} />
-                            </div>
+                </div>
                           </td>
                           <td className='py-2 pr-2'>
                             <Button
@@ -740,7 +740,7 @@ export default function AssessmentDeliveriesPage() {
               {createError && <ErrorBanner message={createError} />}
               {createProgress && <p className='text-xs text-muted-foreground'>{createProgress}</p>}
             </div>
-          </div>
+            </div>
 
           <SheetFooter className='border-t pt-4'>
             <Button variant='outline' onClick={() => setCreateOpen(false)} disabled={creating}>Cancel</Button>
@@ -776,7 +776,7 @@ export default function AssessmentDeliveriesPage() {
                       : 'Targeted assignment'
                   }
                 </p>
-              </div>
+            </div>
 
               <div className='space-y-4 rounded-xl border bg-muted/20 p-4'>
                 <DateTimeInput
@@ -805,25 +805,25 @@ export default function AssessmentDeliveriesPage() {
 
               <div className='grid gap-4 sm:grid-cols-2'>
                 <div className='space-y-1.5'>
-                  <Label>Attempts allowed</Label>
-                  <Input
-                    type='number'
-                    min={1}
+                <Label>Attempts allowed</Label>
+                <Input
+                  type='number'
+                  min={1}
                     value={editAttempts}
                     onChange={(e) => setEditAttempts(Number(e.target.value || 1))}
-                  />
-                </div>
+                />
+              </div>
                 <div className='space-y-1.5'>
                   <Label>Duration per attempt (min)</Label>
-                  <Input
-                    type='number'
-                    min={1}
+                <Input
+                  type='number'
+                  min={1}
                     value={editDuration}
                     placeholder='Use test default'
                     onChange={(e) => setEditDuration(e.target.value ? Number(e.target.value) : '')}
-                  />
-                </div>
+                />
               </div>
+            </div>
 
               {editError && <ErrorBanner message={editError} />}
             </div>

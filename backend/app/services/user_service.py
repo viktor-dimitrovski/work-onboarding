@@ -33,18 +33,21 @@ def create_user(db: Session, *, payload: UserCreate, actor_user_id: UUID | None)
     db.add(user)
     db.flush()
 
-    roles = _normalize_roles(payload.roles or ['employee'])
-    role_rows = db.scalars(select(Role).where(Role.name.in_(roles))).all()
-    if len(role_rows) != len(roles):
-        found = {row.name for row in role_rows}
-        missing = sorted(set(roles) - found)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f'Invalid roles: {", ".join(missing)}',
-        )
+    # Global identity roles (user_roles) — only super_admin exists today. Tenant-scoped
+    # permissions live on TenantMembership.roles_json; do NOT default to legacy "employee".
+    roles = _normalize_roles(payload.roles or [])
+    if roles:
+        role_rows = db.scalars(select(Role).where(Role.name.in_(roles))).all()
+        if len(role_rows) != len(roles):
+            found = {row.name for row in role_rows}
+            missing = sorted(set(roles) - found)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f'Invalid roles: {", ".join(missing)}',
+            )
 
-    for role in role_rows:
-        db.add(UserRole(user_id=user.id, role_id=role.id))
+        for role in role_rows:
+            db.add(UserRole(user_id=user.id, role_id=role.id))
 
     db.flush()
     db.refresh(user)

@@ -27,25 +27,27 @@ def _tenant_url(slug: str, path: str = '/dashboard') -> str:
 
 
 def _check_roles_allowed(roles: list[str], ctx: TenantContext, current_user: User) -> None:
-    """Raise 400 if any role requires a module that is disabled for the tenant,
-    or if the caller tries to grant module-specific roles they don't hold.
-    Super_admin bypasses all checks."""
+    """Raise 400/403 if any role requires a module that is disabled for the tenant.
+    super_admin and tenant_admin bypass privilege-escalation checks; all others may
+    only grant roles they personally hold."""
     if 'super_admin' in get_user_role_names(current_user):
         return
+
+    # Module-requirement check applies to everyone (including tenant_admin).
     invalid = validate_roles_for_tenant(roles, enabled_modules(ctx))
     if invalid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f'Roles not allowed (module disabled): {", ".join(invalid)}',
         )
+
+    # tenant_admin may grant any role within their tenant without holding it.
+    if 'tenant_admin' in (ctx.roles or []):
+        return
+
+    # Other callers can only grant roles they already hold.
     caller_roles = set(ctx.roles or [])
-    # tenant_admin can grant tenant_admin to peers (identity-level, no module escalation).
-    # Every other role — including supervisor — requires the caller to hold it.
-    FREELY_GRANTABLE = {'tenant_admin'}
-    escalated = [
-        r for r in roles
-        if r not in FREELY_GRANTABLE and r not in caller_roles
-    ]
+    escalated = [r for r in roles if r not in caller_roles]
     if escalated:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
