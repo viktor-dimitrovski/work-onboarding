@@ -26,8 +26,6 @@ html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   overflow-x: hidden;
-  /* Reserve scrollbar gutter space always so dropdown/modal open doesn't shift page */
-  scrollbar-gutter: stable;
   /* Bump base font on mobile so all rem-based Tailwind sizes grow proportionally.
      text-sm (0.875rem) becomes ~15px, text-base (1rem) becomes ~17px. */
   font-size: 17px;
@@ -49,10 +47,29 @@ body {
   font-family: var(--font-ibm-plex-sans), ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
     sans-serif;
   line-height: 1.5;
-  overflow-x: hidden;
+  overflow: hidden; /* body never scrolls — <main> is the scroll container */
   background-image:
     radial-gradient(circle at 90% -20%, rgba(41, 121, 255, 0.16), transparent 35%),
     radial-gradient(circle at 0% 100%, rgba(0, 173, 181, 0.12), transparent 30%);
+}
+
+/*
+  Radix UI (react-remove-scroll) adds margin-right = scrollbar-width to body
+  when any modal / dropdown locks scroll.  Since the body never scrolls in our
+  app-shell layout (only <main> does), its scrollbar width is 0.
+  We neutralise the compensation so dropdowns never shift the page right.
+*/
+body[data-scroll-locked] {
+  margin-right: 0 !important;
+}
+
+/*
+  The real scroll container is <main class="app-main">.
+  Reserve its scrollbar gutter permanently so opening a Sheet/Dialog
+  never causes the content column to jump sideways.
+*/
+.app-main {
+  scrollbar-gutter: stable;
 }
 
 h1,

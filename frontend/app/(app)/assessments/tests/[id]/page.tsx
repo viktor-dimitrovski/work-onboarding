@@ -402,7 +402,7 @@ export default function AssessmentTestBuilderPage() {
 
   const categoryOptions: FilterOption[] = [
     { value: 'unclassified', label: 'Unclassified' },
-    ...categories.map((c) => ({ value: c.slug, label: c.name })),
+    ...categories.map((c) => ({ value: c.id, label: c.name })),
   ];
 
   // ---------------------------------------------------------------------------
@@ -680,11 +680,11 @@ export default function AssessmentTestBuilderPage() {
             <HierarchicalCategoryMenu
               tree={categoryTree}
               unclassifiedCount={bankStats?.unclassified_category ?? 0}
-              countsBySlag={Object.fromEntries(
-                categories.map((c) => [c.slug, bankStats?.by_category[c.slug] ?? 0]),
+              countsById={Object.fromEntries(
+                categories.map((c) => [c.id, bankStats?.by_category[c.id] ?? 0]),
               )}
               totalCount={bankStats?.total}
-              selectedSlugs={bankCategories}
+              selectedIds={bankCategories}
               onChange={setBankCategories}
               className='text-xs'
             />

@@ -327,6 +327,56 @@ def update_tenant_membership(
     return _to_user_out(user, tenant_roles=membership.roles(), tenant_status=membership.status)
 
 
+@router.post('/{user_id}/reset-password')
+def reset_user_password(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_permission('users:write')),
+) -> dict:
+    """Generate a password-reset link for any tenant member and e-mail it to them.
+
+    The link is also returned in the response so the admin can copy it manually
+    if e-mail delivery is not configured or fails.
+    """
+    membership = db.scalar(
+        select(TenantMembership).where(
+            TenantMembership.tenant_id == ctx.tenant.id,
+            TenantMembership.user_id == user_id,
+        )
+    )
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found in this tenant')
+
+    user = db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found')
+
+    raw_token = auth_service.create_password_set_token(db, user=user, purpose='password_reset', expires_hours=24)
+    db.commit()
+
+    reset_url = f'{_tenant_url(ctx.tenant.slug, "/set-password")}?token={raw_token}'
+
+    email_service.send_password_reset(
+        to_email=user.email,
+        to_name=user.full_name or '',
+        reset_url=reset_url,
+    )
+
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='admin_password_reset',
+        entity_type='user',
+        entity_id=user.id,
+        details={'target_email': user.email},
+    )
+    db.commit()
+
+    return {'reset_url': reset_url, 'email': user.email}
+
+
 @router.delete('/{user_id}/membership', status_code=status.HTTP_204_NO_CONTENT)
 def remove_user_from_tenant(
     user_id: str,

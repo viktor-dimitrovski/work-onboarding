@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -75,6 +75,9 @@ class TenantMembership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(50), nullable=False)
     roles_json: Mapped[list[str]] = mapped_column('roles', JSONB, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default='active')
+
+    total_stars: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    tests_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     tenant: Mapped['Tenant'] = relationship(back_populates='memberships')
 

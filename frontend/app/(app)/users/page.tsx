@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Pencil } from 'lucide-react';
+import { Copy, KeyRound, Pencil } from 'lucide-react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -99,6 +99,10 @@ export default function UsersPage() {
   const [activityRows, setActivityRows] = useState<AuditLogOut[]>([]);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editUserName, setEditUserName] = useState('');
+  const [resetTarget, setResetTarget] = useState<UserRow | null>(null);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetResult, setResetResult] = useState<{ url: string; email: string } | null>(null);
+  const [resetCopied, setResetCopied] = useState(false);
 
   const form = useForm<AddUserValues>({
     resolver: zodResolver(addUserSchema),
@@ -221,6 +225,32 @@ export default function UsersPage() {
     } finally {
       setRowSavingId(null);
     }
+  };
+
+  const resetPassword = async (user: UserRow) => {
+    if (!accessToken) return;
+    setResetLoading(true);
+    setError(null);
+    try {
+      const result = await api.post<{ reset_url: string; email: string }>(
+        `/users/${user.id}/reset-password`,
+        {},
+        accessToken,
+      );
+      setResetTarget(null);
+      setResetResult({ url: result.reset_url, email: result.email });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send password reset');
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const copyResetUrl = async () => {
+    if (!resetResult) return;
+    await navigator.clipboard.writeText(resetResult.url);
+    setResetCopied(true);
+    setTimeout(() => setResetCopied(false), 2000);
   };
 
   const removeFromTenant = async (user: UserRow) => {
@@ -473,6 +503,16 @@ export default function UsersPage() {
                                     size='sm'
                                     variant='outline'
                                     disabled={saving}
+                                    title='Send password reset link'
+                                    onClick={() => setResetTarget(user)}
+                                  >
+                                    <KeyRound className='h-3.5 w-3.5' />
+                                  </Button>
+                                  <Button
+                                    type='button'
+                                    size='sm'
+                                    variant='outline'
+                                    disabled={saving}
                                     onClick={() =>
                                       setMembershipStatus(
                                         user,
@@ -609,6 +649,72 @@ export default function UsersPage() {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* ── Reset password: confirmation dialog ── */}
+      {resetTarget && (
+        <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm'>
+          <div className='w-full max-w-sm rounded-xl border bg-background p-6 shadow-2xl'>
+            <div className='mb-4 flex items-center gap-3'>
+              <div className='flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100'>
+                <KeyRound className='h-5 w-5 text-amber-600' />
+              </div>
+              <div>
+                <p className='font-semibold'>Reset password?</p>
+                <p className='text-sm text-muted-foreground'>{resetTarget.email}</p>
+              </div>
+            </div>
+            <p className='mb-5 text-sm text-muted-foreground'>
+              A password reset link (valid 24 hours) will be sent to this user by email.
+              You will also receive the link here to copy manually if needed.
+            </p>
+            {error && <p className='mb-3 text-sm text-destructive'>{error}</p>}
+            <div className='flex justify-end gap-2'>
+              <Button variant='outline' size='sm' disabled={resetLoading} onClick={() => { setResetTarget(null); setError(null); }}>
+                Cancel
+              </Button>
+              <Button size='sm' disabled={resetLoading} onClick={() => void resetPassword(resetTarget)}>
+                {resetLoading ? 'Sending…' : 'Send reset link'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reset password: success dialog with copyable link ── */}
+      {resetResult && (
+        <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm'>
+          <div className='w-full max-w-md rounded-xl border bg-background p-6 shadow-2xl'>
+            <div className='mb-3 flex items-center gap-3'>
+              <div className='flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-100'>
+                <KeyRound className='h-5 w-5 text-green-600' />
+              </div>
+              <div>
+                <p className='font-semibold'>Reset link sent</p>
+                <p className='text-sm text-muted-foreground'>{resetResult.email}</p>
+              </div>
+            </div>
+            <p className='mb-3 text-sm text-muted-foreground'>
+              An email was sent to the user. You can also copy the link below to share it manually
+              (valid for 24 hours).
+            </p>
+            <div className='flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2'>
+              <span className='flex-1 truncate text-xs font-mono text-muted-foreground'>
+                {resetResult.url}
+              </span>
+              <Button variant='ghost' size='sm' className='h-7 shrink-0 px-2' onClick={() => void copyResetUrl()}>
+                {resetCopied ? (
+                  <span className='text-xs text-green-600'>Copied!</span>
+                ) : (
+                  <Copy className='h-3.5 w-3.5' />
+                )}
+              </Button>
+            </div>
+            <div className='mt-4 flex justify-end'>
+              <Button size='sm' onClick={() => setResetResult(null)}>Done</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

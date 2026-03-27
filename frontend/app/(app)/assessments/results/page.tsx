@@ -13,7 +13,8 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { AssessmentAttempt, AssessmentSectionScore } from '@/lib/types';
-import { BarChart3, CheckCircle2, ClipboardList, XCircle } from 'lucide-react';
+import { BarChart3, CheckCircle2, ClipboardList, Star, User } from 'lucide-react';
+import { getStarRating, starArray } from '@/lib/stars';
 import { useRouter } from 'next/navigation';
 
 interface ResultsResponse {
@@ -119,6 +120,9 @@ export default function AssessmentResultsPage() {
   const avg = results.summary.average_score_percent;
   const passCount = items.filter((a) => a.passed).length;
   const failCount = items.filter((a) => !a.passed && a.status === 'scored').length;
+  const totalStars = items.reduce((s, a) => s + (a.stars_earned ?? 0), 0);
+  const starsCompleted = items.filter(a => a.stars_earned != null && a.status === 'scored').length;
+  const avgStarRate = starsCompleted > 0 ? (totalStars / starsCompleted).toFixed(1) : '—';
 
   return (
     <div className='space-y-6'>
@@ -144,23 +148,23 @@ export default function AssessmentResultsPage() {
         </Card>
         <Card>
           <CardContent className='flex items-center gap-3 py-4'>
-            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50'>
-              <CheckCircle2 className='h-5 w-5 text-emerald-600' />
+            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50'>
+              <Star className='h-5 w-5 fill-current text-amber-500' />
             </div>
             <div>
-              <p className='text-2xl font-bold'>{passCount}</p>
-              <p className='text-xs text-muted-foreground'>Passed</p>
+              <p className='text-2xl font-bold'>{totalStars}</p>
+              <p className='text-xs text-muted-foreground'>Total Stars</p>
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className='flex items-center gap-3 py-4'>
-            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-red-50'>
-              <XCircle className='h-5 w-5 text-red-600' />
+            <div className='flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50'>
+              <CheckCircle2 className='h-5 w-5 text-emerald-600' />
             </div>
             <div>
-              <p className='text-2xl font-bold'>{failCount}</p>
-              <p className='text-xs text-muted-foreground'>Failed</p>
+              <p className='text-2xl font-bold'>{avgStarRate}</p>
+              <p className='text-xs text-muted-foreground'>Avg Star Rate</p>
             </div>
           </CardContent>
         </Card>
@@ -182,70 +186,117 @@ export default function AssessmentResultsPage() {
         <CardHeader>
           <CardTitle className='text-base'>Attempt history</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className='p-0'>
           <div className='overflow-x-auto'>
-            <table className='w-full text-sm'>
+            <table className='w-full min-w-[700px] text-sm'>
               <thead>
-                <tr className='border-b text-left text-xs text-muted-foreground'>
-                  <th className='pb-2 pr-4 font-medium'>Attempt</th>
-                  <th className='pb-2 pr-4 font-medium'>Status</th>
-                  <th className='pb-2 pr-4 font-medium'>Score</th>
-                  <th className='pb-2 pr-4 font-medium'>Result</th>
-                  <th className='pb-2 pr-4 font-medium'>Started</th>
-                  <th className='pb-2 pr-4 font-medium'>Duration</th>
-                  <th className='pb-2 font-medium'></th>
+                <tr className='border-b bg-muted/40 text-left text-xs text-muted-foreground'>
+                  <th className='px-4 py-2.5 font-medium'>#</th>
+                  {items.some(a => a.user_name || a.user_email) && (
+                    <th className='px-4 py-2.5 font-medium'>Employee</th>
+                  )}
+                  {items.some(a => a.test_title) && (
+                    <th className='px-4 py-2.5 font-medium'>Test</th>
+                  )}
+                  <th className='px-4 py-2.5 font-medium'>Status</th>
+                  <th className='px-4 py-2.5 font-medium'>Score</th>
+                  <th className='px-4 py-2.5 font-medium'>Result</th>
+                  <th className='px-4 py-2.5 font-medium'>Started</th>
+                  <th className='px-4 py-2.5 font-medium'>Duration</th>
+                  <th className='px-4 py-2.5' />
                 </tr>
               </thead>
-              <tbody>
-                {items.map((attempt) => (
-                  <tr key={attempt.id} className='border-b last:border-b-0 hover:bg-muted/30'>
-                    <td className='py-3 pr-4 font-medium'>#{attempt.attempt_number}</td>
-                    <td className='py-3 pr-4'>
-                      <Badge variant='outline' className='capitalize'>{attempt.status}</Badge>
-                    </td>
-                    <td className='py-3 pr-4 tabular-nums'>
-                      {attempt.score_percent != null ? (
-                        <span className='font-semibold'>{Math.round(attempt.score_percent)}%</span>
-                      ) : '—'}
-                      {attempt.score != null && attempt.max_score != null && (
-                        <span className='ml-1 text-xs text-muted-foreground'>
-                          ({attempt.score}/{attempt.max_score})
-                        </span>
+              <tbody className='divide-y'>
+                {items.map((attempt) => {
+                  const hasEnrichment = attempt.user_name || attempt.user_email || attempt.test_title;
+                  return (
+                    <tr key={attempt.id} className='hover:bg-muted/20 transition-colors'>
+                      <td className='px-4 py-3 font-mono text-xs text-muted-foreground'>#{attempt.attempt_number}</td>
+
+                      {/* Employee — only rendered when enrichment data is present */}
+                      {items.some(a => a.user_name || a.user_email) && (
+                        <td className='px-4 py-3'>
+                          {(attempt.user_name || attempt.user_email) ? (
+                            <div className='flex items-center gap-1.5'>
+                              <User className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+                              <div className='min-w-0'>
+                                <p className='truncate text-xs font-semibold text-foreground max-w-[140px]'>
+                                  {attempt.user_name ?? attempt.user_email}
+                                </p>
+                                {attempt.user_name && attempt.user_email && (
+                                  <p className='truncate text-[10px] text-muted-foreground max-w-[140px]'>
+                                    {attempt.user_email}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ) : <span className='text-xs text-muted-foreground'>—</span>}
+                        </td>
                       )}
-                    </td>
-                    <td className='py-3 pr-4'>
-                      {attempt.status === 'scored' || attempt.status === 'submitted' ? (
-                        attempt.passed ? (
-                          <Badge className='bg-emerald-100 text-emerald-800 hover:bg-emerald-100'>Passed</Badge>
-                        ) : (
-                          <Badge variant='outline' className='border-red-300 text-red-700'>Failed</Badge>
-                        )
-                      ) : '—'}
-                    </td>
-                    <td className='py-3 pr-4 text-xs text-muted-foreground'>{formatDate(attempt.started_at)}</td>
-                    <td className='py-3 pr-4 text-xs text-muted-foreground tabular-nums'>
-                      {durationText(attempt.started_at, attempt.submitted_at)}
-                    </td>
-                    <td className='py-3'>
-                      <div className='flex items-center gap-1'>
-                        <Button variant='ghost' size='sm' className='h-7 text-xs' onClick={() => setDetail(attempt)}>
-                          Details
-                        </Button>
-                        {(attempt.status === 'scored' || attempt.status === 'submitted') && (
-                          <Button
-                            variant='ghost'
-                            size='sm'
-                            className='h-7 text-xs text-primary hover:text-primary'
-                            onClick={() => router.push(`/assessments/review/${attempt.id}`)}
-                          >
-                            <ClipboardList className='mr-1 h-3.5 w-3.5' />
-                            Review
-                          </Button>
+
+                      {/* Test title */}
+                      {items.some(a => a.test_title) && (
+                        <td className='px-4 py-3'>
+                          {attempt.test_title ? (
+                            <p className='truncate text-xs font-medium text-foreground max-w-[160px]' title={attempt.test_title}>
+                              {attempt.test_title}
+                            </p>
+                          ) : <span className='text-xs text-muted-foreground'>—</span>}
+                        </td>
+                      )}
+
+                      <td className='px-4 py-3'>
+                        <Badge variant='outline' className='capitalize text-[11px]'>{attempt.status}</Badge>
+                      </td>
+                      <td className='px-4 py-3 tabular-nums'>
+                        {attempt.score_percent != null ? (
+                          <span className='font-semibold'>{Math.round(attempt.score_percent)}%</span>
+                        ) : '—'}
+                        {attempt.score != null && attempt.max_score != null && (
+                          <span className='ml-1 text-[11px] text-muted-foreground'>
+                            ({attempt.score}/{attempt.max_score})
+                          </span>
                         )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className='px-4 py-3'>
+                        {(attempt.status === 'scored' || attempt.status === 'submitted') && attempt.score_percent != null ? (
+                          (() => {
+                            const r = getStarRating(attempt.score_percent);
+                            return (
+                              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${r.bgColor} ${r.borderColor} ${r.color}`}>
+                                {starArray(r.stars).filter(Boolean).length}
+                                <Star className='h-3 w-3 fill-current' />
+                                {r.label}
+                              </span>
+                            );
+                          })()
+                        ) : '—'}
+                      </td>
+                      <td className='px-4 py-3 text-xs text-muted-foreground whitespace-nowrap'>{formatDate(attempt.started_at)}</td>
+                      <td className='px-4 py-3 text-xs text-muted-foreground tabular-nums whitespace-nowrap'>
+                        {durationText(attempt.started_at, attempt.submitted_at)}
+                      </td>
+                      <td className='px-4 py-3'>
+                        <div className='flex items-center gap-1'>
+                          <Button variant='ghost' size='sm' className='h-7 text-xs' onClick={() => setDetail(attempt)}>
+                            Details
+                          </Button>
+                          {(attempt.status === 'scored' || attempt.status === 'submitted') && (
+                            <Button
+                              variant='ghost'
+                              size='sm'
+                              className='h-7 text-xs text-primary hover:text-primary'
+                              onClick={() => router.push(`/assessments/review/${attempt.id}`)}
+                            >
+                              <ClipboardList className='mr-1 h-3.5 w-3.5' />
+                              Review
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -257,6 +308,20 @@ export default function AssessmentResultsPage() {
         <SheetContent side='right' className='flex h-full flex-col sm:max-w-lg'>
           <SheetHeader>
             <SheetTitle>Attempt #{detail?.attempt_number} details</SheetTitle>
+            {(detail?.test_title || detail?.user_name || detail?.user_email) && (
+              <div className='mt-1 space-y-0.5'>
+                {detail.test_title && (
+                  <p className='text-sm font-semibold text-foreground'>{detail.test_title}</p>
+                )}
+                {(detail.user_name || detail.user_email) && (
+                  <p className='flex items-center gap-1 text-xs text-muted-foreground'>
+                    <User className='h-3 w-3' />
+                    {detail.user_name ?? detail.user_email}
+                    {detail.user_name && detail.user_email && ` · ${detail.user_email}`}
+                  </p>
+                )}
+              </div>
+            )}
           </SheetHeader>
           {detail && (
             <div className='flex-1 overflow-auto mt-4 space-y-5'>
@@ -273,10 +338,14 @@ export default function AssessmentResultsPage() {
                   <p className='text-lg font-bold'>{detail.score ?? 0} / {detail.max_score ?? 0}</p>
                 </div>
                 <div className='rounded-md border p-3'>
-                  <p className='text-xs text-muted-foreground'>Result</p>
-                  <p className={`text-lg font-bold ${detail.passed ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {detail.passed ? 'Passed' : 'Failed'}
-                  </p>
+                  <p className='text-xs text-muted-foreground'>Stars</p>
+                  {detail.score_percent != null ? (
+                    <div className='flex items-center gap-1 mt-1'>
+                      {starArray(getStarRating(detail.score_percent).stars).map((filled, i) => (
+                        <Star key={i} className={`h-4 w-4 ${filled ? `fill-current ${getStarRating(detail.score_percent!).color}` : 'fill-current text-slate-200'}`} />
+                      ))}
+                    </div>
+                  ) : <p className='text-lg font-bold'>—</p>}
                 </div>
                 <div className='rounded-md border p-3'>
                   <p className='text-xs text-muted-foreground'>Duration</p>

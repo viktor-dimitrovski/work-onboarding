@@ -3,6 +3,7 @@
 import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ReleaseNotesPicker } from '@/components/work-orders/release-notes-picker';
 import { cn } from '@/lib/utils';
 import { Plus, X } from 'lucide-react';
 
@@ -15,6 +16,10 @@ export type ServiceTouchedItem = {
   requires_config_change?: boolean;
   feature_flags?: string[];
   release_notes_ref?: string | null;
+  // Internal DB fields — populated after save, not persisted to YAML
+  service_db_id?: string | null;
+  release_note_id?: string | null;
+  release_note_label?: string | null;
 };
 
 type ServicesTouchedGridProps = {
@@ -22,6 +27,8 @@ type ServicesTouchedGridProps = {
   onChange: (items: ServiceTouchedItem[]) => void;
   firstInputId?: string;
   hideHeader?: boolean;
+  woId?: string;
+  onReleaseNoteLinked?: (serviceDbId: string, releaseNoteId: string | null, releaseNoteLabel: string | null) => void;
 };
 
 const emptyRow = (): ServiceTouchedItem => ({
@@ -80,7 +87,7 @@ function FeatureFlagsInput({
   );
 }
 
-export function ServicesTouchedGrid({ items, onChange, firstInputId, hideHeader }: ServicesTouchedGridProps) {
+export function ServicesTouchedGrid({ items, onChange, firstInputId, hideHeader, woId, onReleaseNoteLinked }: ServicesTouchedGridProps) {
   const rows = useMemo(() => (items.length === 0 ? [emptyRow()] : items), [items]);
 
   const updateRow = (index: number, patch: Partial<ServiceTouchedItem>) => {
@@ -133,7 +140,7 @@ export function ServicesTouchedGrid({ items, onChange, firstInputId, hideHeader 
         </div>
       ) : null}
       <div className='rounded-md border'>
-        <div className='grid grid-cols-[1.2fr_1fr_130px_repeat(3,90px)_1.2fr_1fr_60px] gap-2 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground'>
+        <div className='grid grid-cols-[1.2fr_1fr_130px_repeat(3,90px)_1.2fr_1.4fr_60px] gap-2 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground'>
           <div>Service</div>
           <div>Repo</div>
           <div>Change</div>
@@ -148,7 +155,7 @@ export function ServicesTouchedGrid({ items, onChange, firstInputId, hideHeader 
           <div
             key={`service-${index}`}
             className={cn(
-              'grid grid-cols-[1.2fr_1fr_130px_repeat(3,90px)_1.2fr_1fr_60px] gap-2 px-3 py-2',
+              'grid grid-cols-[1.2fr_1fr_130px_repeat(3,90px)_1.2fr_1.4fr_60px] gap-2 px-3 py-2',
               index % 2 === 1 && 'bg-muted/20',
             )}
           >
@@ -210,12 +217,26 @@ export function ServicesTouchedGrid({ items, onChange, firstInputId, hideHeader 
               onChange={(flags) => updateRow(index, { feature_flags: flags })}
               placeholder='flag-a, flag-b'
             />
-            <Input
-              value={row.release_notes_ref ?? ''}
-              onChange={(event) => updateRow(index, { release_notes_ref: event.target.value })}
-              onKeyDown={(event) => handleGridKey(event, index)}
-              placeholder='https://...'
-            />
+            {woId && row.service_db_id ? (
+              <ReleaseNotesPicker
+                woId={woId}
+                serviceDbId={row.service_db_id}
+                repo={row.repo ?? undefined}
+                linkedId={row.release_note_id ?? null}
+                linkedLabel={row.release_note_label ?? null}
+                onLinked={(id, label) => {
+                  updateRow(index, { release_note_id: id, release_note_label: label });
+                  onReleaseNoteLinked?.(row.service_db_id!, id, label);
+                }}
+              />
+            ) : (
+              <Input
+                value={row.release_notes_ref ?? ''}
+                onChange={(event) => updateRow(index, { release_notes_ref: event.target.value })}
+                onKeyDown={(event) => handleGridKey(event, index)}
+                placeholder='https://... (save WO first to link internal RN)'
+              />
+            )}
             <div className='flex items-center justify-end gap-2 text-xs'>
               <Button type='button' variant='ghost' size='icon' className='h-8 w-8' onClick={() => addRowAfter(index)} aria-label='Add row'>
                 <Plus className='h-4 w-4' />

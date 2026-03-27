@@ -20,7 +20,7 @@ from app.models.assessment import (
 )
 from app.services.openai_responses_service import call_openai_responses_json
 from app.services import usage_service
-from app.services.assessment_service import build_question_query
+from app.services.assessment_service import build_question_query, find_or_create_category_path
 
 
 CLASSIFICATION_SCHEMA: dict[str, Any] = {
@@ -59,53 +59,77 @@ def _truncate(text: str, limit: int = 400) -> str:
     return cleaned[: limit - 3] + "..."
 
 
-def _build_prompt(questions: list[AssessmentQuestion], categories: list[str]) -> str:
-    category_hint = ", ".join(categories) if categories else "none"
+def _build_category_paths(categories: list[AssessmentCategory]) -> list[str]:
+    """Build full slash-separated paths for every category in the tenant.
+
+    E.g. ["School", "School/History", "School/History/8th Grade", ...]
+
+    This gives the AI the complete picture of the existing hierarchy so it can
+    reuse the most specific matching path rather than inventing new names.
+    """
+    id_to_cat = {str(c.id): c for c in categories}
+
+    def _path(cat: AssessmentCategory) -> str:
+        parts: list[str] = []
+        current: AssessmentCategory | None = cat
+        visited: set[str] = set()
+        while current is not None:
+            cid = str(current.id)
+            if cid in visited:
+                break
+            visited.add(cid)
+            parts.append(current.name)
+            parent_id = str(current.parent_id) if current.parent_id else None
+            current = id_to_cat.get(parent_id) if parent_id else None  # type: ignore[arg-type]
+        return "/".join(reversed(parts))
+
+    return sorted({_path(c) for c in categories})
+
+
+def _build_prompt(questions: list[AssessmentQuestion], category_paths: list[str]) -> str:
+    """Build the AI classification prompt.
+
+    Rules given to the AI:
+    - ALWAYS prefer an existing path (exact match first, then the closest parent).
+    - If no existing path fits, create a NEW path that nests under an existing
+      root or second-level category rather than inventing a brand-new root.
+    - Return paths in 'Level1/Level2/Level3' format (1–3 levels, no trailing slash).
+    - Keep level names short, consistent with existing names, Title Case.
+    """
+    if category_paths:
+        existing_block = "\n".join(f"  - {p}" for p in category_paths)
+        category_section = (
+            "Existing category paths (prefer these — use the most specific match):\n"
+            f"{existing_block}\n\n"
+            "Rules:\n"
+            "1. If the question fits an existing path exactly → use it as-is.\n"
+            "2. If it fits an existing top/mid level but needs a deeper leaf → extend it "
+            "(e.g. 'School/History' → 'School/History/8th Grade').\n"
+            "3. Only create a brand-new root if the subject is completely unrelated to any "
+            "existing root category.\n"
+            "4. Return the path as 'Root' or 'Root/Child' or 'Root/Child/Leaf' — max 3 levels."
+        )
+    else:
+        category_section = (
+            "No categories exist yet. Create meaningful paths up to 3 levels deep, "
+            "e.g. 'School/History/8th Grade'. Keep names short and Title Case."
+        )
+
     lines = [
-        "Classify each question into a single category and difficulty (easy|medium|hard).",
-        "Use an existing category if it fits; otherwise propose a short new category name.",
-        f"Existing categories: {category_hint}.",
+        "Classify each question with a category path and difficulty (easy|medium|hard).",
         "",
-        "Questions:",
+        category_section,
+        "",
+        "Questions (format: id | text | tags):",
     ]
     for q in questions:
         tags = ", ".join(q.tags or [])
         prompt = _truncate(q.prompt or "")
+        line = f"{q.id} | {prompt}"
         if tags:
-            lines.append(f"{q.id} | {prompt} | tags: {tags}")
-        else:
-            lines.append(f"{q.id} | {prompt}")
+            line += f" | tags: {tags}"
+        lines.append(line)
     return "\n".join(lines)
-
-
-def _get_or_create_category(
-    db: Session, name: str, actor_user_id: UUID, tenant_id: UUID
-) -> tuple[AssessmentCategory, bool]:
-    clean_name = (name or "").strip()[:100] or "General"
-    slug = _slugify(clean_name)[:120]
-    # Explicitly filter by tenant_id so we never pick up a category from another
-    # tenant even if RLS context is momentarily wrong.
-    existing = db.scalar(
-        select(AssessmentCategory).where(
-            AssessmentCategory.slug == slug,
-            AssessmentCategory.tenant_id == tenant_id,
-        )
-    )
-    if existing:
-        return existing, False
-    category = AssessmentCategory(
-        # Set tenant_id explicitly – do not rely on server_default so the FK
-        # constraint (tenant_id, category_id) on assessment_questions is always
-        # satisfied regardless of the current RLS context at flush time.
-        tenant_id=tenant_id,
-        name=clean_name,
-        slug=slug,
-        created_by=actor_user_id,
-        updated_by=actor_user_id,
-    )
-    db.add(category)
-    db.flush()
-    return category, True
 
 
 def run_classification_job(
@@ -189,7 +213,7 @@ def run_classification_job(
         _set_ctx()
 
         categories = db.scalars(select(AssessmentCategory).order_by(AssessmentCategory.name.asc())).all()
-        category_names = [c.name for c in categories]
+        category_paths = _build_category_paths(list(categories))
 
         report: dict[str, Any] = {
             "updated": 0,
@@ -235,7 +259,7 @@ def run_classification_job(
                 break
 
             last_id = batch[-1].id
-            prompt = _build_prompt(batch, category_names)
+            prompt = _build_prompt(batch, category_paths)
             try:
                 payload = call_openai_responses_json(
                     instructions="Return JSON only. Keep category short and consistent.",
@@ -288,15 +312,32 @@ def run_classification_job(
                     report["skipped"] += 1
                     continue
 
-                clean_name = (category_name or "").strip()[:100] or "General"
-                slug = _slugify(clean_name)[:120]
+                clean_name = (category_name or "").strip()[:300] or "General"
+                slug = _slugify(clean_name.split("/")[-1])[:120]  # slug of the leaf segment
                 category = None
                 created = False
                 if not dry_run:
-                    category, created = _get_or_create_category(db, clean_name, actor_user_id, tenant_id)
+                    # find_or_create_category_path handles 'A', 'A/B', 'A/B/C' — reuses
+                    # existing nodes at every level and only creates what is missing.
+                    prev_count = db.scalar(
+                        select(func.count()).select_from(
+                            select(AssessmentCategory.id).subquery()
+                        )
+                    ) or 0
+                    cat_id = find_or_create_category_path(db, clean_name)
+                    db.flush()
+                    category = db.scalar(select(AssessmentCategory).where(AssessmentCategory.id == cat_id))
+                    new_count = db.scalar(
+                        select(func.count()).select_from(
+                            select(AssessmentCategory.id).subquery()
+                        )
+                    ) or 0
+                    created = new_count > prev_count
                     if created:
                         report["created_categories"] += 1
-                        category_names.append(category.name)
+                        # Refresh paths so subsequent batches see the new hierarchy.
+                        all_cats = db.scalars(select(AssessmentCategory).order_by(AssessmentCategory.name.asc())).all()
+                        category_paths = _build_category_paths(list(all_cats))
 
                 if not dry_run:
                     if needs_category:
@@ -312,14 +353,15 @@ def run_classification_job(
                         AssessmentClassificationJobItem.question_id == question.id,
                     )
                 )
+                # For the job log, record the full path as the name and the leaf slug.
                 if not item:
                     item = AssessmentClassificationJobItem(
                         job_id=job_id,
                         question_id=question.id,
                         old_category_id=old_category_id,
                         old_difficulty=old_difficulty,
-                        new_category_name=clean_name,
-                        new_category_slug=slug,
+                        new_category_name=clean_name,   # full path for readability
+                        new_category_slug=slug,          # leaf slug
                         new_category_id=category.id if category else None,
                         new_difficulty=difficulty,
                         applied=not dry_run,

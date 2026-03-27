@@ -12,7 +12,8 @@
  * Nodes that have children → GroupItem (chevron, drill-in)
  * Nodes that have no children → LeafItem (checkbox, toggle)
  *
- * Multi-select is supported via selectedSlugs.
+ * Multi-select is supported via selectedIds (category UUIDs).
+ * The special string 'unclassified' is used for questions with no category.
  */
 
 import { Check, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -26,12 +27,12 @@ export interface HierarchicalCategoryMenuProps {
   tree: AssessmentCategoryTreeNode[];
   /** Count for "Unclassified" bucket */
   unclassifiedCount?: number;
-  /** Count per category slug → shown next to label */
-  countsBySlag?: Record<string, number>;
+  /** Count per category ID → shown next to label */
+  countsById?: Record<string, number>;
   /** Total question count across all categories */
   totalCount?: number;
-  /** Currently selected category slugs */
-  selectedSlugs: string[];
+  /** Currently selected category IDs (UUID strings, plus 'unclassified') */
+  selectedIds: string[];
   /** Called whenever the selection changes */
   onChange: (next: string[]) => void;
   /** Extra class names on the root container */
@@ -40,15 +41,15 @@ export interface HierarchicalCategoryMenuProps {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-/** Collect all leaf slugs beneath (and including) a node. */
-function collectLeafSlugs(node: AssessmentCategoryTreeNode): string[] {
-  if (node.children.length === 0) return [node.slug];
-  return node.children.flatMap(collectLeafSlugs);
+/** Collect all leaf IDs beneath (and including) a node. */
+function collectLeafIds(node: AssessmentCategoryTreeNode): string[] {
+  if (node.children.length === 0) return [node.id];
+  return node.children.flatMap(collectLeafIds);
 }
 
 /** Sum question counts for all leaves under a node. */
 function countForNode(node: AssessmentCategoryTreeNode, counts: Record<string, number>): number {
-  return collectLeafSlugs(node).reduce((a, s) => a + (counts[s] ?? 0), 0);
+  return collectLeafIds(node).reduce((a, id) => a + (counts[id] ?? 0), 0);
 }
 
 // ─── component ──────────────────────────────────────────────────────────────
@@ -56,9 +57,9 @@ function countForNode(node: AssessmentCategoryTreeNode, counts: Record<string, n
 export function HierarchicalCategoryMenu({
   tree,
   unclassifiedCount = 0,
-  countsBySlag = {},
+  countsById = {},
   totalCount,
-  selectedSlugs,
+  selectedIds,
   onChange,
   className,
 }: HierarchicalCategoryMenuProps) {
@@ -67,11 +68,11 @@ export function HierarchicalCategoryMenu({
   const [sliding, setSliding] = useState<'in' | 'out' | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const toggle = (slug: string) => {
+  const toggle = (id: string) => {
     onChange(
-      selectedSlugs.includes(slug)
-        ? selectedSlugs.filter((s) => s !== slug)
-        : [...selectedSlugs, slug],
+      selectedIds.includes(id)
+        ? selectedIds.filter((s) => s !== id)
+        : [...selectedIds, id],
     );
   };
 
@@ -110,25 +111,25 @@ export function HierarchicalCategoryMenu({
         <RootItem
           label='All categories'
           count={totalCount}
-          active={selectedSlugs.length === 0}
+          active={selectedIds.length === 0}
           onClick={() => onChange([])}
         />
         <RootItem
           label='Unclassified'
           count={unclassifiedCount}
-          active={selectedSlugs.includes('unclassified')}
+          active={selectedIds.includes('unclassified')}
           onClick={() => toggle('unclassified')}
         />
 
         {parents.length > 0 && <div className='my-2 border-t border-border/60' />}
 
         {parents.map((node) => {
-          const leafSlugs = collectLeafSlugs(node);
-          const selCount = leafSlugs.filter((s) => selectedSlugs.includes(s)).length;
-          const total = countForNode(node, countsBySlag);
+          const leafIds = collectLeafIds(node);
+          const selCount = leafIds.filter((id) => selectedIds.includes(id)).length;
+          const total = countForNode(node, countsById);
           return (
             <GroupItem
-              key={node.slug}
+              key={node.id}
               label={node.name}
               count={total || undefined}
               selectedCount={selCount}
@@ -140,11 +141,11 @@ export function HierarchicalCategoryMenu({
         {orphans.length > 0 && <div className='my-2 border-t border-border/60' />}
         {orphans.map((cat) => (
           <LeafItem
-            key={cat.slug}
+            key={cat.id}
             label={cat.name}
-            count={countsBySlag[cat.slug]}
-            selected={selectedSlugs.includes(cat.slug)}
-            onClick={() => toggle(cat.slug)}
+            count={countsById[cat.id]}
+            selected={selectedIds.includes(cat.id)}
+            onClick={() => toggle(cat.id)}
           />
         ))}
       </div>
@@ -155,16 +156,16 @@ export function HierarchicalCategoryMenu({
   const renderDeep = () => {
     if (!currentNode) return null;
 
-    const leafSlugs = currentChildren.flatMap(collectLeafSlugs);
-    const allSelected = leafSlugs.length > 0 && leafSlugs.every((s) => selectedSlugs.includes(s));
-    const noneSelected = leafSlugs.every((s) => !selectedSlugs.includes(s));
+    const leafIds = currentChildren.flatMap(collectLeafIds);
+    const allSelected = leafIds.length > 0 && leafIds.every((id) => selectedIds.includes(id));
+    const noneSelected = leafIds.every((id) => !selectedIds.includes(id));
 
     const toggleAll = () => {
       if (allSelected) {
-        onChange(selectedSlugs.filter((s) => !leafSlugs.includes(s)));
+        onChange(selectedIds.filter((id) => !leafIds.includes(id)));
       } else {
-        const next = new Set(selectedSlugs);
-        leafSlugs.forEach((s) => next.add(s));
+        const next = new Set(selectedIds);
+        leafIds.forEach((id) => next.add(id));
         onChange([...next]);
       }
     };
@@ -214,19 +215,19 @@ export function HierarchicalCategoryMenu({
         {currentChildren.map((child) =>
           child.children.length > 0 ? (
             <GroupItem
-              key={child.slug}
+              key={child.id}
               label={child.name}
-              count={countForNode(child, countsBySlag) || undefined}
-              selectedCount={collectLeafSlugs(child).filter((s) => selectedSlugs.includes(s)).length}
+              count={countForNode(child, countsById) || undefined}
+              selectedCount={collectLeafIds(child).filter((id) => selectedIds.includes(id)).length}
               onClick={() => drillInto(child)}
             />
           ) : (
             <LeafItem
-              key={child.slug}
+              key={child.id}
               label={child.name}
-              count={countsBySlag[child.slug]}
-              selected={selectedSlugs.includes(child.slug)}
-              onClick={() => toggle(child.slug)}
+              count={countsById[child.id]}
+              selected={selectedIds.includes(child.id)}
+              onClick={() => toggle(child.id)}
             />
           ),
         )}

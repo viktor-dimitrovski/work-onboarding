@@ -377,7 +377,12 @@ export interface AssessmentAttempt {
   max_score?: number | null;
   score_percent?: number | null;
   passed: boolean;
+  stars_earned?: number | null;
   section_scores?: Record<string, AssessmentSectionScore> | null;
+  // Enriched by the manager results endpoint
+  user_name?: string | null;
+  user_email?: string | null;
+  test_title?: string | null;
 }
 
 export interface AssessmentAttemptQuestionOption {
@@ -412,6 +417,7 @@ export interface MyResultAttempt {
   max_score: number | null;
   score_percent: number | null;
   passed: boolean;
+  stars_earned: number | null;
   section_scores?: Record<string, AssessmentSectionScore> | null;
 }
 
@@ -421,6 +427,57 @@ export interface MyResultsResponse {
   average_score_percent: number | null;
   pass_count: number;
   fail_count: number;
+  total_stars: number;
+  star_rate: number;
+}
+
+// ── Star system ───────────────────────────────────────────────────────────────
+
+export interface Achievement {
+  code: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: string;
+  sort_order: number;
+  unlocked: boolean;
+  unlocked_at: string | null;
+}
+
+export interface RecentAttemptStar {
+  attempt_id: string;
+  stars_earned: number;
+  submitted_at: string | null;
+}
+
+export interface StarProfile {
+  total_stars: number;
+  tests_completed: number;
+  star_rate: number;
+  player_level: number;
+  player_title: string;
+  next_level_stars: number | null;
+  achievements: Achievement[];
+  unlocked_count: number;
+  total_achievement_count: number;
+  recent_attempt_stars: RecentAttemptStar[];
+}
+
+export interface TeamMemberPerformance {
+  user_id: string;
+  full_name: string;
+  email: string;
+  total_stars: number;
+  tests_completed: number;
+  star_rate: number;
+  period_stars: number;
+  period_tests: number;
+  period_star_rate: number;
+  tenure_months: number;
+}
+
+export interface TeamPerformanceResponse {
+  items: TeamMemberPerformance[];
 }
 
 // ── Review (read-only, reveals correct answers) ───────────────────────────────

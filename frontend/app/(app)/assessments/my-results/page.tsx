@@ -10,15 +10,12 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { MyResultAttempt, MyResultsResponse, AssessmentSectionScore } from '@/lib/types';
 import {
-  BarChart3,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Target,
-  Trophy,
-  XCircle,
+  Star,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getStarRating, starArray, formatStarRate } from '@/lib/stars';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -59,28 +56,6 @@ function duration(start?: string | null, end?: string | null) {
 
 // ── Summary stats strip ───────────────────────────────────────────────────────
 
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  color,
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: string | number;
-  color: string;
-}) {
-  return (
-    <div className='flex flex-1 flex-col items-center gap-1 rounded-2xl border bg-white px-3 py-3 text-center shadow-sm'>
-      <div className={cn('flex h-9 w-9 items-center justify-center rounded-full', color)}>
-        <Icon className='h-5 w-5' />
-      </div>
-      <p className='text-[22px] font-bold leading-none'>{value}</p>
-      <p className='text-[11px] font-medium text-muted-foreground'>{label}</p>
-    </div>
-  );
-}
-
 // ── Attempt card ──────────────────────────────────────────────────────────────
 
 function AttemptCard({ item }: { item: MyResultAttempt }) {
@@ -89,9 +64,9 @@ function AttemptCard({ item }: { item: MyResultAttempt }) {
 
   const pct = item.score_percent != null ? Math.round(item.score_percent) : null;
   const dur = duration(item.started_at, item.submitted_at);
-  const hasSections =
-    item.section_scores && Object.keys(item.section_scores).length > 0;
+  const hasSections = item.section_scores && Object.keys(item.section_scores).length > 0;
   const isScored = item.status === 'scored';
+  const starRating = getStarRating(item.score_percent);
 
   return (
     <div
@@ -118,17 +93,15 @@ function AttemptCard({ item }: { item: MyResultAttempt }) {
             </p>
           </div>
 
-          {/* Score pill */}
+          {/* Star rating pill */}
           {pct != null ? (
-            <div
-              className={cn(
-                'flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-full border-2 text-center',
-                item.passed ? 'border-emerald-300 bg-emerald-50' : 'border-red-300 bg-red-50',
-              )}
-            >
-              <p className={cn('text-[14px] font-extrabold leading-none', scoreColor(pct))}>
-                {pct}%
-              </p>
+            <div className={cn('shrink-0 flex flex-col items-center justify-center rounded-xl border px-2.5 py-1.5 text-center', starRating.bgColor, starRating.borderColor)}>
+              <div className='flex gap-0.5'>
+                {starArray(starRating.stars).map((filled, i) => (
+                  <Star key={i} className={cn('h-3 w-3', filled ? cn('fill-current', starRating.color) : 'fill-current text-slate-200')} />
+                ))}
+              </div>
+              <p className={cn('mt-0.5 text-[11px] font-extrabold leading-none', starRating.color)}>{pct}%</p>
             </div>
           ) : (
             <span className='rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-500'>
@@ -141,20 +114,9 @@ function AttemptCard({ item }: { item: MyResultAttempt }) {
         <div className='mt-3 flex items-center gap-2'>
           {isScored && (
             <>
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-bold',
-                  item.passed
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : 'bg-red-100 text-red-700',
-                )}
-              >
-                {item.passed ? (
-                  <CheckCircle2 className='h-3.5 w-3.5' />
-                ) : (
-                  <XCircle className='h-3.5 w-3.5' />
-                )}
-                {item.passed ? 'Passed' : 'Failed'}
+              <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-bold', starRating.bgColor, starRating.color)}>
+                <Star className='h-3.5 w-3.5 fill-current' />
+                {item.stars_earned != null ? `${item.stars_earned} star${item.stars_earned !== 1 ? 's' : ''}` : starRating.label}
               </span>
 
               {item.score != null && item.max_score != null && (
@@ -281,34 +243,33 @@ export default function MyResultsPage() {
         </p>
       </div>
 
-      {/* ── Summary stats ── */}
-      <div className='flex gap-3'>
-        <StatCard
-          icon={BarChart3}
-          label='Attempts'
-          value={data.total_attempts}
-          color='bg-blue-100 text-blue-600'
-        />
-        <StatCard
-          icon={Trophy}
-          label='Passed'
-          value={data.pass_count}
-          color='bg-emerald-100 text-emerald-600'
-        />
-        <StatCard
-          icon={Target}
-          label='Avg score'
-          value={avg != null ? `${avg}%` : '—'}
-          color={
-            avg == null
-              ? 'bg-slate-100 text-slate-500'
-              : avg >= 80
-                ? 'bg-emerald-100 text-emerald-600'
-                : avg >= 50
-                  ? 'bg-amber-100 text-amber-600'
-                  : 'bg-red-100 text-red-600'
-          }
-        />
+      {/* ── Star hero widget ── */}
+      <div className='rounded-2xl border bg-gradient-to-br from-amber-50 to-white p-4 shadow-sm'>
+        <div className='flex items-center gap-4'>
+          <div className='flex flex-col items-center justify-center rounded-xl bg-amber-100 px-4 py-3 text-amber-700'>
+            <Star className='h-7 w-7 fill-current mb-1' />
+            <p className='text-2xl font-extrabold leading-none'>{data.total_stars}</p>
+            <p className='mt-0.5 text-[10px] font-semibold uppercase tracking-wide'>Total Stars</p>
+          </div>
+          <div className='flex-1 grid grid-cols-2 gap-2'>
+            <div className='rounded-lg bg-white border px-3 py-2 text-center'>
+              <p className='text-lg font-bold text-amber-600'>{formatStarRate(data.star_rate)}</p>
+              <p className='text-[10px] text-muted-foreground font-medium'>★ Star Rate</p>
+            </div>
+            <div className='rounded-lg bg-white border px-3 py-2 text-center'>
+              <p className='text-lg font-bold'>{data.total_attempts}</p>
+              <p className='text-[10px] text-muted-foreground font-medium'>Tests done</p>
+            </div>
+            <div className='rounded-lg bg-white border px-3 py-2 text-center'>
+              <p className='text-lg font-bold text-emerald-600'>{data.pass_count}</p>
+              <p className='text-[10px] text-muted-foreground font-medium'>Passed</p>
+            </div>
+            <div className='rounded-lg bg-white border px-3 py-2 text-center'>
+              <p className='text-lg font-bold'>{avg != null ? `${avg}%` : '—'}</p>
+              <p className='text-[10px] text-muted-foreground font-medium'>Avg score</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ── Attempt list ── */}

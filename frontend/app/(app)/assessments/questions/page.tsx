@@ -316,9 +316,9 @@ export default function AssessmentQuestionsPage() {
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
   const [previewQuestion, setPreviewQuestion] = useState<AssessmentQuestion | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<{ ids: string[]; label: string } | null>(null);
-  const [archiving, setArchiving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ ids: string[]; label: string } | null>(null);
-  const [deleting, setDeleting] = useState(false);
+  // Single unified loading state for all bulk operations
+  const [bulkOpMessage, setBulkOpMessage] = useState<string | null>(null);
   const [classifyingQuestion, setClassifyingQuestion] = useState<AssessmentQuestion | null>(null);
   const [categoryPickerSearch, setCategoryPickerSearch] = useState('');
   const [classifyingSaving, setClassifyingSaving] = useState(false);
@@ -590,7 +590,8 @@ export default function AssessmentQuestionsPage() {
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
     const from = stats?.by_category ?? {};
-    Object.entries(from).forEach(([slug, count]) => counts.set(slug, count));
+    // Keys are category UUIDs (or 'unclassified') since backend now returns by ID.
+    Object.entries(from).forEach(([id, count]) => counts.set(id, count));
     return counts;
   }, [stats]);
 
@@ -621,9 +622,9 @@ export default function AssessmentQuestionsPage() {
   ];
 
   const categoryOptions: FilterOption[] = categories.map((category) => ({
-    value: category.slug,
+    value: category.id,
     label: category.name,
-    count: categoryCounts.get(category.slug) ?? 0,
+    count: categoryCounts.get(category.id) ?? 0,
   }));
 
   const categoryFilterOptions: FilterOption[] = [
@@ -719,7 +720,8 @@ export default function AssessmentQuestionsPage() {
 
   const archiveQuestions = async (ids: string[]) => {
     if (!accessToken || (ids.length === 0 && !selectAllMode)) return;
-    setArchiving(true);
+    const label = selectAllMode ? `${total} matching question${total === 1 ? '' : 's'}` : `${ids.length} question${ids.length === 1 ? '' : 's'}`;
+    setBulkOpMessage(`Archiving ${label}…`);
     try {
       await api.post(
         '/assessments/questions/bulk-update',
@@ -730,13 +732,14 @@ export default function AssessmentQuestionsPage() {
       setSelectedQuestionIds((prev) => prev.filter((id) => !ids.includes(id)));
       await load();
     } finally {
-      setArchiving(false);
+      setBulkOpMessage(null);
     }
   };
 
   const deleteQuestions = async (ids: string[]) => {
     if (!accessToken || (ids.length === 0 && !selectAllMode)) return;
-    setDeleting(true);
+    const label = selectAllMode ? `${total} matching question${total === 1 ? '' : 's'}` : `${ids.length} question${ids.length === 1 ? '' : 's'}`;
+    setBulkOpMessage(`Permanently deleting ${label}…`);
     try {
       await api.post(
         '/assessments/questions/bulk-update',
@@ -747,7 +750,7 @@ export default function AssessmentQuestionsPage() {
       setSelectedQuestionIds((prev) => prev.filter((id) => !ids.includes(id)));
       await load();
     } finally {
-      setDeleting(false);
+      setBulkOpMessage(null);
     }
   };
 
@@ -764,12 +767,12 @@ export default function AssessmentQuestionsPage() {
     }
   };
 
-  const [publishing, setPublishing] = useState(false);
   const [publishedCount, setPublishedCount] = useState<number | null>(null);
 
   const publishQuestions = async (ids: string[]) => {
     if (!accessToken || (ids.length === 0 && !selectAllMode)) return;
-    setPublishing(true);
+    const label = selectAllMode ? `${total} matching question${total === 1 ? '' : 's'}` : `${ids.length} question${ids.length === 1 ? '' : 's'}`;
+    setBulkOpMessage(`Publishing ${label}…`);
     setPublishedCount(null);
     try {
       await api.post(
@@ -782,7 +785,7 @@ export default function AssessmentQuestionsPage() {
       setPublishedCount(ids.length);
       await load();
     } finally {
-      setPublishing(false);
+      setBulkOpMessage(null);
       setTimeout(() => setPublishedCount(null), 3000);
     }
   };
@@ -827,6 +830,19 @@ export default function AssessmentQuestionsPage() {
 
   return (
     <div className='space-y-3'>
+      {/* Bulk operation progress overlay */}
+      {bulkOpMessage && (
+        <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm'>
+          <div className='flex items-center gap-4 rounded-xl border bg-background px-8 py-5 shadow-2xl'>
+            <svg className='h-6 w-6 shrink-0 animate-spin text-primary' viewBox='0 0 24 24' fill='none'>
+              <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4' />
+              <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8v8H4z' />
+            </svg>
+            <p className='text-sm font-medium'>{bulkOpMessage}</p>
+          </div>
+        </div>
+      )}
+
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <h1 className='text-xl font-semibold tracking-tight'>Question Bank</h1>
         <div className='flex flex-wrap items-center gap-1.5'>
@@ -946,11 +962,11 @@ export default function AssessmentQuestionsPage() {
           <HierarchicalCategoryMenu
             tree={categoryTree}
             unclassifiedCount={stats?.unclassified_category ?? 0}
-            countsBySlag={Object.fromEntries(
-              categories.map((c) => [c.slug, categoryCounts.get(c.slug) ?? 0]),
+            countsById={Object.fromEntries(
+              categories.map((c) => [c.id, categoryCounts.get(c.id) ?? 0]),
             )}
             totalCount={allCategoriesCount}
-            selectedSlugs={selectedCategories}
+            selectedIds={selectedCategories}
             onChange={setSelectedCategories}
           />
         </aside>
@@ -1078,23 +1094,15 @@ export default function AssessmentQuestionsPage() {
                   variant='outline'
                   className={cn(
                     'h-8 text-xs',
-                    selectedCount === 0 && !selectAllMode && !publishing && 'invisible pointer-events-none',
+                    selectedCount === 0 && !selectAllMode && !bulkOpMessage && 'invisible pointer-events-none',
                     publishedCount !== null && 'border-green-500 text-green-600',
                   )}
-                  tabIndex={selectedCount === 0 && !selectAllMode && !publishing ? -1 : 0}
-                  aria-hidden={selectedCount === 0 && !selectAllMode && !publishing}
-                  disabled={publishing}
+                  tabIndex={selectedCount === 0 && !selectAllMode && !bulkOpMessage ? -1 : 0}
+                  aria-hidden={selectedCount === 0 && !selectAllMode && !bulkOpMessage}
+                  disabled={!!bulkOpMessage}
                   onClick={() => void publishQuestions(selectedQuestionIds)}
                 >
-                  {publishing ? (
-                    <>
-                      <svg className='mr-2 h-3.5 w-3.5 animate-spin' viewBox='0 0 24 24' fill='none'>
-                        <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4' />
-                        <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8v8H4z' />
-                      </svg>
-                      Publishing…
-                    </>
-                  ) : publishedCount !== null ? (
+                  {publishedCount !== null ? (
                     <>
                       <svg className='mr-1.5 h-3.5 w-3.5 text-green-500' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5'>
                         <polyline points='20 6 9 17 4 12' />
@@ -1217,7 +1225,7 @@ export default function AssessmentQuestionsPage() {
                   const label =
                     value === 'unclassified'
                       ? 'Unclassified'
-                      : categories.find((cat) => cat.slug === value)?.name || value;
+                      : categories.find((cat) => cat.id === value)?.name || value;
                   return (
                     <Badge key={`category-${value}`} variant='secondary' className='flex items-center gap-1'>
                       Category: {label}
@@ -1910,7 +1918,7 @@ export default function AssessmentQuestionsPage() {
       <ConfirmDialog
         title='Archive questions?'
         description={`This will move ${archiveTarget?.label ?? 'the selected questions'} to archived status.`}
-        confirmText={archiving ? 'Archiving…' : 'Archive'}
+        confirmText='Archive'
         open={!!archiveTarget}
         onOpenChange={(open) => !open && setArchiveTarget(null)}
         onConfirm={() => {
@@ -1924,7 +1932,7 @@ export default function AssessmentQuestionsPage() {
       <ConfirmDialog
         title='Permanently delete questions?'
         description={`This will permanently delete ${deleteTarget?.label ?? 'the selected questions'}. This action cannot be undone.`}
-        confirmText={deleting ? 'Deleting…' : 'Delete permanently'}
+        confirmText='Delete permanently'
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
         onConfirm={() => {

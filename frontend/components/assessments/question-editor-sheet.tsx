@@ -22,6 +22,25 @@ const OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
 const selectCls =
   'h-8 w-full rounded-md border border-input bg-white px-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
+// Build id→fullPath map once from a flat category list.
+// e.g. { 'uuid-8th' → 'School/History/8th Grade' }
+function buildCategoryPathMap(categories: AssessmentCategory[]): Map<string, string> {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  const cache = new Map<string, string>();
+
+  const getPath = (id: string): string => {
+    if (cache.has(id)) return cache.get(id)!;
+    const cat = byId.get(id);
+    if (!cat) return '';
+    const path = cat.parent_id ? `${getPath(cat.parent_id)}/${cat.name}` : cat.name;
+    cache.set(id, path);
+    return path;
+  };
+
+  categories.forEach((c) => getPath(c.id));
+  return cache;
+}
+
 interface QuestionEditorSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -32,6 +51,8 @@ interface QuestionEditorSheetProps {
     question_type: string;
     difficulty?: string | null;
     category_id?: string | null;
+    /** When non-empty, backend resolves/creates the hierarchy and overrides category_id */
+    category_path?: string | null;
     tags: string[];
     status: string;
     explanation?: string | null;
@@ -39,40 +60,76 @@ interface QuestionEditorSheetProps {
   }) => Promise<void>;
 }
 
-export function QuestionEditorSheet({ open, onOpenChange, initial, categories = [], onSave }: QuestionEditorSheetProps) {
+export function QuestionEditorSheet({
+  open,
+  onOpenChange,
+  initial,
+  categories = [],
+  onSave,
+}: QuestionEditorSheetProps) {
   const [prompt, setPrompt] = useState('');
   const [questionType, setQuestionType] = useState('mcq_single');
   const [difficulty, setDifficulty] = useState('');
   const [categoryId, setCategoryId] = useState('');
+  /** Slash-separated path typed by the user; takes priority over categoryId on save */
+  const [categoryPathInput, setCategoryPathInput] = useState('');
   const [tags, setTags] = useState('');
   const [status, setStatus] = useState('draft');
   const [explanation, setExplanation] = useState('');
-  const [options, setOptions] = useState<AssessmentQuestionOption[]>([DEFAULT_OPTION, { ...DEFAULT_OPTION, order_index: 1 }]);
+  const [options, setOptions] = useState<AssessmentQuestionOption[]>([
+    DEFAULT_OPTION,
+    { ...DEFAULT_OPTION, order_index: 1 },
+  ]);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Build the path map once per categories array reference — O(n), not O(n²)
+  const categoryPathMap = useMemo(() => buildCategoryPathMap(categories), [categories]);
+
+  // Sorted dropdown options with full paths
+  const categoryOptions = useMemo(
+    () =>
+      categories
+        .map((c) => ({ id: c.id, label: categoryPathMap.get(c.id) ?? c.name }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [categories, categoryPathMap],
+  );
+
+  // Reset form when the sheet opens for a new/different question.
+  // NOTE: `categories` is intentionally NOT in the dep array — we don't want
+  // category list refreshes to reset a form the user is actively editing.
   useEffect(() => {
     if (!open) return;
+    setSaveError(null);
     if (initial) {
       setPrompt(initial.prompt || '');
       setQuestionType(initial.question_type || 'mcq_single');
       setDifficulty(initial.difficulty || '');
       setCategoryId(initial.category_id || '');
+      setCategoryPathInput(
+        initial.category_id ? (categoryPathMap.get(initial.category_id) ?? '') : '',
+      );
       setTags((initial.tags || []).join(', '));
       setStatus(initial.status || 'draft');
       setExplanation(initial.explanation || '');
       setOptions(
-        (initial.options || []).map((opt, idx) => ({ ...opt, order_index: opt.order_index ?? idx })),
+        (initial.options || []).map((opt, idx) => ({
+          ...opt,
+          order_index: opt.order_index ?? idx,
+        })),
       );
     } else {
       setPrompt('');
       setQuestionType('mcq_single');
       setDifficulty('');
       setCategoryId('');
+      setCategoryPathInput('');
       setTags('');
       setStatus('draft');
       setExplanation('');
       setOptions([DEFAULT_OPTION, { ...DEFAULT_OPTION, order_index: 1 }]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial, open]);
 
   const canSave = useMemo(
@@ -94,39 +151,43 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
   };
 
   const removeOption = (index: number) => {
-    setOptions((prev) => prev.filter((_, i) => i !== index).map((item, i) => ({ ...item, order_index: i })));
+    setOptions((prev) =>
+      prev.filter((_, i) => i !== index).map((item, i) => ({ ...item, order_index: i })),
+    );
   };
 
   const save = async () => {
     if (!canSave || saving) return;
     setSaving(true);
+    setSaveError(null);
     try {
+      const pathTrim = categoryPathInput.trim();
       await onSave({
         prompt: prompt.trim(),
         question_type: questionType,
         difficulty: difficulty.trim() || null,
-        category_id: categoryId || null,
+        // When the path field is filled it takes priority; backend creates missing levels.
+        ...(pathTrim
+          ? { category_path: pathTrim }
+          : { category_id: categoryId || null }),
         tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
         status,
         explanation: explanation.trim() || null,
         options: options
           .filter((o) => o.option_text.trim())
-          .map((o, idx) => ({ option_text: o.option_text.trim(), is_correct: Boolean(o.is_correct), order_index: idx })),
+          .map((o, idx) => ({
+            option_text: o.option_text.trim(),
+            is_correct: Boolean(o.is_correct),
+            order_index: idx,
+          })),
       });
       onOpenChange(false);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Save failed. Please try again.');
     } finally {
       setSaving(false);
     }
   };
-
-  // Build category options with parent path for hierarchy
-  const categoryOptions = useMemo(() => {
-    const byId = new Map(categories.map((c) => [c.id, c]));
-    return categories.map((c) => {
-      const parent = c.parent_id ? byId.get(c.parent_id) : null;
-      return { id: c.id, label: parent ? `${parent.name} / ${c.name}` : c.name };
-    }).sort((a, b) => a.label.localeCompare(b.label));
-  }, [categories]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -139,18 +200,16 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
           <h2 className='text-sm font-semibold text-foreground'>
             {initial ? 'Edit question' : 'New question'}
           </h2>
-          <div className='flex items-center gap-2'>
-            <span
-              className={cn(
-                'rounded-full px-2 py-0.5 text-[11px] font-medium',
-                status === 'published' && 'bg-emerald-100 text-emerald-700',
-                status === 'draft' && 'bg-amber-100 text-amber-700',
-                status === 'archived' && 'bg-muted text-muted-foreground',
-              )}
-            >
-              {status.charAt(0).toUpperCase() + status.slice(1)}
-            </span>
-          </div>
+          <span
+            className={cn(
+              'rounded-full px-2 py-0.5 text-[11px] font-medium',
+              status === 'published' && 'bg-emerald-100 text-emerald-700',
+              status === 'draft' && 'bg-amber-100 text-amber-700',
+              status === 'archived' && 'bg-muted text-muted-foreground',
+            )}
+          >
+            {status.charAt(0).toUpperCase() + status.slice(1)}
+          </span>
         </div>
 
         {/* ── Scrollable body ── */}
@@ -171,7 +230,7 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
               />
             </div>
 
-            {/* Metadata 2×2 grid */}
+            {/* Type + Difficulty */}
             <div className='grid grid-cols-2 gap-2'>
               <div>
                 <label className='mb-1 block text-xs font-medium text-muted-foreground'>Type</label>
@@ -189,15 +248,48 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
                   <option value='hard'>Hard</option>
                 </select>
               </div>
-              <div>
-                <label className='mb-1 block text-xs font-medium text-muted-foreground'>Category</label>
-                <select className={selectCls} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-                  <option value=''>Unclassified</option>
-                  {categoryOptions.map((c) => (
-                    <option key={c.id} value={c.id}>{c.label}</option>
-                  ))}
-                </select>
-              </div>
+            </div>
+
+            {/* Category — full width, two-step UX */}
+            <div className='space-y-1.5'>
+              <label className='block text-xs font-medium text-muted-foreground'>Category</label>
+              {/* 1. Pick an existing category */}
+              <select
+                className={selectCls}
+                value={categoryId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setCategoryId(id);
+                  // Sync the path field so the user can see and further edit the full path
+                  setCategoryPathInput(id ? (categoryPathMap.get(id) ?? '') : '');
+                }}
+              >
+                <option value=''>Unclassified</option>
+                {categoryOptions.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label.replace(/\//g, ' / ')}
+                  </option>
+                ))}
+              </select>
+
+              {/* 2. Or type / edit a slash-separated path directly */}
+              <Input
+                className='h-8 text-xs'
+                placeholder='Or type: School/History/8th Grade'
+                value={categoryPathInput}
+                onChange={(e) => {
+                  setCategoryPathInput(e.target.value);
+                  // Decouple from dropdown when the user types freely
+                  setCategoryId('');
+                }}
+              />
+              <p className='text-[10px] text-muted-foreground'>
+                Use <span className='font-mono font-bold'>/</span> between levels. Missing folders are created automatically on save.
+              </p>
+            </div>
+
+            {/* Status + Tags */}
+            <div className='grid grid-cols-2 gap-2'>
               <div>
                 <label className='mb-1 block text-xs font-medium text-muted-foreground'>Status</label>
                 <select className={selectCls} value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -206,23 +298,20 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
                   <option value='archived'>Archived</option>
                 </select>
               </div>
+              <div>
+                <label className='mb-1 block text-xs font-medium text-muted-foreground'>Tags</label>
+                <Input
+                  className='h-8 text-xs'
+                  placeholder='security, compliance'
+                  value={tags}
+                  onChange={(e) => setTags(e.target.value)}
+                />
+              </div>
             </div>
 
-            {/* Tags */}
-            <div>
-              <label className='mb-1 block text-xs font-medium text-muted-foreground'>Tags</label>
-              <Input
-                className='h-8 text-xs'
-                placeholder='security, compliance, sdlc'
-                value={tags}
-                onChange={(e) => setTags(e.target.value)}
-              />
-            </div>
-
-            {/* Divider */}
             <div className='border-t' />
 
-            {/* Options */}
+            {/* Answer options */}
             <div>
               <div className='mb-2 flex items-center justify-between'>
                 <label className='text-xs font-medium text-muted-foreground'>
@@ -243,20 +332,16 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
 
               <div className='space-y-1.5'>
                 {options.map((opt, idx) => (
-                  <div key={`${opt.id}-${idx}`} className='flex items-center gap-2'>
-                    {/* Letter badge */}
+                  <div key={`opt-${idx}`} className='flex items-center gap-2'>
                     <span
                       className={cn(
                         'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold',
-                        opt.is_correct
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : 'bg-muted text-muted-foreground',
+                        opt.is_correct ? 'bg-emerald-100 text-emerald-700' : 'bg-muted text-muted-foreground',
                       )}
                     >
                       {OPTION_LETTERS[idx] ?? idx + 1}
                     </span>
 
-                    {/* Text */}
                     <Input
                       className='h-8 flex-1 text-sm'
                       value={opt.option_text}
@@ -264,35 +349,25 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
                       onChange={(e) => updateOption(idx, { option_text: e.target.value })}
                     />
 
-                    {/* Correct toggle */}
-                    <label className='flex cursor-pointer items-center gap-1 text-xs select-none'>
+                    <label className='flex cursor-pointer select-none items-center gap-1 text-xs'>
                       <input
                         type={questionType === 'mcq_multi' ? 'checkbox' : 'radio'}
                         name='correct-option'
                         checked={opt.is_correct}
                         onChange={(e) => {
                           if (questionType === 'mcq_single') {
-                            // deselect all others
-                            setOptions((prev) =>
-                              prev.map((o, i) => ({ ...o, is_correct: i === idx })),
-                            );
+                            setOptions((prev) => prev.map((o, i) => ({ ...o, is_correct: i === idx })));
                           } else {
                             updateOption(idx, { is_correct: e.target.checked });
                           }
                         }}
                         className='h-3.5 w-3.5 accent-emerald-600'
                       />
-                      <span
-                        className={cn(
-                          'whitespace-nowrap',
-                          opt.is_correct ? 'font-medium text-emerald-700' : 'text-muted-foreground',
-                        )}
-                      >
+                      <span className={cn('whitespace-nowrap', opt.is_correct ? 'font-medium text-emerald-700' : 'text-muted-foreground')}>
                         Correct
                       </span>
                     </label>
 
-                    {/* Remove */}
                     {options.length > 2 ? (
                       <button
                         type='button'
@@ -309,7 +384,6 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
               </div>
             </div>
 
-            {/* Divider */}
             <div className='border-t' />
 
             {/* Explanation */}
@@ -317,7 +391,7 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
               <label className='mb-1 block text-xs font-medium text-muted-foreground'>
                 Explanation{' '}
                 <span className='text-[11px] font-normal text-muted-foreground/60'>
-                  — shown to the user after answering (optional)
+                  — shown after answering (optional)
                 </span>
               </label>
               <Textarea
@@ -333,13 +407,18 @@ export function QuestionEditorSheet({ open, onOpenChange, initial, categories = 
         </div>
 
         {/* ── Footer ── */}
-        <div className='flex shrink-0 items-center justify-end gap-2 border-t bg-muted/20 px-4 py-2.5'>
-          <Button type='button' variant='ghost' size='sm' onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type='button' size='sm' disabled={!canSave || saving} onClick={save}>
-            {saving ? 'Saving…' : initial ? 'Save changes' : 'Create question'}
-          </Button>
+        <div className='flex shrink-0 flex-col gap-1 border-t bg-muted/20 px-4 py-2.5'>
+          {saveError && (
+            <p className='text-xs text-destructive'>{saveError}</p>
+          )}
+          <div className='flex items-center justify-end gap-2'>
+            <Button type='button' variant='ghost' size='sm' onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type='button' size='sm' disabled={!canSave || saving} onClick={save}>
+              {saving ? 'Saving…' : initial ? 'Save changes' : 'Create question'}
+            </Button>
+          </div>
         </div>
       </SheetContent>
     </Sheet>

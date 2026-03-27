@@ -27,9 +27,13 @@ from app.models.mixins import AuditUserMixin, TimestampMixin, UUIDPrimaryKeyMixi
 
 class AssessmentCategory(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base):
     __tablename__ = 'assessment_categories'
-    __table_args__ = (
-        UniqueConstraint('tenant_id', 'slug', name='uq_assessment_category_slug'),
-    )
+    # Uniqueness is enforced by two partial indexes created in migration
+    # 0046_category_slug_unique_per_parent:
+    #   - uq_category_slug_root  (tenant_id, slug) WHERE parent_id IS NULL
+    #   - uq_category_slug_child (tenant_id, slug, parent_id) WHERE parent_id IS NOT NULL
+    # This allows identical sub-category names under different parents
+    # (e.g. "8th Grade" under both "History" and "Biology").
+    __table_args__ = ()
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -400,6 +404,7 @@ class AssessmentAttempt(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Bas
     max_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     score_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    stars_earned: Mapped[int | None] = mapped_column(Integer, nullable=True)
     section_scores: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     delivery: Mapped['AssessmentDelivery'] = relationship(back_populates='attempts')
@@ -467,3 +472,51 @@ class AiImportTemplate(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, Base
     extra_instructions: Mapped[str] = mapped_column(Text, nullable=False)
     auto_question_count: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class AchievementCatalog(Base):
+    """Global achievement definitions — not tenant-scoped."""
+    __tablename__ = 'assessment_achievement_catalog'
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text('gen_random_uuid()')
+    )
+    code: Mapped[str] = mapped_column(String(60), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    icon: Mapped[str] = mapped_column(String(10), nullable=False)
+    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    user_achievements: Mapped[list['UserAchievement']] = relationship(back_populates='achievement')
+
+
+class UserAchievement(UUIDPrimaryKeyMixin, Base):
+    """Per-tenant per-user achievement unlock records."""
+    __tablename__ = 'user_achievements'
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'user_id', 'achievement_id', name='uq_user_achievement'),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('tenants.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('users.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    achievement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey('assessment_achievement_catalog.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    unlocked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    achievement: Mapped['AchievementCatalog'] = relationship(back_populates='user_achievements')

@@ -34,15 +34,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [isAuthenticated, isLoading, mustChangePassword, pathname, router]);
 
-  useEffect(() => {
-    if (!isFullScreenPage) return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previous;
-    };
-  }, [isFullScreenPage]);
-
   if (isLoading) {
     return <LoadingState label='Authenticating session...' />;
   }
@@ -61,16 +52,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <TenantProvider>
-      <div className={cn('flex min-h-screen overflow-x-hidden', isFullScreenPage && 'h-screen overflow-hidden')}>
-        <div className='hidden lg:block'>
+      {/*
+        App-shell pattern: outer box is always a fixed h-screen viewport.
+        Only <main> scrolls — the sidebar and top-header are never in the
+        scroll flow, so sticky/fixed positioning works correctly on all pages.
+      */}
+      <div className='flex h-screen overflow-hidden'>
+        {/* Sidebar — visible on lg+, fills the full shell height */}
+        <div className='hidden lg:flex lg:h-full lg:shrink-0'>
           <SidebarNav />
         </div>
-        <div className={cn('flex min-h-screen min-w-0 flex-1 flex-col', isFullScreenPage && 'h-screen')}>
+
+        {/* Right column: header + scrollable content */}
+        <div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
           <TopHeader />
           <main
             className={cn(
               'flex-1 min-w-0 min-h-0',
-              isFullScreenPage ? 'overflow-hidden p-0' : 'overflow-x-hidden p-4 sm:p-6',
+              isFullScreenPage ? 'overflow-hidden p-0' : 'app-main overflow-y-auto overflow-x-hidden p-4 sm:p-6',
             )}
           >
             {children}

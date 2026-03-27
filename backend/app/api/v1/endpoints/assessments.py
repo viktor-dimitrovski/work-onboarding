@@ -17,6 +17,7 @@ from app.models.rbac import User
 from app.multitenancy.deps import TenantContext, require_tenant_membership
 from app.multitenancy.permissions import permissions_for_roles, require_access
 from app.schemas.assessment import (
+    AchievementOut,
     AssessmentAttemptAnswersUpdate,
     AssessmentAttemptStartOut,
     AssessmentAttemptSubmitOut,
@@ -753,37 +754,43 @@ def list_categories_tree(
     __: object = Depends(require_access('assessments', 'assessments:read')),
 ) -> AssessmentCategoryTreeResponse:
     all_cats = assessment_service.list_categories(db)
-    # Build tree: parents first, then attach children
-    parents: list[AssessmentCategoryTreeNode] = []
-    children_map: dict[str, list[AssessmentCategoryTreeNode]] = {}
 
+    # Build a node for every category, keyed by id string.
+    nodes: dict[str, AssessmentCategoryTreeNode] = {}
     for cat in all_cats:
-        node = AssessmentCategoryTreeNode(
+        nodes[str(cat.id)] = AssessmentCategoryTreeNode(
             id=cat.id,
             name=cat.name,
             slug=cat.slug,
             parent_id=cat.parent_id,
             children=[],
         )
+
+    # Wire each node into its parent's children list (unlimited depth).
+    roots: list[AssessmentCategoryTreeNode] = []
+    for cat in all_cats:
+        node = nodes[str(cat.id)]
         if cat.parent_id is None:
-            parents.append(node)
+            roots.append(node)
         else:
-            pid = str(cat.parent_id)
-            children_map.setdefault(pid, []).append(node)
+            parent = nodes.get(str(cat.parent_id))
+            if parent is not None:
+                parent.children.append(node)
+            else:
+                # Parent doesn't exist in this tenant's list – treat as root.
+                roots.append(node)
 
-    for parent in parents:
-        parent.children = sorted(
-            children_map.get(str(parent.id), []),
-            key=lambda n: n.name,
-        )
+    # Sort children at every level alphabetically.
+    def _sort(node: AssessmentCategoryTreeNode) -> None:
+        node.children.sort(key=lambda n: n.name)
+        for child in node.children:
+            _sort(child)
 
-    # Orphan children (parent not in list) are appended as top-level
-    parent_ids = {str(p.id) for p in parents}
-    for pid, nodes in children_map.items():
-        if pid not in parent_ids:
-            parents.extend(nodes)
+    roots.sort(key=lambda n: n.name)
+    for root in roots:
+        _sort(root)
 
-    return AssessmentCategoryTreeResponse(items=sorted(parents, key=lambda n: n.name))
+    return AssessmentCategoryTreeResponse(items=roots)
 
 
 # ---------------------------------------------------------------------------
@@ -1289,8 +1296,12 @@ def create_question(
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentQuestionOut:
+    data = payload.model_dump()
+    cat_path: str | None = data.pop('category_path', None)
+    if cat_path and cat_path.strip():
+        data['category_id'] = assessment_service.find_or_create_category_path(db, cat_path.strip())
     question = assessment_service.create_question(
-        db, payload=payload.model_dump(), actor_user_id=current_user.id
+        db, payload=data, actor_user_id=current_user.id
     )
     audit_service.log_action(
         db,
@@ -1323,8 +1334,12 @@ def update_question(
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access('assessments', 'assessments:write')),
 ) -> AssessmentQuestionOut:
+    data = payload.model_dump(exclude_unset=True)
+    cat_path: str | None = data.pop('category_path', None)
+    if cat_path and cat_path.strip():
+        data['category_id'] = assessment_service.find_or_create_category_path(db, cat_path.strip())
     question = assessment_service.update_question(
-        db, question_id=question_id, payload=payload.model_dump(exclude_unset=True), actor_user_id=current_user.id
+        db, question_id=question_id, payload=data, actor_user_id=current_user.id
     )
     audit_service.log_action(
         db,
@@ -1800,6 +1815,82 @@ def stop_delivery(
     return AssessmentDeliveryOut.model_validate(delivery)
 
 
+@router.post('/deliveries/{delivery_id}/extend-time')
+def extend_delivery_time(
+    delivery_id: UUID,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> dict:
+    """Add extra minutes to all in-progress attempts for this delivery.
+
+    Body: { "extra_minutes": int }
+    Returns: { "extended_count": int, "extra_minutes": int }
+    """
+    extra_minutes = int(payload.get('extra_minutes') or 0)
+    if extra_minutes < 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='extra_minutes must be >= 1')
+
+    delivery = db.scalar(select(AssessmentDelivery).where(AssessmentDelivery.id == delivery_id))
+    if not delivery:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Delivery not found')
+
+    active_attempts = db.scalars(
+        select(AssessmentAttempt).where(
+            AssessmentAttempt.delivery_id == delivery_id,
+            AssessmentAttempt.status == 'in_progress',
+            AssessmentAttempt.expires_at.isnot(None),
+        )
+    ).all()
+
+    for attempt in active_attempts:
+        attempt.expires_at = attempt.expires_at + timedelta(minutes=extra_minutes)
+        attempt.updated_by = current_user.id
+
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_delivery_extend_time',
+        entity_type='assessment_delivery',
+        entity_id=delivery_id,
+        details={'extra_minutes': extra_minutes, 'extended_attempts': len(active_attempts)},
+    )
+    db.commit()
+    return {'extended_count': len(active_attempts), 'extra_minutes': extra_minutes}
+
+
+@router.post('/deliveries/{delivery_id}/grant-retake')
+def grant_retake(
+    delivery_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    __: object = Depends(require_access('assessments', 'assessments:write')),
+) -> dict:
+    """Allow a participant to re-take this delivery by incrementing attempts_allowed by 1.
+
+    Returns: { "attempts_allowed": int }
+    """
+    delivery = db.scalar(select(AssessmentDelivery).where(AssessmentDelivery.id == delivery_id))
+    if not delivery:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Delivery not found')
+
+    delivery.attempts_allowed = delivery.attempts_allowed + 1
+    delivery.updated_by = current_user.id
+
+    audit_service.log_action(
+        db,
+        actor_user_id=current_user.id,
+        action='assessment_delivery_grant_retake',
+        entity_type='assessment_delivery',
+        entity_id=delivery_id,
+        details={'new_attempts_allowed': delivery.attempts_allowed},
+    )
+    db.commit()
+    db.refresh(delivery)
+    return {'attempts_allowed': delivery.attempts_allowed}
+
+
 @router.post('/deliveries/{delivery_id}/attempts/start', response_model=AssessmentAttemptStartOut)
 def start_attempt(
     delivery_id: UUID,
@@ -1866,7 +1957,7 @@ def submit_attempt(
     if 'assessments:write' not in perms and attempt.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Not allowed to submit this attempt')
 
-    attempt = assessment_service.submit_attempt(db, attempt_id=attempt_id, actor_user_id=current_user.id)
+    attempt, new_achievements = assessment_service.submit_attempt(db, attempt_id=attempt_id, actor_user_id=current_user.id)
     usage_service.record_event(
         db,
         tenant_id=ctx.tenant.id,
@@ -1882,6 +1973,14 @@ def submit_attempt(
         attempt=AssessmentAttemptOut.model_validate(attempt),
         correct_count=correct_count,
         total_questions=total_questions,
+        stars_earned=attempt.stars_earned,
+        new_achievements=[
+            AchievementOut(
+                code=a.code, name=a.name, description=a.description,
+                icon=a.icon, category=a.category,
+            )
+            for a in new_achievements
+        ],
     )
 
 
@@ -1919,12 +2018,17 @@ def list_my_results(
     avg = (sum(scores) / len(scores)) if scores else None
     pass_count = sum(1 for i in items if i.passed and i.status == 'scored')
     fail_count = sum(1 for i in items if not i.passed and i.status == 'scored')
+    total_stars = sum(i.stars_earned for i in items if i.stars_earned is not None)
+    completed = sum(1 for i in items if i.status == 'scored' and i.stars_earned is not None)
+    star_rate = round(total_stars / completed, 2) if completed > 0 else 0.0
     return MyResultsResponse(
         items=items,
         total_attempts=len(items),
         average_score_percent=avg,
         pass_count=pass_count,
         fail_count=fail_count,
+        total_stars=total_stars,
+        star_rate=star_rate,
     )
 
 
@@ -1940,7 +2044,8 @@ def list_results(
 ) -> AssessmentResultListResponse:
     perms = permissions_for_roles(ctx.roles)
     effective_user_id = user_id
-    if 'assessments:write' not in perms and 'assignments:review' not in perms:
+    is_manager = 'assessments:write' in perms or 'assignments:review' in perms
+    if not is_manager:
         effective_user_id = current_user.id
 
     attempts = assessment_service.list_attempts(
@@ -1948,6 +2053,35 @@ def list_results(
     )
     scores = [attempt.score_percent for attempt in attempts if attempt.score_percent is not None]
     average_score = (sum(scores) / len(scores)) if scores else None
+
+    # ── Enrich with user name/email and test title (manager view only) ────────
+    user_map: dict[UUID, User] = {}
+    delivery_title_map: dict[UUID, str] = {}
+    if is_manager and attempts:
+        unique_user_ids = list({a.user_id for a in attempts})
+        users = db.scalars(select(User).where(User.id.in_(unique_user_ids))).all()
+        user_map = {u.id: u for u in users}
+
+        unique_delivery_ids = list({a.delivery_id for a in attempts})
+        deliveries = db.scalars(
+            select(AssessmentDelivery)
+            .options(
+                joinedload(AssessmentDelivery.test_version).joinedload(AssessmentTestVersion.test)
+            )
+            .where(AssessmentDelivery.id.in_(unique_delivery_ids))
+        ).all()
+        for d in deliveries:
+            if d.test_version and d.test_version.test:
+                delivery_title_map[d.id] = d.test_version.test.title
+
+    def _to_out(a: AssessmentAttempt) -> AssessmentAttemptOut:
+        out = AssessmentAttemptOut.model_validate(a)
+        if is_manager:
+            u = user_map.get(a.user_id)
+            out.user_name = u.full_name if u else None
+            out.user_email = u.email if u else None
+            out.test_title = delivery_title_map.get(a.delivery_id)
+        return out
 
     summary = AssessmentResultSummary(
         delivery_id=delivery_id,
@@ -1957,7 +2091,7 @@ def list_results(
         average_score_percent=average_score,
     )
     return AssessmentResultListResponse(
-        items=[AssessmentAttemptOut.model_validate(item) for item in attempts],
+        items=[_to_out(a) for a in attempts],
         summary=summary,
     )
 
@@ -2061,3 +2195,64 @@ def delete_ai_import_template(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Template not found')
     db.delete(row)
     db.commit()
+
+
+# ── Star System Endpoints ─────────────────────────────────────────────────────
+
+@router.get('/my-profile')
+def get_my_star_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
+) -> dict:
+    """Return the current user's full star profile: level, stars, achievements, history."""
+    from app.services import star_service
+    return star_service.get_user_star_profile(
+        db, user_id=current_user.id, tenant_id=ctx.tenant.id
+    )
+
+
+@router.get('/achievements')
+def list_achievements(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:take')),
+) -> dict:
+    """Return all achievements with unlock status for the current user."""
+    from app.services import star_service
+    profile = star_service.get_user_star_profile(
+        db, user_id=current_user.id, tenant_id=ctx.tenant.id
+    )
+    return {'items': profile['achievements']}
+
+
+@router.get('/performance')
+def get_team_performance(
+    period_start: str | None = Query(default=None),
+    period_end: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    ctx: TenantContext = Depends(require_tenant_membership),
+    __: object = Depends(require_access('assessments', 'assessments:read')),
+) -> dict:
+    """Return per-member star performance stats (manager view)."""
+    from app.services import star_service
+    from datetime import datetime, timezone
+
+    def _parse(s: str | None):
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    members = star_service.get_team_performance(
+        db,
+        tenant_id=ctx.tenant.id,
+        period_start=_parse(period_start),
+        period_end=_parse(period_end),
+    )
+    return {'items': members}

@@ -12,12 +12,14 @@ import {
   ArrowLeft,
   Check,
   CheckCircle2,
-  X,
-  XCircle,
   Lightbulb,
   Minus,
+  Star,
+  X,
+  XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getStarRating, starArray } from '@/lib/stars';
 
 // ── Option status helpers ────────────────────────────────────────────────────
 
@@ -229,36 +231,26 @@ export default function AttemptReviewPage() {
   const correctCount = review.questions.filter((q) => q.is_correct === true).length;
   const wrongCount = review.questions.filter((q) => q.is_correct === false).length;
   const total = review.questions.length;
+  const starRating = getStarRating(review.score_percent);
 
   return (
     <div className='mx-auto max-w-2xl px-4 py-6 sm:px-0 sm:py-8'>
       {/* ── Summary header ── */}
       <div className='mb-6 rounded-2xl border bg-white p-5 shadow-sm'>
-        <div className='flex items-center gap-3'>
-          <div
-            className={cn(
-              'flex h-12 w-12 shrink-0 items-center justify-center rounded-full',
-              review.passed ? 'bg-emerald-100' : 'bg-red-100',
-            )}
-          >
-            {review.passed ? (
-              <CheckCircle2 className='h-6 w-6 text-emerald-600' />
-            ) : (
-              <XCircle className='h-6 w-6 text-red-600' />
-            )}
+        <div className='flex items-start gap-3'>
+          {/* Star rating badge */}
+          <div className={cn('shrink-0 flex flex-col items-center justify-center rounded-xl px-3 py-2 border', starRating.bgColor, starRating.borderColor)}>
+            <div className='flex gap-0.5'>
+              {starArray(starRating.stars).map((filled, i) => (
+                <Star key={i} className={cn('h-4 w-4', filled ? cn('fill-current', starRating.color) : 'text-slate-200 fill-current')} />
+              ))}
+            </div>
+            <p className={cn('mt-0.5 text-[11px] font-bold', starRating.color)}>{starRating.label}</p>
           </div>
 
           <div className='min-w-0 flex-1'>
             <p className='text-xl font-bold'>
               {scorePct != null ? `${scorePct}%` : '—'}
-              <span
-                className={cn(
-                  'ml-2 text-sm font-semibold',
-                  review.passed ? 'text-emerald-600' : 'text-red-600',
-                )}
-              >
-                {review.passed ? 'Passed' : 'Failed'}
-              </span>
             </p>
             <p className='text-[13px] text-muted-foreground'>
               {review.score ?? 0} / {review.max_score ?? 0} points

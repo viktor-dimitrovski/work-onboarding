@@ -12,12 +12,14 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  BarChart3,
   Check,
-  CheckCircle2,
   Clock,
   PlayCircle,
-  XCircle,
+  Star,
+  User,
 } from 'lucide-react';
+import { getStarRating, starArray } from '@/lib/stars';
 import { cn } from '@/lib/utils';
 
 type WizardState = 'loading' | 'start' | 'question' | 'review' | 'result';
@@ -83,7 +85,9 @@ export default function TakeTestPage() {
     max_score: number;
     score_percent: number;
     passed: boolean;
+    stars_earned?: number | null;
   } | null>(null);
+  const [newAchievements, setNewAchievements] = useState<Array<{ code: string; name: string; icon: string; description: string }>>([]);
 
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -205,9 +209,12 @@ export default function TakeTestPage() {
     setError(null);
     try {
       const response = await api.post<{
-        attempt: { score: number; max_score: number; score_percent: number; passed: boolean };
+        attempt: { score: number; max_score: number; score_percent: number; passed: boolean; stars_earned?: number | null };
+        stars_earned?: number | null;
+        new_achievements?: Array<{ code: string; name: string; icon: string; description: string }>;
       }>(`/assessments/attempts/${attemptId}/submit`, {}, accessToken);
-      setResult(response.attempt);
+      setResult({ ...response.attempt, stars_earned: response.stars_earned ?? response.attempt.stars_earned });
+      setNewAchievements(response.new_achievements ?? []);
       setState('result');
       if (timerRef.current) clearInterval(timerRef.current);
     } catch (err) {
@@ -280,54 +287,110 @@ export default function TakeTestPage() {
 
   // ── RESULT ─────────────────────────────────────────────────────────────────
   if (state === 'result' && result) {
-    const passed = result.passed;
+    const stars = result.stars_earned ?? getStarRating(result.score_percent).stars;
+    const rating = getStarRating(result.score_percent);
+    const starsArr = starArray(stars);
+
     return (
       <CentreScreen>
-        <div className='w-full rounded-2xl border bg-white p-6 shadow-sm sm:p-8 text-center'>
-          <div
-            className={cn(
-              'mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full',
-              passed ? 'bg-emerald-100' : 'bg-red-100',
-            )}
-          >
-            {passed ? (
-              <CheckCircle2 className='h-10 w-10 text-emerald-600' />
-            ) : (
-              <XCircle className='h-10 w-10 text-red-600' />
-            )}
+        <div className='w-full rounded-2xl border bg-white shadow-sm overflow-hidden'>
+          {/* Colored header band */}
+          <div className={cn('px-6 pt-8 pb-6 text-center', rating.bgColor)}>
+            {/* Animated star row */}
+            <div className='flex items-center justify-center gap-2 mb-3'>
+              {starsArr.map((filled, i) => (
+                <Star
+                  key={i}
+                  className={cn(
+                    'h-10 w-10 transition-all',
+                    filled
+                      ? cn('fill-current drop-shadow-md', rating.color, 'animate-[star-pop_0.4s_ease-out_both]')
+                      : 'text-slate-200 fill-current',
+                  )}
+                  style={{ animationDelay: `${i * 120}ms` }}
+                />
+              ))}
+            </div>
+            <h1 className={cn('text-2xl font-extrabold', rating.color)}>{rating.label}</h1>
+            <p className='mt-1 text-sm text-muted-foreground'>{rating.message}</p>
           </div>
-          <h1 className='text-2xl font-bold sm:text-3xl'>{passed ? 'Passed!' : 'Not passed'}</h1>
-          <p className='mt-5 text-5xl font-extrabold tabular-nums sm:text-6xl'>
-            {Math.round(result.score_percent)}%
-          </p>
-          <p className='mt-1 text-sm text-muted-foreground'>
-            {result.score} / {result.max_score} points
-          </p>
-          <div className='mt-8 flex flex-col gap-3'>
-            <Button
-              className='h-12 w-full text-base'
-              onClick={() => router.push(`/assessments/review/${attemptId}`)}
-            >
-              Review answers
-            </Button>
-            <div className='flex gap-3'>
+
+          <div className='px-6 py-5 text-center'>
+            {/* Big score */}
+            <p className='text-5xl font-extrabold tabular-nums sm:text-6xl'>
+              {Math.round(result.score_percent)}%
+            </p>
+            <p className='mt-1.5 text-sm text-muted-foreground'>
+              {result.score} / {result.max_score} points
+            </p>
+
+            {/* Stars earned badge */}
+            <div className={cn('mx-auto mt-4 inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-semibold', rating.bgColor, rating.borderColor, rating.color)}>
+              <Star className='h-4 w-4 fill-current' />
+              +{stars} star{stars !== 1 ? 's' : ''} earned!
+            </div>
+
+            {/* Newly unlocked achievements */}
+            {newAchievements.length > 0 && (
+              <div className='mt-4 space-y-2'>
+                <p className='text-[11px] font-bold uppercase tracking-wider text-muted-foreground'>Achievement{newAchievements.length > 1 ? 's' : ''} unlocked!</p>
+                {newAchievements.map((a) => (
+                  <div key={a.code} className='flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm'>
+                    <span className='text-xl'>{a.icon}</span>
+                    <div className='text-left'>
+                      <p className='font-semibold text-amber-900'>{a.name}</p>
+                      <p className='text-[11px] text-amber-700'>{a.description}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className='mt-6 flex flex-col gap-3'>
               <Button
-                variant='outline'
-                className='h-11 flex-1'
-                onClick={() => router.push('/assessments/my-tests')}
+                className='h-12 w-full text-base'
+                onClick={() => router.push(`/assessments/review/${attemptId}`)}
               >
-                My tests
+                Review answers
               </Button>
-              <Button
-                variant='outline'
-                className='h-11 flex-1'
-                onClick={() => router.push('/assessments/results')}
-              >
-                All results
-              </Button>
+              <div className='grid grid-cols-3 gap-2'>
+                <Button
+                  variant='outline'
+                  className='h-10 text-xs'
+                  onClick={() => router.push('/assessments/my-tests')}
+                >
+                  My tests
+                </Button>
+                <Button
+                  variant='outline'
+                  className='h-10 text-xs'
+                  onClick={() => router.push('/assessments/my-profile')}
+                >
+                  <Star className='mr-1 h-3.5 w-3.5' />
+                  My profile
+                </Button>
+                <Button
+                  variant='outline'
+                  className='h-10 text-xs'
+                  onClick={() => router.push('/assessments/my-results')}
+                >
+                  <BarChart3 className='mr-1 h-3.5 w-3.5' />
+                  Results
+                </Button>
+              </div>
             </div>
           </div>
         </div>
+
+        {/* CSS animation for star pop */}
+        <style>{`
+          @keyframes star-pop {
+            0%   { transform: scale(0) rotate(-20deg); opacity: 0; }
+            60%  { transform: scale(1.3) rotate(5deg); opacity: 1; }
+            100% { transform: scale(1) rotate(0deg); opacity: 1; }
+          }
+        `}</style>
       </CentreScreen>
     );
   }

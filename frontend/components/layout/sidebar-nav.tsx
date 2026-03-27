@@ -280,7 +280,7 @@ export function SidebarNav() {
   return (
     <aside
       className={cn(
-        'sticky top-0 flex h-screen shrink-0 flex-col border-r border-slate-200 bg-white',
+        'flex h-full shrink-0 flex-col border-r border-slate-200 bg-white',
         collapsed ? TOKENS.railWidthClass : TOKENS.expandedWidthClass,
       )}
       onPointerLeave={() => {

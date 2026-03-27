@@ -13,6 +13,8 @@ import { useTrackPurposeLabels } from '@/lib/track-purpose';
 import { useTrackTypeLabels } from '@/lib/track-type';
 import { useAuth } from '@/lib/auth-context';
 import { useTenant } from '@/lib/tenant-context';
+import { DataCentersSettingsSection } from '@/components/release-notes/data-centers-settings-section';
+import { ReleaseNotificationsSettings } from '@/components/settings/release-notifications-settings';
 import {
   Bot,
   Building2,
@@ -22,6 +24,7 @@ import {
   Pencil,
   Plus,
   Search,
+  Server,
   Settings,
   Tag,
   Trash2,
@@ -82,6 +85,22 @@ const SECTIONS = [
     keywords: ['ai', 'import', 'template', 'instruction', 'question', 'prompt', 'pdf'],
     icon: Bot,
     accent: 'bg-indigo-500',
+  },
+  {
+    id: 'data-centers',
+    title: 'Data Centers',
+    description: 'Kubernetes cluster locations for release deployments',
+    keywords: ['data center', 'dc', 'k8s', 'kubernetes', 'cluster', 'release', 'deployment', 'location'],
+    icon: Server,
+    accent: 'bg-teal-500',
+  },
+  {
+    id: 'release-notifications',
+    title: 'Release Notifications',
+    description: 'Email recipients for blocked deployment run items',
+    keywords: ['release', 'notification', 'email', 'blocked', 'deployment', 'alert'],
+    icon: Settings,
+    accent: 'bg-orange-500',
   },
 ] as const;
 
@@ -153,6 +172,10 @@ export default function SettingsPage() {
   const [woGitBaseBranch, setWoGitBaseBranch] = useState('');
   const [woGitInstallationId, setWoGitInstallationId] = useState('');
   const [woGitSyncOnSave, setWoGitSyncOnSave] = useState(true);
+  const [woGitPatConfigured, setWoGitPatConfigured] = useState(false);
+  const [woGitPatInput, setWoGitPatInput] = useState('');
+  const [woGitPatMode, setWoGitPatMode] = useState<'idle' | 'entering' | 'saving' | 'removing'>('idle');
+  const [woGitPatError, setWoGitPatError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -218,6 +241,7 @@ export default function SettingsPage() {
           base_branch?: string | null;
           installation_id?: number | null;
           sync_on_save?: boolean;
+          pat_configured?: boolean;
         };
       }>('/settings', accessToken)
       .then((data) => {
@@ -233,6 +257,7 @@ export default function SettingsPage() {
         setWoGitBaseBranch(wo.base_branch ?? '');
         setWoGitInstallationId(wo.installation_id ? String(wo.installation_id) : '');
         setWoGitSyncOnSave(wo.sync_on_save !== false);
+        setWoGitPatConfigured(Boolean(wo.pat_configured));
       })
       .catch((err) => {
         if (!isMounted) return;
@@ -328,6 +353,46 @@ export default function SettingsPage() {
       setSaveError(err instanceof Error ? err.message : 'Failed to save settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const extractApiError = (err: unknown, fallback: string): string => {
+    if (!(err instanceof Error)) return fallback;
+    try {
+      const parsed = JSON.parse(err.message);
+      if (parsed?.detail) return String(parsed.detail);
+    } catch {
+      // not JSON — use raw message
+    }
+    return err.message || fallback;
+  };
+
+  const savePat = async () => {
+    if (!accessToken || !woGitPatInput.trim()) return;
+    setWoGitPatMode('saving');
+    setWoGitPatError(null);
+    try {
+      await api.put('/settings/github-pat', { github_pat: woGitPatInput.trim() }, accessToken);
+      setWoGitPatConfigured(true);
+      setWoGitPatInput('');
+      setWoGitPatMode('idle');
+    } catch (err) {
+      setWoGitPatError(extractApiError(err, 'Failed to save token'));
+      setWoGitPatMode('entering');
+    }
+  };
+
+  const removePat = async () => {
+    if (!accessToken) return;
+    setWoGitPatMode('removing');
+    setWoGitPatError(null);
+    try {
+      await api.delete('/settings/github-pat', accessToken);
+      setWoGitPatConfigured(false);
+      setWoGitPatMode('idle');
+    } catch (err) {
+      setWoGitPatError(extractApiError(err, 'Failed to remove token'));
+      setWoGitPatMode('idle');
     }
   };
 
@@ -471,12 +536,79 @@ export default function SettingsPage() {
                   <Field label='Release manifests folder'>
                     <Input className='h-8 text-sm' value={woGitReleaseFolder} onChange={(e) => setWoGitReleaseFolder(e.target.value)} placeholder='releases' />
                   </Field>
-                  <Field label='GitHub App installation ID'>
+
+                  {/* ── GitHub Personal Access Token (write-only) ── */}
+                  <div className='sm:col-span-2 rounded-lg border border-dashed p-3 space-y-2'>
+                    <div className='flex items-center justify-between'>
+                      <Label className='text-xs font-semibold'>GitHub Personal Access Token</Label>
+                      {woGitPatConfigured && woGitPatMode === 'idle' && (
+                        <span className='inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[11px] font-medium text-emerald-700'>
+                          <span className='h-1.5 w-1.5 rounded-full bg-emerald-500' />
+                          Configured
+                        </span>
+                      )}
+                    </div>
+                    <p className='text-[11px] text-muted-foreground leading-relaxed'>
+                      Create a <strong>Fine-grained PAT</strong> in your GitHub org with <em>Contents: Read &amp; Write</em> and{' '}
+                      <em>Pull requests: Read &amp; Write</em> permissions. The token is stored encrypted and is never shown again.
+                    </p>
+
+                    {woGitPatConfigured && woGitPatMode !== 'entering' && woGitPatMode !== 'saving' ? (
+                      <div className='flex items-center gap-2'>
+                        <Button
+                          type='button' variant='outline' size='sm' className='h-7 text-xs'
+                          onClick={() => setWoGitPatMode('entering')}
+                        >
+                          Replace token
+                        </Button>
+                        <Button
+                          type='button' variant='ghost' size='sm'
+                          className='h-7 text-xs text-destructive hover:text-destructive hover:bg-destructive/10'
+                          onClick={removePat}
+                          disabled={woGitPatMode === 'removing'}
+                        >
+                          {woGitPatMode === 'removing' ? 'Removing…' : 'Remove'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className='flex items-start gap-2'>
+                        <Input
+                          type='password'
+                          className='h-8 text-sm font-mono flex-1'
+                          placeholder='github_pat_…'
+                          value={woGitPatInput}
+                          onChange={(e) => { setWoGitPatInput(e.target.value); setWoGitPatMode('entering'); }}
+                          autoComplete='off'
+                          spellCheck={false}
+                        />
+                        <Button
+                          type='button' size='sm' className='h-8 text-xs shrink-0'
+                          onClick={savePat}
+                          disabled={!woGitPatInput.trim() || woGitPatMode === 'saving'}
+                        >
+                          {woGitPatMode === 'saving' ? 'Saving…' : 'Save token'}
+                        </Button>
+                        {woGitPatConfigured && (
+                          <Button
+                            type='button' variant='ghost' size='sm' className='h-8 text-xs shrink-0'
+                            onClick={() => { setWoGitPatMode('idle'); setWoGitPatInput(''); setWoGitPatError(null); }}
+                          >
+                            Cancel
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {woGitPatError && (
+                      <p className='text-xs text-destructive'>{woGitPatError}</p>
+                    )}
+                  </div>
+
+                  <p className='text-xs text-muted-foreground sm:col-span-2'>
+                    <strong>Advanced:</strong> If your platform administrator has configured a global GitHub App, you can also use the Installation ID below instead of a PAT.
+                  </p>
+                  <Field label='GitHub App installation ID (optional)'>
                     <Input className='h-8 text-sm' inputMode='numeric' value={woGitInstallationId} onChange={(e) => setWoGitInstallationId(e.target.value)} placeholder='12345678' />
                   </Field>
-                  <p className='text-xs text-muted-foreground sm:col-span-2'>
-                    Backend must be configured with GitHub App credentials (GITHUB_APP_ID + private key).
-                  </p>
                 </div>
               </AccordionContent>
             </AccordionItem>
@@ -732,6 +864,41 @@ export default function SettingsPage() {
               </AccordionContent>
             </AccordionItem>
           )}
+
+          {/* Data Centers */}
+          <AccordionItem value='data-centers'>
+            <AccordionTrigger className='px-4 hover:no-underline'>
+              <div className='flex items-center gap-3'>
+                <div className='flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-teal-500'>
+                  <Server className='h-4 w-4 text-white' />
+                </div>
+                <div className='text-left'>
+                  <div className='text-sm font-medium'>Data Centers</div>
+                  <div className='text-xs text-muted-foreground'>Kubernetes cluster locations for release deployments</div>
+                </div>
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className='px-4 pb-4 pt-0'>
+              <DataCentersSettingsSection canWrite={hasPermission('settings:manage')} />
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value='release-notifications'>
+            <AccordionTrigger className='px-4 hover:no-underline'>
+              <div className='flex items-center gap-3'>
+                <div className='flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-orange-500'>
+                  <Settings className='h-4 w-4 text-white' />
+                </div>
+                <div className='text-left'>
+                  <div className='text-sm font-medium'>Release Notifications</div>
+                  <div className='text-xs text-muted-foreground'>Email recipients for blocked deployment run items</div>
+                </div>
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className='px-4 pb-4 pt-0'>
+              <ReleaseNotificationsSettings />
+            </AccordionContent>
+          </AccordionItem>
         </Accordion>
       </div>
 

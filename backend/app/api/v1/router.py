@@ -8,13 +8,17 @@ from app.api.v1.endpoints import (
     auth,
     billing,
     compliance,
+    data_centers,
+    deployment_runs,
     health,
     integration_registry,
     keybindings,
+    platform_releases,
     progress,
     reports,
     release_manifests,
     release_center,
+    release_notes,
     settings,
     tracks,
     usage,
@@ -50,4 +54,8 @@ api_router.include_router(compliance.router, dependencies=tenant_deps)
 api_router.include_router(work_orders.router, dependencies=tenant_deps)
 api_router.include_router(release_manifests.router, dependencies=tenant_deps)
 api_router.include_router(release_center.router, dependencies=tenant_deps)
+api_router.include_router(data_centers.router, dependencies=tenant_deps)
+api_router.include_router(release_notes.router, dependencies=tenant_deps)
+api_router.include_router(platform_releases.router, dependencies=tenant_deps)
+api_router.include_router(deployment_runs.router, dependencies=tenant_deps)
 api_router.include_router(integration_registry.router, dependencies=tenant_deps)

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.crypto import decrypt_secret
 from app.db.session import SessionLocal, set_tenant_id
 from app.models.release_mgmt import ReleaseManifest, ReleaseWorkOrder, ReleaseWorkOrderService
 from app.models.rbac import User
@@ -17,7 +18,8 @@ from app.schemas.work_orders import ServiceTouchedItem
 from app.services import github_repo_service, release_manifest_service, work_order_service
 
 
-def _get_tenant_git_config(db: Session, tenant_id: str) -> WorkOrdersGitHubSettings:
+def _get_tenant_git_config(db: Session, tenant_id: str) -> tuple[WorkOrdersGitHubSettings, dict]:
+    """Return (cfg, raw_wo_git_dict) so callers can access encrypted fields like github_pat."""
     tenant_key = tenant_id
     try:
         tenant_key = UUID(str(tenant_id))
@@ -28,7 +30,42 @@ def _get_tenant_git_config(db: Session, tenant_id: str) -> WorkOrdersGitHubSetti
     cfg_raw = raw.get("work_orders_github")
     if not isinstance(cfg_raw, dict):
         cfg_raw = {}
-    return WorkOrdersGitHubSettings(**cfg_raw)
+    # Build schema object without the raw PAT (pat_configured is derived)
+    schema_dict = {k: v for k, v in cfg_raw.items() if k != 'github_pat'}
+    schema_dict['pat_configured'] = bool(cfg_raw.get('github_pat'))
+    return WorkOrdersGitHubSettings(**schema_dict), cfg_raw
+
+
+def _resolve_github_token(cfg: WorkOrdersGitHubSettings, raw_cfg: dict) -> str:
+    """Return a GitHub API token for the tenant.
+
+    Priority order:
+      1. Tenant's own Personal Access Token (PAT) — decrypted from settings_json
+      2. GitHub App installation token (legacy, requires global App config)
+
+    Raises HTTPException if neither is available.
+    """
+    encrypted_pat = raw_cfg.get('github_pat', '')
+    if encrypted_pat:
+        try:
+            return decrypt_secret(encrypted_pat)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to decrypt GitHub PAT: {exc}",
+            ) from exc
+
+    # Fall back to GitHub App installation token
+    if cfg.installation_id:
+        return github_repo_service.get_installation_token(int(cfg.installation_id))
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "GitHub credentials are not configured for this tenant. "
+            "Set a Personal Access Token in Settings → Work Orders GitHub."
+        ),
+    )
 
 
 def _resolve_repo(cfg: WorkOrdersGitHubSettings) -> tuple[str, str]:
@@ -66,15 +103,16 @@ def sync_work_order_to_git(db: Session, wo_id: str, *, actor_user_id: str | None
     if not wo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work order not found")
 
-    cfg = _get_tenant_git_config(db, str(wo.tenant_id))
-    if not cfg.enabled or not cfg.installation_id or not cfg.repo_full_name:
+    cfg, raw_cfg = _get_tenant_git_config(db, str(wo.tenant_id))
+    has_credentials = cfg.pat_configured or bool(cfg.installation_id)
+    if not cfg.enabled or not has_credentials or not cfg.repo_full_name:
         wo.sync_status = "disabled"
         wo.last_sync_error = "GitHub sync is not configured for this tenant."
         db.commit()
         return
 
     owner, repo = _resolve_repo(cfg)
-    token = github_repo_service.get_installation_token(int(cfg.installation_id))
+    token = _resolve_github_token(cfg, raw_cfg)
     base_branch = cfg.base_branch or settings.GITHUB_BASE_BRANCH
     branch = wo.git_branch or f"wo/{wo.wo_id}"
     path = _work_order_git_path(cfg, wo.wo_id, wo.title)
@@ -175,15 +213,16 @@ def sync_release_manifest_to_git(db: Session, rel_id: str, *, actor_user_id: str
     if not rel:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Release manifest not found")
 
-    cfg = _get_tenant_git_config(db, str(rel.tenant_id))
-    if not cfg.enabled or not cfg.installation_id or not cfg.repo_full_name:
+    cfg, raw_cfg = _get_tenant_git_config(db, str(rel.tenant_id))
+    has_credentials = cfg.pat_configured or bool(cfg.installation_id)
+    if not cfg.enabled or not has_credentials or not cfg.repo_full_name:
         rel.sync_status = "disabled"
         rel.last_sync_error = "GitHub sync is not configured for this tenant."
         db.commit()
         return
 
     owner, repo = _resolve_repo(cfg)
-    token = github_repo_service.get_installation_token(int(cfg.installation_id))
+    token = _resolve_github_token(cfg, raw_cfg)
     base_branch = cfg.base_branch or settings.GITHUB_BASE_BRANCH
     branch = rel.git_branch or f"rel/{rel.rel_id}"
     path = _release_manifest_git_path(cfg, rel.rel_id)

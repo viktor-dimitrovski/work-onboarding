@@ -24,7 +24,7 @@ import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/com
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { AssessmentAttempt, AssessmentDelivery, AssessmentTest, UserRow } from '@/lib/types';
-import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, Clock, Info, MoreVertical, Pencil, Send, Square, User, Users, XCircle } from 'lucide-react';
+import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, Clock, Info, MoreVertical, Pencil, PlusCircle, RefreshCw, Send, Square, User, Users, X, XCircle } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -133,16 +133,6 @@ const fmtDateTime = (d?: string | null) => {
   } catch { return d; }
 };
 
-function splitDatetime(value: string): { date: string; time: string } {
-  if (!value) return { date: '', time: '' };
-  const [date = '', time = ''] = value.split('T');
-  return { date, time: time.slice(0, 5) };
-}
-
-function joinDatetime(date: string, time: string): string {
-  if (!date) return '';
-  return `${date}T${time || '00:00'}`;
-}
 
 function isoToLocal(iso?: string | null): string {
   if (!iso) return '';
@@ -153,51 +143,90 @@ function isoToLocal(iso?: string | null): string {
 
 // ── DateTimeInput component ───────────────────────────────────────────────────
 
+function localNow(): string {
+  return isoToLocal(new Date().toISOString());
+}
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00`;
+}
+function localDaysFromNow(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function DateTimeInput({
   value,
   onChange,
   label,
   hint,
+  presets,
 }: {
   value: string;
   onChange: (v: string) => void;
   label: string;
   hint?: string;
+  presets?: Array<{ label: string; getValue: () => string }>;
 }) {
-  const { date, time } = splitDatetime(value);
   return (
-    <div className='space-y-1.5'>
-      <Label>{label}</Label>
-      {hint && <p className='text-[11px] text-muted-foreground'>{hint}</p>}
-      <div className='flex gap-2'>
-        <div className='relative flex-1'>
-          <CalendarDays className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground' />
-          <Input
-            type='date'
-            value={date}
-            onChange={(e) => onChange(joinDatetime(e.target.value, time))}
-            className='pl-8 text-sm'
-          />
-        </div>
-        <div className='relative w-32'>
-          <Clock className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground' />
-          <Input
-            type='time'
-            value={time}
-            onChange={(e) => onChange(joinDatetime(date, e.target.value))}
-            className='pl-8 text-sm'
-            disabled={!date}
-          />
-        </div>
+    <div className='space-y-1'>
+      <div className='flex items-center justify-between gap-2'>
+        <Label className='text-xs font-medium'>{label}</Label>
         {value && (
-          <Button type='button' variant='ghost' size='icon' className='shrink-0' onClick={() => onChange('')} title='Clear'>
-            ×
-          </Button>
+          <button
+            type='button'
+            onClick={() => onChange('')}
+            className='inline-flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-destructive'
+          >
+            <X className='h-2.5 w-2.5' />
+            Clear
+          </button>
         )}
       </div>
+      {hint && <p className='text-[10px] text-muted-foreground'>{hint}</p>}
+      <div className='relative'>
+        <CalendarDays className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground' />
+        <Input
+          type='datetime-local'
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className='h-8 pl-8 text-xs'
+        />
+      </div>
+      {presets && presets.length > 0 && (
+        <div className='flex flex-wrap gap-1 pt-0.5'>
+          {presets.map((p) => (
+            <button
+              key={p.label}
+              type='button'
+              onClick={() => onChange(p.getValue())}
+              className='rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600 hover:border-primary/40 hover:bg-primary/5 hover:text-primary transition-colors'
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
+
+const OPEN_PRESETS = [
+  { label: 'Now',       getValue: localNow },
+  { label: 'Today',     getValue: localToday },
+  { label: '+1 day',    getValue: () => localDaysFromNow(1) },
+  { label: '+1 week',   getValue: () => localDaysFromNow(7) },
+];
+const CLOSE_PRESETS = [
+  { label: '+1 day',    getValue: () => localDaysFromNow(1) },
+  { label: '+3 days',   getValue: () => localDaysFromNow(3) },
+  { label: '+1 week',   getValue: () => localDaysFromNow(7) },
+  { label: '+2 weeks',  getValue: () => localDaysFromNow(14) },
+  { label: '+1 month',  getValue: () => localDaysFromNow(30) },
+];
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
@@ -222,6 +251,16 @@ export default function AssessmentDeliveriesPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createProgress, setCreateProgress] = useState('');
+
+  // Extend time dialog — deliveryId + extra minutes input
+  const [extendTarget, setExtendTarget] = useState<{ deliveryId: string; userName: string } | null>(null);
+  const [extendMinutes, setExtendMinutes] = useState(15);
+  const [extendLoading, setExtendLoading] = useState(false);
+  const [extendResult, setExtendResult] = useState<string | null>(null);
+
+  // Grant re-take dialog
+  const [retakeTarget, setRetakeTarget] = useState<{ deliveryId: string; userName: string } | null>(null);
+  const [retakeLoading, setRetakeLoading] = useState(false);
 
   // Edit sheet — now operates on an entire group
   const [editGroup, setEditGroup] = useState<DeliveryGroup | null>(null);
@@ -437,6 +476,49 @@ export default function AssessmentDeliveriesPage() {
     }
   };
 
+  // ── Extend time ────────────────────────────────────────────────────────────
+
+  const extendTime = async () => {
+    if (!extendTarget || !accessToken) return;
+    setExtendLoading(true);
+    try {
+      const res = await api.post<{ extended_count: number; extra_minutes: number }>(
+        `/assessments/deliveries/${extendTarget.deliveryId}/extend-time`,
+        { extra_minutes: extendMinutes },
+        accessToken,
+      );
+      if (res.extended_count === 0) {
+        setExtendResult('No active in-progress attempt found for this employee. Time limit is extended for future attempts via the Edit action.');
+      } else {
+        setExtendResult(`Added ${res.extra_minutes} minutes to ${res.extended_count} active attempt${res.extended_count !== 1 ? 's' : ''}.`);
+      }
+    } catch (err) {
+      setExtendResult(err instanceof Error ? err.message : 'Failed to extend time');
+    } finally {
+      setExtendLoading(false);
+    }
+  };
+
+  // ── Grant re-take ───────────────────────────────────────────────────────────
+
+  const grantRetake = async () => {
+    if (!retakeTarget || !accessToken) return;
+    setRetakeLoading(true);
+    try {
+      await api.post(
+        `/assessments/deliveries/${retakeTarget.deliveryId}/grant-retake`,
+        {},
+        accessToken,
+      );
+      setRetakeTarget(null);
+      await reloadDeliveries();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to grant re-take');
+    } finally {
+      setRetakeLoading(false);
+    }
+  };
+
   // ── Expand toggle ──────────────────────────────────────────────────────────
 
   const toggleExpand = (group: DeliveryGroup) => {
@@ -615,6 +697,18 @@ export default function AssessmentDeliveriesPage() {
                               <BarChart3 className='mr-2 h-3.5 w-3.5' />
                               View results
                             </DropdownMenuItem>
+                            {!isMulti && attemptStatusMap[group.rep.id]?.status === 'in_progress' && (
+                              <DropdownMenuItem onClick={() => { setExtendMinutes(15); setExtendResult(null); setExtendTarget({ deliveryId: group.rep.id, userName: group.rep.participant_user_id ? (usersById[group.rep.participant_user_id]?.full_name || usersById[group.rep.participant_user_id]?.email || 'Employee') : 'Employee' }); }}>
+                                <Clock className='mr-2 h-3.5 w-3.5 text-amber-500' />
+                                Extend time
+                              </DropdownMenuItem>
+                            )}
+                            {!isMulti && (attemptStatusMap[group.rep.id]?.status === 'completed' || (attemptStatusMap[group.rep.id] && attemptStatusMap[group.rep.id].attempt_count >= group.rep.attempts_allowed)) && (
+                              <DropdownMenuItem onClick={() => { const u = group.rep.participant_user_id ? usersById[group.rep.participant_user_id] : null; setRetakeTarget({ deliveryId: group.rep.id, userName: u ? (u.full_name || u.email) : 'Employee' }); }}>
+                                <RefreshCw className='mr-2 h-3.5 w-3.5 text-blue-500' />
+                                Grant re-take
+                              </DropdownMenuItem>
+                            )}
                             {deliveryStatus !== 'closed' && (
                               <>
                                 <DropdownMenuSeparator />
@@ -636,30 +730,62 @@ export default function AssessmentDeliveriesPage() {
                     {isMulti && isExpanded && group.deliveries.map((d) => {
                       const u = d.participant_user_id ? usersById[d.participant_user_id] : null;
                       const aStatus = attemptStatusMap[d.id];
+                      const userName = u ? (u.full_name || u.email) : 'Unknown employee';
                       return (
                         <tr key={d.id} className='bg-slate-50/70'>
-                          <td colSpan={6} className='py-2 pl-12 pr-4'>
-                            <div className='flex items-center justify-between gap-4'>
-                              <span className='inline-flex items-center gap-1.5 text-xs text-muted-foreground'>
+                          {/* colSpan=7 covers all columns so this row never widens the table */}
+                          <td colSpan={7} className='py-1.5 pl-10 pr-3'>
+                            <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1'>
+                              {/* Left: user identity */}
+                              <span className='inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground'>
                                 <User className='h-3 w-3 shrink-0 text-slate-400' />
-                                {u
-                                  ? <><span className='font-medium text-slate-700'>{u.full_name || u.email}</span>{u.full_name && <span className='text-slate-400'>{u.email}</span>}</>
-                                  : <span className='text-slate-400'>Unknown employee</span>
-                                }
+                                {u ? (
+                                  <>
+                                    <span className='font-medium text-slate-700'>{u.full_name || u.email}</span>
+                                    {u.full_name && <span className='hidden text-slate-400 sm:inline'>{u.email}</span>}
+                                  </>
+                                ) : (
+                                  <span className='text-slate-400'>Unknown employee</span>
+                                )}
                               </span>
-                              <AttemptStatusBadge status={aStatus} />
-                </div>
-                          </td>
-                          <td className='py-2 pr-2'>
-                            <Button
-                              variant='ghost'
-                              size='sm'
-                              className='h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground'
-                              onClick={() => openResults(group, d.id)}
-                            >
-                              <BarChart3 className='mr-1 h-3 w-3' />
-                              Results
-                            </Button>
+                              {/* Right: status + action buttons — all inline, never breaking the table width */}
+                              <div className='flex shrink-0 items-center gap-1.5'>
+                                <AttemptStatusBadge status={aStatus} />
+                                {aStatus?.status === 'in_progress' && (
+                                  <Button
+                                    variant='ghost'
+                                    size='sm'
+                                    className='h-6 px-2 text-[10px] text-amber-600 hover:bg-amber-50 hover:text-amber-700'
+                                    title="Add extra minutes to this employee's active attempt"
+                                    onClick={() => { setExtendMinutes(15); setExtendResult(null); setExtendTarget({ deliveryId: d.id, userName }); }}
+                                  >
+                                    <Clock className='mr-1 h-3 w-3' />
+                                    Extend
+                                  </Button>
+                                )}
+                                {(aStatus?.status === 'completed' || (aStatus && aStatus.attempt_count >= d.attempts_allowed)) && (
+                                  <Button
+                                    variant='ghost'
+                                    size='sm'
+                                    className='h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                                    title='Allow this employee to take the test again'
+                                    onClick={() => setRetakeTarget({ deliveryId: d.id, userName })}
+                                  >
+                                    <RefreshCw className='mr-1 h-3 w-3' />
+                                    Re-take
+                                  </Button>
+                                )}
+                                <Button
+                                  variant='ghost'
+                                  size='sm'
+                                  className='h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground'
+                                  onClick={() => openResults(group, d.id)}
+                                >
+                                  <BarChart3 className='mr-1 h-3 w-3' />
+                                  Results
+                                </Button>
+                              </div>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -681,9 +807,9 @@ export default function AssessmentDeliveriesPage() {
           </SheetHeader>
 
           <div className='flex-1 overflow-auto'>
-            <div className='space-y-6 py-5 pr-1'>
+            <div className='space-y-4 py-4 pr-1'>
 
-              <section className='space-y-3'>
+              <section className='space-y-2'>
                 <StepLabel n={1} label='Select test' />
                 <SingleSelect value={testVersionId} onChange={setTestVersionId} options={publishedVersionOptions} placeholder='Select a published test…' />
                 {publishedVersionOptions.length === 0 && (
@@ -691,7 +817,7 @@ export default function AssessmentDeliveriesPage() {
                 )}
               </section>
 
-              <section className='space-y-3'>
+              <section className='space-y-2'>
                 <StepLabel n={2} label='Who takes this test?' />
                 <div className='grid grid-cols-2 gap-2'>
                   <AudienceCard active={audienceType === 'assignment'} onClick={() => setAudienceType('assignment')}
@@ -704,7 +830,7 @@ export default function AssessmentDeliveriesPage() {
               </section>
 
               {audienceType === 'assignment' && (
-                <section className='space-y-3'>
+                <section className='space-y-2'>
                   <StepLabel n={3} label='Select employees' />
                   {usersError ? (
                     <UsersErrorBanner />
@@ -714,24 +840,26 @@ export default function AssessmentDeliveriesPage() {
                 </section>
               )}
 
-              <section className='space-y-3'>
+              <section className='space-y-2'>
                 <StepLabel n={audienceType === 'assignment' ? 4 : 3} label='Scheduling & limits' />
-                <div className='rounded-xl border bg-muted/20 p-4 space-y-4'>
-                  <DateTimeInput label='Opens on' hint='Leave blank to make available immediately' value={startsAt} onChange={setStartsAt} />
-                  <DateTimeInput label='Closes on' hint='Leave blank for no deadline — use Stop to close manually later.' value={endsAt} onChange={setEndsAt} />
-                  <div className='grid gap-3 sm:grid-cols-2 pt-1'>
-                    <div className='space-y-1.5'>
-                      <Label>Duration per attempt</Label>
-                      <p className='text-[11px] text-muted-foreground'>Override test default time limit</p>
+                <div className='rounded-xl border bg-muted/20 p-3 space-y-3'>
+                  <div className='grid grid-cols-2 gap-3'>
+                    <DateTimeInput label='Opens on' hint='Blank = available now' value={startsAt} onChange={setStartsAt} presets={OPEN_PRESETS} />
+                    <DateTimeInput label='Closes on' hint='Blank = no deadline' value={endsAt} onChange={setEndsAt} presets={CLOSE_PRESETS} />
+                  </div>
+                  <div className='grid grid-cols-2 gap-3 border-t pt-3'>
+                    <div className='space-y-1'>
+                      <Label className='text-xs font-medium'>Duration (min)</Label>
+                      <p className='text-[10px] text-muted-foreground'>Override test default</p>
                       <div className='relative'>
                         <Clock className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground' />
-                        <Input type='number' min={1} value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value ? Number(e.target.value) : '')} placeholder='Use test default' className='pl-8' />
+                        <Input type='number' min={1} value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value ? Number(e.target.value) : '')} placeholder='Test default' className='h-8 pl-8 text-xs' />
                       </div>
                     </div>
-                    <div className='space-y-1.5'>
-                      <Label>Attempts allowed</Label>
-                      <p className='text-[11px] text-muted-foreground'>How many times can they take it</p>
-                      <Input type='number' min={1} value={attemptsAllowed} onChange={(e) => setAttemptsAllowed(Number(e.target.value || 1))} />
+                    <div className='space-y-1'>
+                      <Label className='text-xs font-medium'>Attempts allowed</Label>
+                      <p className='text-[10px] text-muted-foreground'>How many times</p>
+                      <Input type='number' min={1} value={attemptsAllowed} onChange={(e) => setAttemptsAllowed(Number(e.target.value || 1))} className='h-8 text-xs' />
                     </div>
                   </div>
                 </div>
@@ -765,9 +893,9 @@ export default function AssessmentDeliveriesPage() {
           </SheetHeader>
 
           <div className='flex-1 overflow-auto'>
-            <div className='space-y-6 py-5 pr-1'>
-              <div className='rounded-lg border bg-muted/30 px-4 py-3 text-sm'>
-                <p className='font-medium'>{editGroup?.rep.title}</p>
+            <div className='space-y-4 py-4 pr-1'>
+              <div className='rounded-lg border bg-muted/30 px-3 py-2 text-sm'>
+                <p className='font-medium leading-tight'>{editGroup?.rep.title}</p>
                 <p className='text-xs text-muted-foreground mt-0.5'>
                   {editGroup?.rep.audience_type === 'campaign'
                     ? 'Open to all employees'
@@ -776,54 +904,49 @@ export default function AssessmentDeliveriesPage() {
                       : 'Targeted assignment'
                   }
                 </p>
-            </div>
+              </div>
 
-              <div className='space-y-4 rounded-xl border bg-muted/20 p-4'>
-                <DateTimeInput
-                  label='Opens on'
-                  hint='Clear to make available immediately'
-                  value={editStartsAt}
-                  onChange={setEditStartsAt}
-                />
-                <DateTimeInput
-                  label='Closes on'
-                  hint='Clear to remove the deadline (open indefinitely — stop manually when needed)'
-                  value={editEndsAt}
-                  onChange={setEditEndsAt}
-                />
-                <div className='space-y-1.5'>
-                  <Label>Due date (display only)</Label>
-                  <p className='text-[11px] text-muted-foreground'>Shown to employees as a reminder, separate from the hard close date</p>
-                  <Input
-                    type='date'
-                    value={editDueDate}
-                    onChange={(e) => setEditDueDate(e.target.value)}
-                    className='text-sm'
+              <div className='space-y-3 rounded-xl border bg-muted/20 p-3'>
+                <div className='grid grid-cols-2 gap-3'>
+                  <DateTimeInput
+                    label='Opens on'
+                    hint='Blank = available now'
+                    value={editStartsAt}
+                    onChange={setEditStartsAt}
+                    presets={OPEN_PRESETS}
                   />
+                  <DateTimeInput
+                    label='Closes on'
+                    hint='Blank = no deadline'
+                    value={editEndsAt}
+                    onChange={setEditEndsAt}
+                    presets={CLOSE_PRESETS}
+                  />
+                </div>
+                <div className='space-y-1 border-t pt-3'>
+                  <div className='flex items-center justify-between'>
+                    <Label className='text-xs font-medium'>Due date <span className='font-normal text-muted-foreground'>(display only)</span></Label>
+                    {editDueDate && (
+                      <button type='button' onClick={() => setEditDueDate('')} className='inline-flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-destructive'>
+                        <X className='h-2.5 w-2.5' />Clear
+                      </button>
+                    )}
+                  </div>
+                  <p className='text-[10px] text-muted-foreground'>Reminder shown to employees, separate from the hard close</p>
+                  <Input type='date' value={editDueDate} onChange={(e) => setEditDueDate(e.target.value)} className='h-8 text-xs' />
                 </div>
               </div>
 
-              <div className='grid gap-4 sm:grid-cols-2'>
-                <div className='space-y-1.5'>
-                <Label>Attempts allowed</Label>
-                <Input
-                  type='number'
-                  min={1}
-                    value={editAttempts}
-                    onChange={(e) => setEditAttempts(Number(e.target.value || 1))}
-                />
+              <div className='grid grid-cols-2 gap-3'>
+                <div className='space-y-1'>
+                  <Label className='text-xs font-medium'>Attempts allowed</Label>
+                  <Input type='number' min={1} value={editAttempts} onChange={(e) => setEditAttempts(Number(e.target.value || 1))} className='h-8 text-xs' />
+                </div>
+                <div className='space-y-1'>
+                  <Label className='text-xs font-medium'>Duration (min)</Label>
+                  <Input type='number' min={1} value={editDuration} placeholder='Test default' onChange={(e) => setEditDuration(e.target.value ? Number(e.target.value) : '')} className='h-8 text-xs' />
+                </div>
               </div>
-                <div className='space-y-1.5'>
-                  <Label>Duration per attempt (min)</Label>
-                <Input
-                  type='number'
-                  min={1}
-                    value={editDuration}
-                    placeholder='Use test default'
-                    onChange={(e) => setEditDuration(e.target.value ? Number(e.target.value) : '')}
-                />
-              </div>
-            </div>
 
               {editError && <ErrorBanner message={editError} />}
             </div>
@@ -837,6 +960,68 @@ export default function AssessmentDeliveriesPage() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      {/* ── Extend Time Dialog ───────────────────────────────────────────── */}
+      {extendTarget && (
+        <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm'>
+          <div className='w-full max-w-sm rounded-xl border bg-white p-6 shadow-xl'>
+            <h3 className='text-base font-semibold'>Extend time</h3>
+            <p className='mt-1 text-sm text-muted-foreground'>
+              Add extra minutes to <span className='font-medium text-foreground'>{extendTarget.userName}</span>&apos;s active attempt.
+            </p>
+            {extendResult ? (
+              <div className='mt-4 rounded-lg border bg-muted/40 p-3 text-sm text-foreground'>{extendResult}</div>
+            ) : (
+              <div className='mt-4 space-y-1.5'>
+                <Label htmlFor='extend-minutes'>Extra minutes</Label>
+                <div className='relative'>
+                  <Clock className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground' />
+                  <Input
+                    id='extend-minutes'
+                    type='number'
+                    min={1}
+                    max={480}
+                    value={extendMinutes}
+                    onChange={(e) => setExtendMinutes(Number(e.target.value) || 1)}
+                    className='pl-8'
+                  />
+                </div>
+                <p className='text-[11px] text-muted-foreground'>This extends the expiry of the current in-progress attempt only.</p>
+              </div>
+            )}
+            <div className='mt-5 flex justify-end gap-2'>
+              <Button variant='outline' onClick={() => { setExtendTarget(null); setExtendResult(null); }}>
+                {extendResult ? 'Close' : 'Cancel'}
+              </Button>
+              {!extendResult && (
+                <Button onClick={extendTime} disabled={extendLoading}>
+                  <PlusCircle className='mr-1.5 h-3.5 w-3.5' />
+                  {extendLoading ? 'Extending…' : `Add ${extendMinutes} min`}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Grant Re-take Dialog ─────────────────────────────────────────── */}
+      {retakeTarget && (
+        <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm'>
+          <div className='w-full max-w-sm rounded-xl border bg-white p-6 shadow-xl'>
+            <h3 className='text-base font-semibold'>Grant re-take</h3>
+            <p className='mt-2 text-sm text-muted-foreground'>
+              Allow <span className='font-medium text-foreground'>{retakeTarget.userName}</span> to take this test again? Their attempts allowed will be increased by 1.
+            </p>
+            <div className='mt-5 flex justify-end gap-2'>
+              <Button variant='outline' onClick={() => setRetakeTarget(null)} disabled={retakeLoading}>Cancel</Button>
+              <Button onClick={grantRetake} disabled={retakeLoading}>
+                <RefreshCw className='mr-1.5 h-3.5 w-3.5' />
+                {retakeLoading ? 'Granting…' : 'Grant re-take'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

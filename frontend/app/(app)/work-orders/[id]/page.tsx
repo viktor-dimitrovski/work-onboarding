@@ -648,7 +648,21 @@ export default function WorkOrderEditorPage() {
         setTenantsImpacted(response.parsed.tenants_impacted || []);
         setTargetEnvs(response.parsed.target_envs || []);
         setPostmanTestingRef(response.parsed.postman_testing_ref || '');
-        setServices(response.parsed.services_touched);
+        // Fetch DB-level service rows to get service_db_id + release_note_id
+        let svcDbData: Array<{ service_id: string; service_db_id: string; repo: string | null; release_note_id: string | null; release_note_label: string | null }> = [];
+        try {
+          svcDbData = await api.get<typeof svcDbData>(`/work-orders/${response.wo_id}/services/release-notes`, accessToken);
+        } catch {
+          // not critical — will fall back to text field
+        }
+        // Merge DB IDs into parsed services by index (same order)
+        const mergedServices: ServiceTouchedItem[] = response.parsed.services_touched.map((svc, i) => ({
+          ...svc,
+          service_db_id: svcDbData[i]?.service_db_id ?? null,
+          release_note_id: svcDbData[i]?.release_note_id ?? null,
+          release_note_label: svcDbData[i]?.release_note_label ?? null,
+        }));
+        setServices(mergedServices);
         setBodyMarkdown(response.parsed.body_markdown);
         setSha(response.sha || null);
         setBranch(response.branch || null);
@@ -1371,7 +1385,22 @@ export default function WorkOrderEditorPage() {
               <CardContent>
                 {servicesView === 'form' ? (
                   <div className='space-y-2'>
-                    <ServicesTouchedGrid items={services} onChange={setServices} firstInputId='wo-service-first' hideHeader />
+                    <ServicesTouchedGrid
+                      items={services}
+                      onChange={setServices}
+                      firstInputId='wo-service-first'
+                      hideHeader
+                      woId={isNew ? undefined : woId}
+                      onReleaseNoteLinked={(serviceDbId, rnId, rnLabel) => {
+                        setServices((prev) =>
+                          prev.map((s) =>
+                            s.service_db_id === serviceDbId
+                              ? { ...s, release_note_id: rnId, release_note_label: rnLabel }
+                              : s,
+                          ),
+                        );
+                      }}
+                    />
                   </div>
                 ) : (
                   <div className='space-y-2'>

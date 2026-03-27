@@ -10,13 +10,25 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_active_user
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.release_mgmt import ReleaseWorkOrder, ReleaseWorkOrderService
+from app.models.release_mgmt import (
+    DataCenter,
+    PlatformRelease,
+    PlatformReleaseWorkOrder,
+    ReleaseNote,
+    ReleaseWorkOrder,
+    ReleaseWorkOrderService,
+    WODCDeployment,
+)
 from app.models.rbac import User
 from app.multitenancy.deps import TenantContext, require_tenant_membership
 from app.multitenancy.permissions import require_access
 from app.schemas.settings import WorkOrdersGitHubSettings
+from pydantic import BaseModel as _BaseModel
+
+from app.core.crypto import decrypt_secret
 from app.schemas.work_orders import (
     ServiceTouchedItem,
+    WODCStatus,
     WorkOrderDraft,
     WorkOrderListResponse,
     WorkOrderOut,
@@ -29,16 +41,41 @@ from app.services import github_repo_service, release_mgmt_sync_service, work_or
 router = APIRouter(prefix="/work-orders", tags=["work-orders"])
 
 
-def _get_tenant_wo_git(ctx: TenantContext) -> WorkOrdersGitHubSettings:
+def _get_tenant_wo_git(ctx: TenantContext) -> tuple[WorkOrdersGitHubSettings, dict]:
+    """Return (cfg, raw_wo_cfg) so callers can access the encrypted PAT."""
     raw = ctx.tenant.settings_json or {}
     cfg_raw = raw.get("work_orders_github")
     if not isinstance(cfg_raw, dict):
         cfg_raw = {}
-    return WorkOrdersGitHubSettings(**cfg_raw)
+    schema_dict = {k: v for k, v in cfg_raw.items() if k != 'github_pat'}
+    schema_dict['pat_configured'] = bool(cfg_raw.get('github_pat'))
+    return WorkOrdersGitHubSettings(**schema_dict), cfg_raw
 
 
-def _require_wo_git_config(ctx: TenantContext) -> tuple[WorkOrdersGitHubSettings, str, str, str, int, str]:
-    cfg = _get_tenant_wo_git(ctx)
+def _resolve_token_from_raw(cfg: WorkOrdersGitHubSettings, raw_cfg: dict) -> str:
+    """PAT-first, then GitHub App installation token."""
+    encrypted_pat = raw_cfg.get('github_pat', '')
+    if encrypted_pat:
+        try:
+            return decrypt_secret(encrypted_pat)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to decrypt GitHub PAT: {exc}",
+            ) from exc
+    if cfg.installation_id:
+        return github_repo_service.get_installation_token(int(cfg.installation_id))
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "GitHub credentials are not configured. "
+            "Set a Personal Access Token in Settings → Work Orders GitHub."
+        ),
+    )
+
+
+def _require_wo_git_config(ctx: TenantContext) -> tuple[WorkOrdersGitHubSettings, str, str, str, str]:
+    cfg, raw_cfg = _get_tenant_wo_git(ctx)
     if not cfg.enabled:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -49,16 +86,16 @@ def _require_wo_git_config(ctx: TenantContext) -> tuple[WorkOrdersGitHubSettings
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Work Orders GitHub repo is not configured (repo_full_name).",
         )
-    if not cfg.installation_id:
+    has_credentials = cfg.pat_configured or bool(cfg.installation_id)
+    if not has_credentials:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Work Orders GitHub installation_id is not configured.",
+            detail="GitHub credentials are not configured. Set a Personal Access Token in Settings.",
         )
     owner, repo = cfg.repo_full_name.split("/", 1)
     base_branch = cfg.base_branch or settings.GITHUB_BASE_BRANCH
-    installation_id = int(cfg.installation_id)
-    token = github_repo_service.get_installation_token(installation_id)
-    return cfg, owner.strip(), repo.strip(), base_branch, installation_id, token
+    token = _resolve_token_from_raw(cfg, raw_cfg)
+    return cfg, owner.strip(), repo.strip(), base_branch, token
 
 
 def _work_orders_root(cfg: WorkOrdersGitHubSettings) -> str:
@@ -119,6 +156,8 @@ def list_work_orders(
     year: str | None = Query(default=None),
     requires_deploy: bool | None = Query(default=None),
     service_id: str | None = Query(default=None),
+    data_center_id: str | None = Query(default=None),
+    not_deployed: bool | None = Query(default=None, description="Filter WOs not yet deployed to the given data_center_id"),
     ctx: TenantContext = Depends(require_tenant_membership),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
@@ -170,6 +209,22 @@ def list_work_orders(
         )
         query = query.where(deploy_exists if requires_deploy else ~deploy_exists)
 
+    # Filter: WOs not yet deployed to a specific DC
+    import uuid as _uuid
+    if data_center_id and not_deployed:
+        try:
+            dc_uuid = _uuid.UUID(data_center_id)
+        except ValueError:
+            dc_uuid = None
+        if dc_uuid:
+            deployed_wo_subq = select(WODCDeployment.work_order_id).where(
+                and_(
+                    WODCDeployment.data_center_id == dc_uuid,
+                    WODCDeployment.status == 'deployed',
+                )
+            )
+            query = query.where(~ReleaseWorkOrder.id.in_(deployed_wo_subq))
+
     if q:
         q_like = f"%{q}%"
         service_match = exists(
@@ -185,10 +240,56 @@ def list_work_orders(
         )
 
     rows = db.execute(query.order_by(ReleaseWorkOrder.updated_at.desc())).all()
+
+    # Bulk load DC deployments and platform release links for all returned WO IDs
+    wo_db_ids = [wo.id for wo, _, _ in rows]
+
+    dc_deployments_by_wo: dict[str, list[WODCStatus]] = {}
+    if wo_db_ids:
+        dc_rows = db.execute(
+            select(WODCDeployment, DataCenter)
+            .join(DataCenter, WODCDeployment.data_center_id == DataCenter.id)
+            .where(WODCDeployment.work_order_id.in_(wo_db_ids))
+            .order_by(WODCDeployment.deployed_at.desc())
+        ).all()
+        for dep, dc in dc_rows:
+            key = str(dep.work_order_id)
+            if key not in dc_deployments_by_wo:
+                dc_deployments_by_wo[key] = []
+            # Only keep latest status per DC
+            existing_dc_ids = {d.data_center_id for d in dc_deployments_by_wo[key]}
+            if str(dep.data_center_id) not in existing_dc_ids:
+                dc_deployments_by_wo[key].append(
+                    WODCStatus(
+                        data_center_id=str(dep.data_center_id),
+                        data_center_name=dc.name,
+                        slug=dc.slug,
+                        status=dep.status,
+                        deployed_at=dep.deployed_at,
+                    )
+                )
+
+    # Bulk load platform release links
+    pr_link_by_wo: dict[str, tuple[str, str]] = {}
+    if wo_db_ids:
+        pr_rows = db.execute(
+            select(PlatformReleaseWorkOrder, PlatformRelease)
+            .join(PlatformRelease, PlatformReleaseWorkOrder.platform_release_id == PlatformRelease.id)
+            .where(PlatformReleaseWorkOrder.work_order_id.in_(wo_db_ids))
+            .order_by(PlatformRelease.created_at.desc())
+        ).all()
+        for pr_link, pr in pr_rows:
+            key = str(pr_link.work_order_id)
+            if key not in pr_link_by_wo:
+                pr_link_by_wo[key] = (str(pr.id), pr.name)
+
     for wo, services_count, deploy_count in rows:
+        wo_key = str(wo.id)
+        pr_info = pr_link_by_wo.get(wo_key)
         summaries.append(
             WorkOrderSummary(
                 wo_id=wo.wo_id,
+                id=str(wo.id),
                 title=wo.title,
                 path=wo.git_path or "",
                 year=_guess_year_from_wo_id(wo.wo_id),
@@ -197,6 +298,9 @@ def list_work_orders(
                 sync_status=wo.sync_status,
                 pr_url=wo.pr_url,
                 branch=wo.git_branch,
+                dc_deployments=dc_deployments_by_wo.get(wo_key, []),
+                platform_release_id=pr_info[0] if pr_info else None,
+                platform_release_name=pr_info[1] if pr_info else None,
             )
         )
     return WorkOrderListResponse(items=summaries)
@@ -290,7 +394,7 @@ def create_work_order(
         services_touched=payload.services_touched,
         body_markdown=payload.body_markdown,
     )
-    cfg = _get_tenant_wo_git(ctx)
+    cfg, _raw_cfg = _get_tenant_wo_git(ctx)
     git_branch = f"wo/{payload.wo_id}" if cfg.repo_full_name else None
     git_path = _work_order_path_for_tenant(cfg, payload.wo_id, payload.title) if cfg.repo_full_name else None
     sync_status = "pending" if (cfg.enabled and cfg.repo_full_name) else "disabled"
@@ -411,7 +515,7 @@ def update_work_order(
         body_markdown=payload.body_markdown,
     )
 
-    cfg = _get_tenant_wo_git(ctx)
+    cfg, _raw_cfg = _get_tenant_wo_git(ctx)
     wo.title = payload.title
     wo.wo_type = payload.wo_type
     wo.status = payload.status
@@ -516,8 +620,8 @@ def sync_work_order(
     wo = db.scalar(select(ReleaseWorkOrder).where(ReleaseWorkOrder.wo_id == wo_id))
     if not wo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work order not found")
-    cfg = _get_tenant_wo_git(ctx)
-    if not cfg.enabled or not cfg.repo_full_name or not cfg.installation_id:
+    cfg, _raw_cfg = _get_tenant_wo_git(ctx)
+    if not cfg.enabled or not cfg.repo_full_name or not (cfg.pat_configured or cfg.installation_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="GitHub sync is not configured.")
 
     wo.sync_status = "pending"
@@ -593,8 +697,8 @@ def bulk_sync_work_orders(
     current_user: User = Depends(get_current_active_user),
     __: object = Depends(require_access("releases", "releases:write")),
 ) -> dict:
-    cfg = _get_tenant_wo_git(ctx)
-    if not cfg.enabled or not cfg.repo_full_name or not cfg.installation_id:
+    cfg, _raw_cfg = _get_tenant_wo_git(ctx)
+    if not cfg.enabled or not cfg.repo_full_name or not (cfg.pat_configured or cfg.installation_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="GitHub sync is not configured.")
 
     query = select(ReleaseWorkOrder).where(ReleaseWorkOrder.sync_status != "disabled")
@@ -638,7 +742,7 @@ def create_or_get_work_order_pr(
     if not wo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work order not found")
 
-    cfg, owner, repo, base_branch, _installation_id, token = _require_wo_git_config(ctx)
+    cfg, owner, repo, base_branch, token = _require_wo_git_config(ctx)
     branch = wo.git_branch or f"wo/{wo_id}"
 
     # Ensure branch/file are synced before PR creation.
@@ -719,4 +823,87 @@ def create_or_get_work_order_pr(
         git_path=wo.git_path,
         git_branch=wo.git_branch,
         git_sha=wo.git_sha,
+    )
+
+
+class _LinkReleaseNoteRequest(_BaseModel):
+    release_note_id: str | None = None
+
+
+class _ServiceReleaseNoteOut(_BaseModel):
+    service_id: str
+    service_db_id: str
+    repo: str | None
+    release_note_id: str | None
+    release_note_label: str | None
+
+
+@router.get("/{wo_id}/services/release-notes", response_model=list[_ServiceReleaseNoteOut])
+def list_service_release_notes(
+    wo_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access("releases", "releases:read")),
+) -> list[_ServiceReleaseNoteOut]:
+    wo = db.scalar(select(ReleaseWorkOrder).where(ReleaseWorkOrder.wo_id == wo_id))
+    if not wo:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work order not found")
+    services = db.scalars(
+        select(ReleaseWorkOrderService)
+        .where(ReleaseWorkOrderService.work_order_id == wo.id)
+        .order_by(ReleaseWorkOrderService.order_index.asc())
+    ).all()
+    result = []
+    for svc in services:
+        rn_label = None
+        if svc.release_note_id:
+            rn = db.scalar(select(ReleaseNote).where(ReleaseNote.id == svc.release_note_id))
+            if rn:
+                rn_label = f"{rn.service_name} @ {rn.tag}"
+        result.append(_ServiceReleaseNoteOut(
+            service_id=svc.service_id,
+            service_db_id=str(svc.id),
+            repo=svc.repo,
+            release_note_id=str(svc.release_note_id) if svc.release_note_id else None,
+            release_note_label=rn_label,
+        ))
+    return result
+
+
+@router.patch("/services/{service_db_id}/release-note", response_model=_ServiceReleaseNoteOut)
+def link_release_note_to_service(
+    service_db_id: str,
+    payload: _LinkReleaseNoteRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_active_user),
+    __: object = Depends(require_access("releases", "releases:write")),
+) -> _ServiceReleaseNoteOut:
+    import uuid as _uuid
+    try:
+        svc_id = _uuid.UUID(service_db_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid service ID")
+    svc = db.scalar(select(ReleaseWorkOrderService).where(ReleaseWorkOrderService.id == svc_id))
+    if not svc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+    rn_label = None
+    if payload.release_note_id:
+        try:
+            rn_id = _uuid.UUID(payload.release_note_id)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid release note ID")
+        rn = db.scalar(select(ReleaseNote).where(ReleaseNote.id == rn_id))
+        if not rn:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Release note not found")
+        svc.release_note_id = rn_id
+        rn_label = f"{rn.service_name} @ {rn.tag}"
+    else:
+        svc.release_note_id = None
+    db.commit()
+    return _ServiceReleaseNoteOut(
+        service_id=svc.service_id,
+        service_db_id=str(svc.id),
+        repo=svc.repo,
+        release_note_id=str(svc.release_note_id) if svc.release_note_id else None,
+        release_note_label=rn_label,
     )

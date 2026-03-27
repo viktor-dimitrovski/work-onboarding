@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     GITHUB_COMMITTER_NAME: str = 'SolveBox Hub'
     GITHUB_COMMITTER_EMAIL: str = 'onboarding-hub@users.noreply.github.com'
 
+    # Encryption key for tenant secrets (GitHub PATs, etc.) stored in settings_json.
+    # Must be a 64-character hex string (32 bytes / 256 bits).
+    # Generate: python -c "import secrets; print(secrets.token_hex(32))"
+    CREDENTIALS_ENCRYPTION_KEY: str | None = None
+
     BASE_DOMAINS: str = 'app.com'
     RESERVED_SUBDOMAINS: str = 'admin,billing,docs,status,api'
     DEFAULT_TENANT_SLUG: str | None = None

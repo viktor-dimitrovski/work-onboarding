@@ -58,7 +58,21 @@ from app.models.integration_registry import (
 )
 from app.models.rbac import Role, User, UserRole
 from app.models.tenant import Group, GroupMembership, Tenant, TenantDomain, TenantMembership
-from app.models.release_mgmt import ReleaseManifest, ReleasePlan, ReleaseWorkOrder, ReleaseWorkOrderService
+from app.models.release_mgmt import (
+    DataCenter,
+    DeploymentRun,
+    DeploymentRunItem,
+    PlatformRelease,
+    PlatformReleaseWorkOrder,
+    ReleaseManifest,
+    ReleasePlan,
+    ReleaseNote,
+    ReleaseNoteAuthor,
+    ReleaseNoteItem,
+    ReleaseWorkOrder,
+    ReleaseWorkOrderService,
+    WODCDeployment,
+)
 from app.modules.billing.models import (
     CreditGrant,
     CreditPack,
@@ -139,10 +153,19 @@ __all__ = [
     'PasswordSetToken',
     'RefreshToken',
     'Role',
+    'DataCenter',
+    'DeploymentRun',
+    'DeploymentRunItem',
+    'PlatformRelease',
+    'PlatformReleaseWorkOrder',
     'ReleaseManifest',
     'ReleasePlan',
+    'ReleaseNote',
+    'ReleaseNoteAuthor',
+    'ReleaseNoteItem',
     'ReleaseWorkOrder',
     'ReleaseWorkOrderService',
+    'WODCDeployment',
     'TaskResource',
     'TaskSubmission',
     'TrackPhase',

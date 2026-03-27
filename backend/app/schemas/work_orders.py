@@ -47,8 +47,17 @@ class WorkOrderParsed(BaseModel):
     body_markdown: str = ''
 
 
+class WODCStatus(BaseModel):
+    data_center_id: str
+    data_center_name: str
+    slug: str
+    status: str
+    deployed_at: datetime | None = None
+
+
 class WorkOrderSummary(BaseModel):
     wo_id: str
+    id: str | None = None
     title: str | None = None
     path: str
     year: str
@@ -57,6 +66,9 @@ class WorkOrderSummary(BaseModel):
     sync_status: str | None = None
     pr_url: str | None = None
     branch: str | None = None
+    dc_deployments: list[WODCStatus] = []
+    platform_release_id: str | None = None
+    platform_release_name: str | None = None
 
 
 class WorkOrderOut(BaseModel):

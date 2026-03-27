@@ -11,7 +11,7 @@ from uuid import UUID
 logger = logging.getLogger("uvicorn.error")
 
 from fastapi import HTTPException, status
-from sqlalchemy import cast, func, or_, select, text, update
+from sqlalchemy import cast, delete as sql_delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -83,21 +83,16 @@ def build_question_query(
         base = base.where(or_(*[AssessmentQuestion.tags.contains([tag]) for tag in tags]))
     if categories:
         include_unclassified = 'unclassified' in categories
-        category_slugs = [slug for slug in categories if slug != 'unclassified']
+        category_ids_raw = [c for c in categories if c != 'unclassified']
         filters = []
-        if category_slugs:
-            # Correlated subquery: ties the category lookup to the same
-            # tenant_id as the outer question row.  This is explicit tenant
-            # isolation that does not rely on RLS being active for the
-            # subquery scope.
-            filters.append(
-                AssessmentQuestion.category_id.in_(
-                    select(AssessmentCategory.id).where(
-                        AssessmentCategory.slug.in_(category_slugs),
-                        AssessmentCategory.tenant_id == AssessmentQuestion.tenant_id,
-                    )
-                )
-            )
+        if category_ids_raw:
+            # Frontend sends UUID strings; filter directly by category_id.
+            try:
+                category_uuids = [UUID(c) for c in category_ids_raw]
+            except (ValueError, AttributeError):
+                category_uuids = []
+            if category_uuids:
+                filters.append(AssessmentQuestion.category_id.in_(category_uuids))
         if include_unclassified:
             filters.append(AssessmentQuestion.category_id.is_(None))
         if filters:
@@ -219,16 +214,16 @@ def question_stats(
         by_difficulty[key] = int(cnt or 0)
 
     cat_rows = db.execute(
-        select(AssessmentCategory.slug, func.count())
-        .select_from(base.join(AssessmentCategory, base.c.category_id == AssessmentCategory.id, isouter=True))
-        .group_by(AssessmentCategory.slug)
+        select(base.c.category_id, func.count())
+        .select_from(base)
+        .group_by(base.c.category_id)
     ).all()
     by_category: dict[str, int] = {'unclassified': 0}
-    for slug, cnt in cat_rows:
-        if slug is None:
+    for cat_id, cnt in cat_rows:
+        if cat_id is None:
             by_category['unclassified'] = int(cnt or 0)
         else:
-            by_category[str(slug)] = int(cnt or 0)
+            by_category[str(cat_id)] = int(cnt or 0)
 
     return {
         'total': total,
@@ -260,10 +255,17 @@ def bulk_update_questions(
     if scope not in ('selected', 'all_matching'):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid scope')
 
-    ids: list[UUID]
-    if scope == 'selected':
-        ids = list(question_ids or [])
-    else:
+    # Build the WHERE predicate once — never load IDs into Python for set-based actions.
+    # For 'selected' scope: filter by the provided UUID list.
+    # For 'all_matching' scope: use a subquery so the DB does all the work in one statement.
+    def _id_predicate():
+        if scope == 'selected':
+            ids = list(question_ids or [])
+            if not ids:
+                return None, 0
+            return AssessmentQuestion.id.in_(ids), len(ids)
+
+        # all_matching — count first so we can return early if 0 rows match.
         base = build_question_query(
             status_filters=status_filters,
             query=query,
@@ -272,69 +274,80 @@ def bulk_update_questions(
             categories=categories,
             include_joins=False,
         )
-        ids = [row[0] for row in db.execute(select(AssessmentQuestion.id).select_from(base.subquery())).all()]
+        sub = base.subquery()
+        count = int(db.scalar(select(func.count()).select_from(sub)) or 0)
+        if count == 0:
+            return None, 0
+        return AssessmentQuestion.id.in_(select(sub.c.id)), count
 
-    if not ids:
+    predicate, estimated_count = _id_predicate()
+    if predicate is None:
         return 0
 
+    # ── set_status ────────────────────────────────────────────────────────────
     if action == 'set_status':
         if status_value not in ('draft', 'published', 'archived'):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid status_value')
-        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
-        for q in rows:
-            q.status = status_value
-            q.updated_by = actor_user_id
+        result = db.execute(
+            update(AssessmentQuestion)
+            .where(predicate)
+            .values(status=status_value, updated_by=actor_user_id)
+        )
         db.flush()
-        return len(rows)
+        return result.rowcount
 
+    # ── set_category ──────────────────────────────────────────────────────────
     if action == 'set_category':
         if category_id is not None:
-            category = db.scalar(select(AssessmentCategory).where(AssessmentCategory.id == category_id))
-            if not category:
+            if not db.scalar(select(AssessmentCategory.id).where(AssessmentCategory.id == category_id)):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Category not found')
-        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
-        for q in rows:
-            q.category_id = category_id
-            q.updated_by = actor_user_id
+        result = db.execute(
+            update(AssessmentQuestion)
+            .where(predicate)
+            .values(category_id=category_id, updated_by=actor_user_id)
+        )
         db.flush()
-        return len(rows)
+        return result.rowcount
 
+    # ── set_difficulty ────────────────────────────────────────────────────────
     if action == 'set_difficulty':
         if difficulty_value is not None and difficulty_value not in ('easy', 'medium', 'hard'):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid difficulty_value')
-        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
-        for q in rows:
-            q.difficulty = difficulty_value
-            q.updated_by = actor_user_id
+        result = db.execute(
+            update(AssessmentQuestion)
+            .where(predicate)
+            .values(difficulty=difficulty_value, updated_by=actor_user_id)
+        )
         db.flush()
-        return len(rows)
+        return result.rowcount
 
+    # ── tag operations (JSONB — still fetched in Python but with a single SELECT) ──
     normalized_tags = [t.strip() for t in (tags_value or []) if t and t.strip()]
-    # de-dupe while preserving order
-    seen = set()
-    normalized_tags = [t for t in normalized_tags if not (t in seen or seen.add(t))]
+    seen: set[str] = set()
+    normalized_tags = [t for t in normalized_tags if not (t in seen or seen.add(t))]  # type: ignore[func-returns-value]
 
     if action in ('add_tags', 'remove_tags', 'replace_tags'):
-        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
+        rows = db.scalars(select(AssessmentQuestion).where(predicate)).all()
         for q in rows:
             current = list(q.tags or [])
             if action == 'replace_tags':
                 q.tags = normalized_tags
             elif action == 'add_tags':
-                merged = current + [t for t in normalized_tags if t not in current]
-                q.tags = merged
+                q.tags = current + [t for t in normalized_tags if t not in current]
             else:  # remove_tags
                 q.tags = [t for t in current if t not in set(normalized_tags)]
             q.updated_by = actor_user_id
         db.flush()
         return len(rows)
 
+    # ── delete_permanently ────────────────────────────────────────────────────
+    # Single SQL DELETE — Postgres cascades to question_options and
+    # classification_job_items automatically (both FK'd with ON DELETE CASCADE).
+    # test_version_questions uses ON DELETE SET NULL so those references become NULL.
     if action == 'delete_permanently':
-        rows = db.scalars(select(AssessmentQuestion).where(AssessmentQuestion.id.in_(ids))).all()
-        for q in rows:
-            db.delete(q)
+        result = db.execute(sql_delete(AssessmentQuestion).where(predicate))
         db.flush()
-        return len(rows)
+        return result.rowcount
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid action')
 
@@ -1238,7 +1251,9 @@ def autosave_answers(
     db.flush()
 
 
-def submit_attempt(db: Session, *, attempt_id: UUID, actor_user_id: UUID) -> AssessmentAttempt:
+def submit_attempt(
+    db: Session, *, attempt_id: UUID, actor_user_id: UUID
+) -> tuple['AssessmentAttempt', list]:
     attempt = db.scalar(
         select(AssessmentAttempt)
         .where(AssessmentAttempt.id == attempt_id)
@@ -1319,6 +1334,35 @@ def submit_attempt(db: Session, *, attempt_id: UUID, actor_user_id: UUID) -> Ass
     attempt.status = 'scored'
     attempt.submitted_at = datetime.now(UTC)
     attempt.updated_by = actor_user_id
+
+    # ── Award stars ───────────────────────────────────────────────────────────
+    from app.services import star_service
+
+    stars = star_service.compute_stars(score_percent)
+    attempt.stars_earned = stars
+
+    _tenant_id = delivery.tenant_id if delivery else None
+
+    _membership = None
+    if _tenant_id:
+        _membership = star_service.award_stars(
+            db, user_id=attempt.user_id, tenant_id=_tenant_id, stars=stars
+        )
+
+    db.flush()
+
+    # ── Check achievements ────────────────────────────────────────────────────
+    new_achievements: list = []
+    if _tenant_id and _membership:
+        new_achievements = star_service.check_and_unlock_achievements(
+            db,
+            user_id=attempt.user_id,
+            tenant_id=_tenant_id,
+            attempt=attempt,
+            total_stars=_membership.total_stars,
+            tests_completed=_membership.tests_completed,
+        )
+
     db.flush()
 
     if delivery.source_assignment_task_id:
@@ -1338,7 +1382,7 @@ def submit_attempt(db: Session, *, attempt_id: UUID, actor_user_id: UUID) -> Ass
             assignment_service.recompute_progress(db, assignment)
             assignment_service.refresh_next_task(db, assignment)
 
-    return attempt
+    return attempt, new_achievements
 
 
 def list_attempts(
@@ -1493,6 +1537,7 @@ def list_my_results(db: Session, *, user_id: UUID, tenant_id: UUID) -> list[dict
                 'max_score': attempt.max_score,
                 'score_percent': attempt.score_percent,
                 'passed': bool(attempt.passed),
+                'stars_earned': attempt.stars_earned,
                 'section_scores': attempt.section_scores,
             }
         )

@@ -18,6 +18,10 @@ class AssessmentQuestionCreate(BaseModel):
     question_type: str
     difficulty: str | None = None
     category_id: UUID | None = None
+    category_path: str | None = Field(
+        default=None,
+        description='Slash-separated path (e.g. School/History/8th Grade); creates levels and overrides category_id when non-empty.',
+    )
     tags: list[str] = Field(default_factory=list)
     status: str = Field(default='draft')
     explanation: str | None = None
@@ -29,6 +33,10 @@ class AssessmentQuestionUpdate(BaseModel):
     question_type: str | None = None
     difficulty: str | None = None
     category_id: UUID | None = None
+    category_path: str | None = Field(
+        default=None,
+        description='Slash-separated path; creates levels and overrides category_id when non-empty.',
+    )
     tags: list[str] | None = None
     status: str | None = None
     explanation: str | None = None
@@ -429,9 +437,15 @@ class AssessmentAttemptOut(BaseSchema):
     max_score: float | None
     score_percent: float | None
     passed: bool
+    stars_earned: int | None = None
     section_scores: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
+    # Enriched fields — populated by the manager results endpoint (optional so
+    # existing usages that don't set them remain compatible)
+    user_name: str | None = None
+    user_email: str | None = None
+    test_title: str | None = None
 
 
 class AssessmentAttemptQuestionOptionOut(BaseModel):
@@ -452,10 +466,20 @@ class AssessmentAttemptStartOut(BaseModel):
     questions: list[AssessmentAttemptQuestionOut]
 
 
+class AchievementOut(BaseModel):
+    code: str
+    name: str
+    description: str
+    icon: str
+    category: str
+
+
 class AssessmentAttemptSubmitOut(BaseModel):
     attempt: AssessmentAttemptOut
     correct_count: int
     total_questions: int
+    stars_earned: int | None = None
+    new_achievements: list[AchievementOut] = []
 
 
 class AttemptReviewOption(BaseModel):
@@ -500,6 +524,7 @@ class MyResultAttemptOut(BaseModel):
     max_score: float | None
     score_percent: float | None
     passed: bool
+    stars_earned: int | None = None
     section_scores: dict[str, Any] | None = None
 
 
@@ -509,6 +534,8 @@ class MyResultsResponse(BaseModel):
     average_score_percent: float | None
     pass_count: int
     fail_count: int
+    total_stars: int = 0
+    star_rate: float = 0.0
 
 
 class AssessmentResultSummary(BaseModel):
